@@ -33,7 +33,7 @@ func (a *AuthContext) GetTraderID() string {
 	if a == nil || a.TraderContext == nil {
 		return ""
 	}
-	return a.TraderContext.TraderID
+	return a.TraderID
 }
 
 // GetTraderContextMap returns the trader context as a map for convenient access.

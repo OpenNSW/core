@@ -260,7 +260,7 @@ func (te *TokenExtractor) fetchJWKS() (*jwksResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch jwks: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("jwks endpoint returned status %d", response.StatusCode)
