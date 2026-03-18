@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
@@ -10,6 +11,9 @@ import (
 // GraphInterpreterWorkflow is the generic Temporal workflow that executes the JSON DAG.
 func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, initialWorkflowVariables map[string]any) (*WorkflowInstance, error) {
 	// Initialize instance state
+	if initialWorkflowVariables == nil {
+		initialWorkflowVariables = make(map[string]any)
+	}
 	instance := &WorkflowInstance{
 		ID:                workflow.GetInfo(ctx).WorkflowExecution.ID,
 		Status:            StatusRunning,
@@ -109,6 +113,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 			if len(node.OutputMapping) > 0 && result != nil {
 				for taskKey, globalKey := range node.OutputMapping {
 					if val, exists := result[taskKey]; exists {
+						slog.Info("Mapping task output to global context", "taskKey", taskKey, "globalKey", globalKey, "value", val, "instance", instance)
 						instance.WorkflowVariables[globalKey] = val
 					}
 				}
