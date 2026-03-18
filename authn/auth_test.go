@@ -350,7 +350,9 @@ func BenchmarkTokenExtraction(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		extractor.ExtractClaimsFromHeader(authHeader)
+		if _, err := extractor.ExtractClaimsFromHeader(authHeader); err != nil {
+			b.Fatalf("failed to extract claims: %v", err)
+		}
 	}
 }
 
