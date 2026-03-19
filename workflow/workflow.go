@@ -8,22 +8,31 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// GraphInterpreterWorkflow is the generic Temporal workflow that executes the JSON DAG.
+// graphInterpreter holds the state for a single workflow execution.
+type graphInterpreter struct {
+	def        WorkflowDefinition
+	instance   *WorkflowInstance
+	edgeTokens map[string]int
+
+	// Pre-computed indexes for O(1) lookups
+	nodes    map[string]*Node
+	outEdges map[string][]Edge
+	inEdges  map[string][]Edge
+}
+
 func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, initialWorkflowVariables map[string]any) (*WorkflowInstance, error) {
-	// Initialize instance state
 	if initialWorkflowVariables == nil {
 		initialWorkflowVariables = make(map[string]any)
 	}
+
 	instance := &WorkflowInstance{
 		ID:                workflow.GetInfo(ctx).WorkflowExecution.ID,
 		Status:            StatusRunning,
 		WorkflowVariables: initialWorkflowVariables,
 		AuditTrail:        make([]string, 0),
+		NodeInfo:          make(map[string]*NodeInfo),
 	}
-	edgeTokens := make(map[string]int)
 
-	// Initialize all the nodes states
-	instance.NodeInfo = make(map[string]*NodeInfo)
 	for _, node := range def.Nodes {
 		instance.NodeInfo[node.ID] = &NodeInfo{
 			ID:             node.ID,
@@ -36,12 +45,18 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		}
 	}
 
-	// Setup Query handler
+	// Initialize our interpreter struct
+	interp := &graphInterpreter{
+		def:        def,
+		instance:   instance,
+		edgeTokens: make(map[string]int),
+	}
+	interp.buildIndexes()
+
 	workflow.SetQueryHandler(ctx, "GetStatus", func() (*WorkflowInstance, error) {
 		return instance, nil
 	})
 
-	// Setup Signal listener for background event updates
 	signalChan := workflow.GetSignalChannel(ctx, "TaskUpdateSignal")
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		for {
@@ -54,214 +69,190 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	ao := workflow.ActivityOptions{StartToCloseTimeout: 24 * time.Hour * 365}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
-	// Helper functions for graph lookups
-	getNodeByID := func(id string) *Node {
-		for _, n := range def.Nodes {
-			if n.ID == id {
-				return &n
-			}
-		}
-		return nil
-	}
-
-	getOutgoingEdges := func(nodeID string) []Edge {
-		var edges []Edge
-		for _, e := range def.Edges {
-			if e.SourceID == nodeID {
-				edges = append(edges, e)
-			}
-		}
-		return edges
-	}
-
-	getIncomingEdges := func(nodeID string) []Edge {
-		var edges []Edge
-		for _, e := range def.Edges {
-			if e.TargetID == nodeID {
-				edges = append(edges, e)
-			}
-		}
-		return edges
-	}
-
-	var executeNode func(ctx workflow.Context, nodeID string) error
-
-	// Places a token on an edge and then proceeds to the target node
-	transitionTo := func(ctx workflow.Context, edge Edge) error {
-		edgeTokens[edge.ID]++
-		return executeNode(ctx, edge.TargetID)
-	}
-
-	executeNode = func(ctx workflow.Context, nodeID string) error {
-		nodeInfo, ok := instance.NodeInfo[nodeID]
-		if !ok {
-			return fmt.Errorf("NodeInfo for node %s not found", nodeID)
-		}
-		nodeInfo.Status = NodeStatusRunning
-		nodeInfo.UpdatedAt = time.Now()
-
-		node := getNodeByID(nodeID)
-		if node == nil {
-			nodeInfo.Status = NodeStatusFailed
-			return fmt.Errorf("node %s not found", nodeID)
-		}
-
-		outEdges := getOutgoingEdges(node.ID)
-
-		switch node.Type {
-		case NodeTypeStart:
-			if len(outEdges) == 0 {
-				nodeInfo.Status = NodeStatusFailed
-				return fmt.Errorf("START node has no outgoing edges")
-			}
-			return transitionTo(ctx, outEdges[0])
-
-		case NodeTypeTask:
-			var result map[string]any
-
-			// 1. Create a specific context for this node to force the ActivityID
-			nodeActOpts := workflow.ActivityOptions{
-				ActivityID:          node.ID, // Forces Temporal to use your exact Node ID
-				StartToCloseTimeout: 24 * time.Hour * 365,
-			}
-			nodeCtx := workflow.WithActivityOptions(ctx, nodeActOpts)
-
-			// 2. Use nodeCtx instead of the generic ctx
-			err := workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, instance.WorkflowVariables).Get(ctx, &result)
-			if err != nil {
-				nodeInfo.Status = NodeStatusFailed
-				return err
-			}
-
-			// Map Task Outputs to Global Context
-			if len(node.OutputMapping) > 0 && result != nil {
-				for taskKey, globalKey := range node.OutputMapping {
-					if val, exists := result[taskKey]; exists {
-						slog.Info("Mapping task output to global context", "taskKey", taskKey, "globalKey", globalKey, "value", val, "instance", instance)
-						instance.WorkflowVariables[globalKey] = val
-					}
-				}
-			}
-
-			// Transition to next node if available
-			if len(outEdges) > 0 {
-				return transitionTo(ctx, outEdges[0])
-			}
-			return nil
-
-		case NodeTypeGateway:
-			switch node.GatewayType {
-			case GatewayTypeExclusiveSplit:
-				// Pick the FIRST condition that matches
-				for _, e := range outEdges {
-					match, err := EvaluateCondition(e.Condition, instance.WorkflowVariables)
-					if err != nil {
-						nodeInfo.Status = NodeStatusFailed
-						return err
-					}
-					if match {
-						return transitionTo(ctx, e)
-					}
-				}
-				nodeInfo.Status = NodeStatusFailed
-				return fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID)
-
-			case GatewayTypeParallelSplit:
-				// Spawn a coroutine for EVERY matching condition
-				var futures []workflow.Future
-				for _, e := range outEdges {
-					match, err := EvaluateCondition(e.Condition, instance.WorkflowVariables)
-					if err != nil {
-						nodeInfo.Status = NodeStatusFailed
-						return err
-					}
-					if match {
-						f, s := workflow.NewFuture(ctx)
-						edge := e // capture locally for coroutine closure
-						workflow.Go(ctx, func(c workflow.Context) {
-							err := transitionTo(c, edge)
-							s.Set(nil, err)
-						})
-						futures = append(futures, f)
-					}
-				}
-
-				// Await completion of spawned parallel branches (within this node scope)
-				for _, f := range futures {
-					if err := f.Get(ctx, nil); err != nil {
-						nodeInfo.Status = NodeStatusFailed
-						return err
-					}
-				}
-				return nil
-
-			case GatewayTypeParallelJoin:
-				inEdges := getIncomingEdges(node.ID)
-
-				// 1. Check if ALL incoming edges have a token
-				for _, e := range inEdges {
-					if edgeTokens[e.ID] <= 0 {
-						return nil // End coroutine. Another branch arriving later will continue.
-					}
-				}
-
-				// 2. Consume all tokens safely
-				for _, e := range inEdges {
-					edgeTokens[e.ID]--
-				}
-
-				// 3. Proceed
-				if len(outEdges) > 0 {
-					return transitionTo(ctx, outEdges[0])
-				}
-				return nil
-
-			case GatewayTypeExclusiveJoin:
-				inEdges := getIncomingEdges(node.ID)
-
-				// Consume ONLY the token that brought us here
-				for _, e := range inEdges {
-					if edgeTokens[e.ID] > 0 {
-						edgeTokens[e.ID]--
-						break
-					}
-				}
-
-				if len(outEdges) > 0 {
-					return transitionTo(ctx, outEdges[0])
-				}
-				return nil
-			}
-
-		case NodeTypeEnd:
-			return workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", instance.ID, instance.WorkflowVariables).Get(ctx, nil)
-		}
-
-		nodeInfo.Status = NodeStatusCompleted
-
-		return nil
-	}
-
-	// 1. Find START Node
-	var startNode *Node
-	for _, n := range def.Nodes {
-		if n.Type == NodeTypeStart {
-			startNode = &n
-			break
-		}
-	}
-
+	// Begin Execution
+	startNode := interp.findStartNode()
 	if startNode == nil {
 		instance.Status = StatusFailed
 		return instance, fmt.Errorf("no START node found")
 	}
 
-	// 2. Begin Execution Traversal
-	if err := executeNode(ctx, startNode.ID); err != nil {
+	if err := interp.executeNode(ctx, startNode.ID); err != nil {
 		instance.Status = StatusFailed
 		return instance, err
 	}
 
 	instance.Status = StatusCompleted
 	return instance, nil
+}
+
+// buildIndexes pre-computes node and edge lookups for performance and cleanliness
+func (g *graphInterpreter) buildIndexes() {
+	g.nodes = make(map[string]*Node)
+	g.outEdges = make(map[string][]Edge)
+	g.inEdges = make(map[string][]Edge)
+
+	for i, n := range g.def.Nodes {
+		g.nodes[n.ID] = &g.def.Nodes[i]
+	}
+	for _, e := range g.def.Edges {
+		g.outEdges[e.SourceID] = append(g.outEdges[e.SourceID], e)
+		g.inEdges[e.TargetID] = append(g.inEdges[e.TargetID], e)
+	}
+}
+
+func (g *graphInterpreter) findStartNode() *Node {
+	for _, n := range g.def.Nodes {
+		if n.Type == NodeTypeStart {
+			return &n
+		}
+	}
+	return nil
+}
+
+func (g *graphInterpreter) transitionTo(ctx workflow.Context, edge Edge) error {
+	g.edgeTokens[edge.ID]++
+	return g.executeNode(ctx, edge.TargetID)
+}
+
+func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) error {
+	nodeInfo := g.instance.NodeInfo[nodeID]
+	node, exists := g.nodes[nodeID]
+
+	if !exists || nodeInfo == nil {
+		return fmt.Errorf("node %s not found", nodeID)
+	}
+
+	nodeInfo.Status = NodeStatusRunning
+	nodeInfo.UpdatedAt = time.Now()
+
+	outEdges := g.outEdges[node.ID]
+	var err error
+
+	// Delegate to specific handlers based on node type
+	switch node.Type {
+	case NodeTypeStart:
+		err = g.handleStartNode(ctx, outEdges)
+	case NodeTypeTask:
+		err = g.handleTaskNode(ctx, node, outEdges)
+	case NodeTypeGateway:
+		err = g.handleGatewayNode(ctx, node, outEdges)
+	case NodeTypeEnd:
+		err = workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+	default:
+		err = fmt.Errorf("unknown node type: %v", node.Type)
+	}
+
+	if err != nil {
+		nodeInfo.Status = NodeStatusFailed
+		return err
+	}
+
+	// NOTE: Depending on your recursive design, this might get skipped if
+	// transitionTo runs recursively. See the "Bug Note" below.
+	nodeInfo.Status = NodeStatusCompleted
+	return nil
+}
+
+func (g *graphInterpreter) handleStartNode(ctx workflow.Context, outEdges []Edge) error {
+	if len(outEdges) == 0 {
+		return fmt.Errorf("START node has no outgoing edges")
+	}
+	return g.transitionTo(ctx, outEdges[0])
+}
+
+func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, node *Node, outEdges []Edge) error {
+	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		ActivityID:          node.ID,
+		StartToCloseTimeout: 24 * time.Hour * 365,
+	})
+
+	var result map[string]any
+	err := workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, g.instance.WorkflowVariables).Get(ctx, &result)
+	if err != nil {
+		return err
+	}
+
+	if len(node.OutputMapping) > 0 && result != nil {
+		for taskKey, globalKey := range node.OutputMapping {
+			if val, exists := result[taskKey]; exists {
+				slog.Info("Mapping task output to global context", "taskKey", taskKey, "globalKey", globalKey)
+				g.instance.WorkflowVariables[globalKey] = val
+			}
+		}
+	}
+
+	if len(outEdges) > 0 {
+		return g.transitionTo(ctx, outEdges[0])
+	}
+	return nil
+}
+
+func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, node *Node, outEdges []Edge) error {
+	inEdges := g.inEdges[node.ID]
+
+	switch node.GatewayType {
+	case GatewayTypeExclusiveSplit:
+		for _, e := range outEdges {
+			match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
+			if err != nil {
+				return err
+			}
+			if match {
+				return g.transitionTo(ctx, e)
+			}
+		}
+		return fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID)
+
+	case GatewayTypeParallelSplit:
+		var futures []workflow.Future
+		for _, e := range outEdges {
+			match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
+			if err != nil {
+				return err
+			}
+			if match {
+				f, s := workflow.NewFuture(ctx)
+				edge := e // Capture locally for coroutine
+				workflow.Go(ctx, func(c workflow.Context) {
+					err := g.transitionTo(c, edge)
+					s.Set(nil, err)
+				})
+				futures = append(futures, f)
+			}
+		}
+		for _, f := range futures {
+			if err := f.Get(ctx, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case GatewayTypeParallelJoin:
+		for _, e := range inEdges {
+			if g.edgeTokens[e.ID] <= 0 {
+				return nil // Wait for other branches
+			}
+		}
+		for _, e := range inEdges {
+			g.edgeTokens[e.ID]-- // Consume tokens
+		}
+		if len(outEdges) > 0 {
+			return g.transitionTo(ctx, outEdges[0])
+		}
+		return nil
+
+	case GatewayTypeExclusiveJoin:
+		for _, e := range inEdges {
+			if g.edgeTokens[e.ID] > 0 {
+				g.edgeTokens[e.ID]--
+				break
+			}
+		}
+		if len(outEdges) > 0 {
+			return g.transitionTo(ctx, outEdges[0])
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown gateway type: %v", node.GatewayType)
+	}
 }
