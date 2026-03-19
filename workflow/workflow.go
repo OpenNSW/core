@@ -22,6 +22,20 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	}
 	edgeTokens := make(map[string]int)
 
+	// Initialize all the nodes states
+	instance.NodeInfo = make(map[string]*NodeInfo)
+	for _, node := range def.Nodes {
+		instance.NodeInfo[node.ID] = &NodeInfo{
+			ID:             node.ID,
+			Type:           node.Type,
+			GatewayType:    node.GatewayType,
+			TaskTemplateID: node.TaskTemplateID,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+			Status:         NodeStatusNotStarted,
+		}
+	}
+
 	// Setup Query handler
 	workflow.SetQueryHandler(ctx, "GetStatus", func() (*WorkflowInstance, error) {
 		return instance, nil
@@ -86,9 +100,17 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 
 		outEdges := getOutgoingEdges(node.ID)
 
+		nodeInfo, ok := instance.NodeInfo[nodeID]
+		if !ok {
+			return fmt.Errorf("NodeInfo for node %s not found", nodeID)
+		}
+		nodeInfo.Status = NodeStatusRunning
+		nodeInfo.UpdatedAt = time.Now()
+
 		switch node.Type {
 		case NodeTypeStart:
 			if len(outEdges) == 0 {
+				nodeInfo.Status = NodeStatusFailed
 				return fmt.Errorf("START node has no outgoing edges")
 			}
 			return transitionTo(ctx, outEdges[0])
@@ -106,6 +128,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 			// 2. Use nodeCtx instead of the generic ctx
 			err := workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, instance.WorkflowVariables).Get(ctx, &result)
 			if err != nil {
+				nodeInfo.Status = NodeStatusFailed
 				return err
 			}
 
@@ -132,6 +155,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 				for _, e := range outEdges {
 					match, err := EvaluateCondition(e.Condition, instance.WorkflowVariables)
 					if err != nil {
+						nodeInfo.Status = NodeStatusFailed
 						return err
 					}
 					if match {
@@ -146,6 +170,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 				for _, e := range outEdges {
 					match, err := EvaluateCondition(e.Condition, instance.WorkflowVariables)
 					if err != nil {
+						nodeInfo.Status = NodeStatusFailed
 						return err
 					}
 					if match {
@@ -162,6 +187,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 				// Await completion of spawned parallel branches (within this node scope)
 				for _, f := range futures {
 					if err := f.Get(ctx, nil); err != nil {
+						nodeInfo.Status = NodeStatusFailed
 						return err
 					}
 				}
@@ -208,6 +234,8 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		case NodeTypeEnd:
 			return workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", instance.ID, instance.WorkflowVariables).Get(ctx, nil)
 		}
+
+		nodeInfo.Status = NodeStatusCompleted
 
 		return nil
 	}

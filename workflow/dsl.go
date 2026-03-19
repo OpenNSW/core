@@ -1,26 +1,30 @@
 package engine
 
 // Core Node Types
+type NodeType string
+
 const (
-	NodeTypeStart   = "START"
-	NodeTypeEnd     = "END"
-	NodeTypeTask    = "TASK"
-	NodeTypeGateway = "GATEWAY"
+	NodeTypeStart   NodeType = "START"
+	NodeTypeEnd     NodeType = "END"
+	NodeTypeTask    NodeType = "TASK"
+	NodeTypeGateway NodeType = "GATEWAY"
 )
 
 // Gateway Types
+type GatewayType string
+
 const (
-	GatewayTypeExclusiveSplit = "EXCLUSIVE_SPLIT" // XOR Split
-	GatewayTypeParallelSplit  = "PARALLEL_SPLIT"  // AND Split
-	GatewayTypeExclusiveJoin  = "EXCLUSIVE_JOIN"  // XOR Join
-	GatewayTypeParallelJoin   = "PARALLEL_JOIN"   // AND Join
+	GatewayTypeExclusiveSplit GatewayType = "EXCLUSIVE_SPLIT" // XOR Split
+	GatewayTypeParallelSplit  GatewayType = "PARALLEL_SPLIT"  // AND Split
+	GatewayTypeExclusiveJoin  GatewayType = "EXCLUSIVE_JOIN"  // XOR Join
+	GatewayTypeParallelJoin   GatewayType = "PARALLEL_JOIN"   // AND Join
 )
 
 // Node represents a step in the workflow graph.
 type Node struct {
 	ID             string            `json:"id"`
-	Type           string            `json:"type"`                       // START, END, TASK, or GATEWAY
-	GatewayType    string            `json:"gateway_type,omitempty"`     // See Gateway Types constants
+	Type           NodeType          `json:"type"`                       // START, END, TASK, or GATEWAY
+	GatewayType    GatewayType       `json:"gateway_type,omitempty"`     // See Gateway Types constants
 	TaskTemplateID string            `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	OutputMapping  map[string]string `json:"output_mapping,omitempty"`   // Maps Task Output Key -> WorkflowVariables Key
 }

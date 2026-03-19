@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -36,6 +37,26 @@ type TaskPayload struct {
 	Inputs map[string]any
 }
 
+type NodeStatus string
+
+const (
+	NodeStatusNotStarted NodeStatus = "NOT_STARTED"
+	NodeStatusRunning    NodeStatus = "RUNNING"
+	NodeStatusCompleted  NodeStatus = "COMPLETED"
+	NodeStatusFailed     NodeStatus = "FAILED"
+)
+
+// NodeInfo holds information about the state of one of the nodes in the workflow.
+type NodeInfo struct {
+	ID             string      `json:"id"`
+	CreatedAt      time.Time   `json:"createdAt"`                  // Timestamp of node creation
+	UpdatedAt      time.Time   `json:"updatedAt"`                  // Timestamp of last node update
+	Type           NodeType    `json:"type"`                       // Type of the node.
+	GatewayType    GatewayType `json:"gateway_type,omitempty"`     // See Gateway Types constants
+	TaskTemplateID string      `json:"task_template_id,omitempty"` // Identifier for the task template to run
+	Status         NodeStatus  `json:"status"`                     // Status of the node
+}
+
 // WorkflowInstance holds the dynamic runtime state of the workflow execution.
 // This struct is returned by the GetStatus query and represents a deterministic
 // snapshot of the engine's memory at a given point in time.
@@ -47,7 +68,8 @@ type WorkflowInstance struct {
 	// WorkflowVariables holds the shared, dynamic business data passed between nodes.
 	WorkflowVariables map[string]any `json:"workflow_variables"`
 	// AuditTrail is a chronologically ordered log of events, milestones, or external signals.
-	AuditTrail []string `json:"audit_trail"`
+	AuditTrail []string             `json:"audit_trail"`
+	NodeInfo   map[string]*NodeInfo `json:"node_states"`
 }
 
 // UpdateEvent allows the task executor to send asynchronous signals
