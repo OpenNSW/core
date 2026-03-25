@@ -2,7 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,15 +33,25 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		NodeInfo:          make(map[string]*NodeInfo),
 	}
 
+	// Generate UUIDs deterministically
+	var generatedUUIDs map[string]string
+	workflow.SideEffect(ctx, func(ctx workflow.Context) interface{} {
+		uuids := make(map[string]string)
+		for _, node := range def.Nodes {
+			uuids[node.ID] = uuid.NewString()
+		}
+		return uuids
+	}).Get(&generatedUUIDs)
+
 	for _, node := range def.Nodes {
 		instance.NodeInfo[node.ID] = &NodeInfo{
 			// Create a unique ID for the node. node.ID is the ID in our template.
-			ID:             node.ID + ":" + uuid.NewString(),
+			ID:             node.ID + ":" + generatedUUIDs[node.ID],
 			Type:           node.Type,
 			GatewayType:    node.GatewayType,
 			TaskTemplateID: node.TaskTemplateID,
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
+			CreatedAt:      workflow.Now(ctx),
+			UpdatedAt:      workflow.Now(ctx),
 			Status:         NodeStatusNotStarted,
 		}
 	}
@@ -125,7 +134,7 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 	}
 
 	nodeInfo.Status = NodeStatusRunning
-	nodeInfo.UpdatedAt = time.Now()
+	nodeInfo.UpdatedAt = workflow.Now(ctx)
 
 	outEdges := g.outEdges[node.ID]
 	var err error
@@ -167,7 +176,6 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeID string, n
 		ActivityID:          nodeID,
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
-	slog.Error("DEBUG ----- ActivityID:          node.ID", "node.ID", node.ID, "nodeID", nodeID)
 
 	var result map[string]any
 	err := workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, g.instance.WorkflowVariables).Get(ctx, &result)
@@ -178,7 +186,6 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeID string, n
 	if len(node.OutputMapping) > 0 && result != nil {
 		for taskKey, globalKey := range node.OutputMapping {
 			if val, exists := result[taskKey]; exists {
-				slog.Info("Mapping task output to global context", "taskKey", taskKey, "globalKey", globalKey)
 				g.instance.WorkflowVariables[globalKey] = val
 			}
 		}
