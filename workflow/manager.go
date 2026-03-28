@@ -69,6 +69,8 @@ type WorkflowInstance struct {
 	// AuditTrail is a chronologically ordered log of events, milestones, or external signals.
 	AuditTrail []string             `json:"audit_trail"`
 	NodeInfo   map[string]*NodeInfo `json:"node_states"`
+	// Edges contains the workflow graph connections from the workflow definition.
+	Edges []Edge `json:"edges"`
 }
 
 // UpdateEvent allows the task executor to send asynchronous signals

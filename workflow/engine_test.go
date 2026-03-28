@@ -160,3 +160,114 @@ func TestParallelJoinFlow(t *testing.T) {
 
 	env.AssertExpectations(t)
 }
+
+func TestEdgesAreReturnedInWorkflowInstance(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(customsWorkflowJSON), &def)
+	require.NoError(t, err)
+
+	acts := &EngineActivities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	// Critical: ensure condition variable exists
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything).
+		Return(map[string]any{"consignment_type": "LCL"}, nil)
+
+	// fallback
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]any{}, nil)
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	err = env.GetWorkflowResult(&instance)
+	require.NoError(t, err)
+
+	require.NotNil(t, instance.Edges)
+	require.Len(t, instance.Edges, len(def.Edges))
+
+	nodeIDMap := make(map[string]string)
+	for defNodeID, nodeInfo := range instance.NodeInfo {
+		nodeIDMap[defNodeID] = nodeInfo.ID
+	}
+	for i, edge := range instance.Edges {
+		require.Equal(t, def.Edges[i].ID, edge.ID)
+		require.Equal(t, nodeIDMap[def.Edges[i].SourceID], edge.SourceID)
+		require.Equal(t, nodeIDMap[def.Edges[i].TargetID], edge.TargetID)
+	}
+}
+
+func TestEdgesReferenceValidNodeInstanceIDs(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(parallelWorkflowJSON), &def)
+	require.NoError(t, err)
+
+	acts := &EngineActivities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]any{}, nil)
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	var instance WorkflowInstance
+	err = env.GetWorkflowResult(&instance)
+	require.NoError(t, err)
+
+	// Build set of valid node instance IDs
+	validNodeIDs := make(map[string]bool)
+	for _, node := range instance.NodeInfo {
+		validNodeIDs[node.ID] = true
+	}
+
+	// Validate all edges reference valid nodes
+	for _, edge := range instance.Edges {
+		require.True(t, validNodeIDs[edge.SourceID], "invalid sourceID: %s", edge.SourceID)
+		require.True(t, validNodeIDs[edge.TargetID], "invalid targetID: %s", edge.TargetID)
+	}
+}
+
+func TestInvalidEdgeDefinitionFailsWorkflow(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	// Broken edge (invalid target_id)
+	badJSON := `
+	{
+	  "workflow_id": "bad",
+	  "name": "bad",
+	  "version": 1,
+	  "edges":[
+	    { "id": "e1", "source_id": "start", "target_id": "missing" }
+	  ],
+	  "nodes":[
+	    { "id": "start", "type": "START" }
+	  ]
+	}`
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(badJSON), &def)
+	require.NoError(t, err)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+}

@@ -31,6 +31,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		WorkflowVariables: initialWorkflowVariables,
 		AuditTrail:        make([]string, 0),
 		NodeInfo:          make(map[string]*NodeInfo),
+		Edges:             make([]Edge, len(def.Edges)),
 	}
 
 	// Generate UUIDs deterministically
@@ -53,6 +54,24 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 			CreatedAt:      workflow.Now(ctx),
 			UpdatedAt:      workflow.Now(ctx),
 			Status:         NodeStatusNotStarted,
+		}
+	}
+
+	// Resolve Source and Target IDs in edges to the generated node instance IDs
+	for i, edge := range def.Edges {
+		sourceNodeInfo, sourceExists := instance.NodeInfo[edge.SourceID]
+		if !sourceExists {
+			return nil, fmt.Errorf("invalid edge definition: source node '%s' not found for edge '%s'", edge.SourceID, edge.ID)
+		}
+		targetNodeInfo, targetExists := instance.NodeInfo[edge.TargetID]
+		if !targetExists {
+			return nil, fmt.Errorf("invalid edge definition: target node '%s' not found for edge '%s'", edge.TargetID, edge.ID)
+		}
+		instance.Edges[i] = Edge{
+			ID:        edge.ID,
+			SourceID:  sourceNodeInfo.ID,
+			TargetID:  targetNodeInfo.ID,
+			Condition: edge.Condition,
 		}
 	}
 
