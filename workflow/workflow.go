@@ -152,6 +152,7 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 		return fmt.Errorf("node %s not found", nodeID)
 	}
 
+	// Set node to Running for all node types at entry
 	nodeInfo.Status = NodeStatusRunning
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
 
@@ -161,13 +162,13 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 	// Delegate to specific handlers based on node type
 	switch node.Type {
 	case NodeTypeStart:
-		err = g.handleStartNode(ctx, outEdges)
+		err = g.handleStartNode(ctx, nodeInfo, outEdges)
 	case NodeTypeTask:
-		err = g.handleTaskNode(ctx, nodeInfo.ID, node, outEdges)
+		err = g.handleTaskNode(ctx, nodeInfo, node, outEdges)
 	case NodeTypeGateway:
-		err = g.handleGatewayNode(ctx, node, outEdges)
+		err = g.handleGatewayNode(ctx, nodeInfo, node, outEdges)
 	case NodeTypeEnd:
-		err = workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+		err = g.handleEndNode(ctx, nodeInfo)
 	default:
 		err = fmt.Errorf("unknown node type: %v", node.Type)
 	}
@@ -176,23 +177,33 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 		nodeInfo.Status = NodeStatusFailed
 		return err
 	}
-
-	// NOTE: Depending on your recursive design, this might get skipped if
-	// transitionTo runs recursively. See the "Bug Note" below.
-	nodeInfo.Status = NodeStatusCompleted
 	return nil
 }
 
-func (g *graphInterpreter) handleStartNode(ctx workflow.Context, outEdges []Edge) error {
+// handleStartNode transitions to the single outgoing edge and marks itself Completed.
+func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeInfo, outEdges []Edge) error {
 	if len(outEdges) == 0 {
 		return fmt.Errorf("START node has no outgoing edges")
 	}
+	nodeInfo.Status = NodeStatusCompleted
+	nodeInfo.UpdatedAt = workflow.Now(ctx)
 	return g.transitionTo(ctx, outEdges[0])
 }
 
-func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeID string, node *Node, outEdges []Edge) error {
+// handleEndNode fires WorkflowCompletedActivity and marks itself Completed.
+func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInfo) error {
+	err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("unable to complete workflow: %w", err)
+	}
+	nodeInfo.Status = NodeStatusCompleted
+	nodeInfo.UpdatedAt = workflow.Now(ctx)
+	return nil
+}
+
+func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ActivityID:          nodeID,
+		ActivityID:          nodeInfo.ID,
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
 
@@ -210,13 +221,16 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeID string, n
 		}
 	}
 
+	nodeInfo.Status = NodeStatusCompleted
+	nodeInfo.UpdatedAt = workflow.Now(ctx)
+
 	if len(outEdges) > 0 {
 		return g.transitionTo(ctx, outEdges[0])
 	}
 	return nil
 }
 
-func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, node *Node, outEdges []Edge) error {
+func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	inEdges := g.inEdges[node.ID]
 
 	switch node.GatewayType {
@@ -227,12 +241,16 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, node *Node, o
 				return err
 			}
 			if match {
+				nodeInfo.Status = NodeStatusCompleted
+				nodeInfo.UpdatedAt = workflow.Now(ctx)
 				return g.transitionTo(ctx, e)
 			}
 		}
 		return fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID)
 
 	case GatewayTypeParallelSplit:
+		nodeInfo.Status = NodeStatusCompleted
+		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		var futures []workflow.Future
 		for _, e := range outEdges {
 			match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
@@ -266,6 +284,8 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, node *Node, o
 			g.edgeTokens[e.ID]-- // Consume tokens
 		}
 		if len(outEdges) > 0 {
+			nodeInfo.Status = NodeStatusCompleted
+			nodeInfo.UpdatedAt = workflow.Now(ctx)
 			return g.transitionTo(ctx, outEdges[0])
 		}
 		return nil
@@ -278,6 +298,8 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, node *Node, o
 			}
 		}
 		if len(outEdges) > 0 {
+			nodeInfo.Status = NodeStatusCompleted
+			nodeInfo.UpdatedAt = workflow.Now(ctx)
 			return g.transitionTo(ctx, outEdges[0])
 		}
 		return nil
