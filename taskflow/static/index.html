@@ -571,237 +571,248 @@
     </main>
 
     <script>
-        // ── Random fill helpers ──────────────────────────────────────────────────────
+        // ── Form schema cache (keyed by form ID) ─────────────────────────────────────
+        // Edit /static/forms/<id>.json to change what fields appear and how.
+        const formCache = {};
+        async function loadForm(formId) {
+            if (formCache[formId]) return formCache[formId];
+            const r = await fetch(`/forms/${formId}.json`);
+            if (!r.ok) throw new Error(`form not found: ${formId}`);
+            formCache[formId] = await r.json();
+            return formCache[formId];
+        }
+
+        // ── JSONForms uischema interpreter ────────────────────────────────────────────
+        // Resolves a scope like "#/properties/userform/properties/applicant_name"
+        // to the corresponding schema property definition.
+        function resolveScope(schema, scope) {
+            const parts = scope.replace('#/', '').split('/');
+            let cur = schema;
+            for (const p of parts) { if (!cur) return {}; cur = cur[p]; }
+            return cur || {};
+        }
+
+        // Converts a scope to a data path array, stripping "properties" segments.
+        // e.g. "#/properties/userform/properties/crop_type" → ["userform", "crop_type"]
+        function scopeToPath(scope) {
+            return scope.replace('#/', '').split('/').filter(p => p !== 'properties');
+        }
+
+        function getNestedVal(obj, path) {
+            return path.reduce((o, k) => (o != null ? o[k] : undefined), obj);
+        }
+
+        // Random fill values keyed by field name
         const RAND = {
             name: ["Acme Farms Ltd.", "Green Valley Co.", "Sunrise Orchards", "Blue Ridge Produce", "Coastal Growers"],
             loc: ["123 Farm Rd, Orange NSW 2800", "45 Valley Way, Bathurst NSW 2795", "88 Orchard Lane, Griffith NSW 2680"],
             crop: ["Apples", "Citrus", "Stone Fruit", "Grapes", "Mangoes"],
             dest: ["Japan", "China", "South Korea", "United States", "Singapore"],
             comment: ["Looks good, no issues.", "Please provide additional inspection docs.", "Approved pending final check.", "Commodities meet all requirements."],
+            'farm_location':      ["123 Farm Rd, Orange NSW 2800", "45 Valley Way, Bathurst NSW 2795", "88 Orchard Lane, Griffith NSW 2680"],
+            'crop_type':          ["Apples", "Citrus", "Stone Fruit", "Grapes", "Mangoes"],
+            'export_destination': ["Japan", "China", "South Korea", "United States", "Singapore"],
+            'reviewer_comments':  ["Looks good.", "Please provide inspection docs.", "Approved pending check.", "Meets all requirements."],
         };
-        function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-        function fillEl(id, key) { const e = document.getElementById(id); if (e) e.value = rand(RAND[key]); }
+        function fillRand(id, key) {
+            const el = document.getElementById(id);
+            if (el && RAND[key]) el.value = RAND[key][Math.floor(Math.random() * RAND[key].length)];
+        }
+
+        // ── Render a uischema Control element ─────────────────────────────────────────
+        function renderControl(schema, element, data, uid) {
+            const path    = scopeToPath(element.scope);
+            const prop    = resolveScope(schema, element.scope);
+            const label   = prop.title || path[path.length - 1];
+            const opts    = element.options || {};
+            const val     = getNestedVal(data, path) ?? '';
+            const fieldId = uid + '_' + path.join('_');
+            const isRO    = !!opts.readonly;
+            let input = '';
+
+            if (opts.format === 'radio' && prop.enum) {
+                // Render radio buttons for enum fields (e.g. review_outcome)
+                const icons = { approve: '✅', reject: '❌', needs_more_info: '🔄' };
+                const radios = prop.enum.map(v =>
+                    `<label class="radio-option"><input type="radio" name="${fieldId}" value="${v}" ${v === 'approve' ? 'checked' : ''}><span>${icons[v] || ''} ${v.replace(/_/g, ' ')}</span></label>`
+                ).join('');
+                input = `<div class="radio-group">${radios}</div>`;
+            } else if (opts.multi) {
+                const rk = path[path.length - 1];
+                const rb = RAND[rk] ? `<button class="dice" onclick="fillRand('${fieldId}','${rk}')" title="Random">🎲</button>` : '';
+                input = `<div class="input-wrap ta-wrap"><textarea id="${fieldId}" rows="2" placeholder="${opts.placeholder || ''}" ${isRO ? 'readonly' : ''}>${val}</textarea>${rb}</div>`;
+            } else {
+                const rk = path[path.length - 1];
+                const rb = (!isRO && RAND[rk]) ? `<button class="dice" onclick="fillRand('${fieldId}','${rk}')" title="Random">🎲</button>` : '';
+                input = `<div class="input-wrap"><input type="text" id="${fieldId}" value="${val}" placeholder="${opts.placeholder || ''}" ${isRO ? 'readonly' : ''} ${opts.detail ? `title="${opts.detail}"` : ''}>${rb}</div>`;
+            }
+            return `<div class="field"><label>${label}</label>${input}</div>`;
+        }
+
+        // ── Render any uischema element (recursive) ───────────────────────────────────
+        function renderElement(schema, el, data, uid) {
+            switch (el.type) {
+                case 'VerticalLayout':
+                    return el.elements.map(c => renderElement(schema, c, data, uid)).join('');
+                case 'HorizontalLayout':
+                    return `<div class="field-row">${el.elements.map(c => renderElement(schema, c, data, uid)).join('')}</div>`;
+                case 'Group':
+                    return `<div class="section-label">${el.label}</div>` + el.elements.map(c => renderElement(schema, c, data, uid)).join('');
+                case 'Control':
+                    return renderControl(schema, el, data, uid);
+                default: return '';
+            }
+        }
+
+        // ── Collect submitted values from rendered controls ───────────────────────────
+        // Skips readonly fields. Groups values into their namespace (userform / reviewerform).
+        function collectData(schema, uischema, uid) {
+            const out = {};
+            function walk(el) {
+                if (el.type === 'Control') {
+                    if (el.options?.readonly) return;
+                    const path    = scopeToPath(el.scope);
+                    const opts    = el.options || {};
+                    const fieldId = uid + '_' + path.join('_');
+                    let val = opts.format === 'radio'
+                        ? document.querySelector(`input[name="${fieldId}"]:checked`)?.value
+                        : document.getElementById(fieldId)?.value?.trim();
+                    if (val == null) return;
+                    let cur = out;
+                    for (let i = 0; i < path.length - 1; i++) { cur[path[i]] = cur[path[i]] || {}; cur = cur[path[i]]; }
+                    cur[path[path.length - 1]] = val;
+                } else if (el.elements) {
+                    el.elements.forEach(walk);
+                }
+            }
+            walk(uischema);
+            return out;
+        }
 
         // ── API ──────────────────────────────────────────────────────────────────────
         async function startWorkflow() {
             const name = document.getElementById('applicantInput').value.trim() || 'Applicant';
-            try {
-                const r = await fetch('/api/start', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ applicant_name: name })
-                });
-                if (r.ok) { fetchTasks(); }
-                else { alert('Failed to start: ' + await r.text()); }
-            } catch (e) { alert('Network error'); }
+            const r = await fetch('/api/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ applicant_name: name }) });
+            if (r.ok) fetchTasks(); else alert('Failed: ' + await r.text());
         }
-
         async function fetchTasks() {
-            try {
-                const r = await fetch('/api/tasks');
-                const tasks = await r.json() || [];
-                renderAll(tasks);
-            } catch (e) { console.error(e); }
+            try { const r = await fetch('/api/tasks'); renderAll(await r.json() || []); } catch (e) { console.error(e); }
+        }
+        async function submitTaskData(taskID, payload) {
+            const r = await fetch('/api/task/' + taskID, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (r.ok) fetchTasks(); else alert('Submit failed: ' + await r.text());
         }
 
-        async function submitTask(taskID, payload) {
-            try {
-                const r = await fetch('/api/task/' + taskID, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (r.ok) { fetchTasks(); }
-                else { alert('Submit failed: ' + await r.text()); }
-            } catch (e) { alert('Network error'); }
-        }
-
-        // ── Rendering ────────────────────────────────────────────────────────────────
+        // ── Render all three columns ──────────────────────────────────────────────────
         function renderAll(tasks) {
             const userCol = document.getElementById('userCol');
             const reviewerCol = document.getElementById('reviewerCol');
-            const historyCol = document.getElementById('historyCol');
-
-            const pending = tasks.filter(t => t.status === 'PENDING_USER');
-            const queued = tasks.filter(t => t.status === 'QUEUED_EXTERNALLY');
-            const completed = tasks.filter(t => t.status === 'COMPLETED');
-
-            userCol.innerHTML = pending.length ? '' : '<div class="empty"><div class="empty-icon">📋</div><p>No active tasks</p></div>';
-            reviewerCol.innerHTML = queued.length ? '' : '<div class="empty"><div class="empty-icon">🔍</div><p>No pending reviews</p></div>';
-            historyCol.innerHTML = completed.length ? '' : '<div class="empty"><div class="empty-icon">✅</div><p>Completed tasks appear here</p></div>';
-
-            pending.forEach(t => userCol.appendChild(renderUserCard(t)));
-            queued.forEach(t => reviewerCol.appendChild(renderReviewerCard(t)));
+            const historyCol = document.getElementById('historyCol');            // Cards are async (they fetch JSON form schemas), use Promise chains
+            pending.forEach(t   => renderUserCard(t).then(el => userCol.appendChild(el)).catch(console.error));
+            queued.forEach(t    => renderReviewerCard(t).then(el => reviewerCol.appendChild(el)).catch(console.error));
             completed.forEach(t => historyCol.appendChild(renderHistoryCard(t)));
         }
 
-        function getStr(data, ...keys) {
-            let obj = data || {};
-            for (const k of keys) {
-                if (obj == null) return '';
-                obj = obj[k];
-            }
-            return obj || '';
-        }
+        // ── User card — rendered from phyto_user_form_v1.json ────────────────────────
+        async function renderUserCard(task) {
+            const form = await loadForm(task.user_form_id || 'phyto_user_form_v1');
+            const data = task.data || {};
+            const tid  = task.task_id;
+            const rf   = data.reviewerform || {};
 
-        function renderUserCard(task) {
-            const d = task.data || {};
-            const uf = d.userform || {};
-            const rf = d.reviewerform || {};
-            const tid = task.task_id;
-
-            // Show reviewer feedback if looping back
-            let feedbackHtml = '';
+            let feedback = '';
             if (rf.reviewer_comments) {
-                feedbackHtml = `<div class="feedback-box">
-            <div class="fb-label">⚠ Reviewer Feedback</div>
-            <p>${rf.reviewer_comments}</p>
-        </div>`;
+                feedback = `<div class="feedback-box"><div class="fb-label">⚠ Reviewer Feedback</div><p>${rf.reviewer_comments}</p></div>`;
             }
 
             const card = document.createElement('div');
             card.className = 'task-card';
             card.innerHTML = `
-        <div class="card-top">
-            <div>
-                <div class="card-title">Phyto Sanitary Application</div>
-                <div class="card-sub">${tid} · node: ${task.active_activity_id || '—'}</div>
-            </div>
-            <span class="badge badge-pending">Pending User</span>
-        </div>
-        <div class="card-body">
-            ${feedbackHtml}
-            <div class="section-label">Applicant Details</div>
-            <div class="field">
-                <label>Registered Applicant Name</label>
-                <input type="text" id="${tid}_appname" value="${uf.applicant_name || ''}" readonly title="Auto-populated from your profile">
-            </div>
-            <div class="section-label">Consignment Details</div>
-            <div class="field">
-                <label>Farm Address / Location</label>
-                <div class="input-wrap">
-                    <input type="text" id="${tid}_loc" value="${uf.farm_location || ''}" placeholder="e.g. 123 Farm Rd, Orange NSW">
-                    <button class="dice" onclick="fillEl('${tid}_loc','loc')" title="Random">🎲</button>
-                </div>
-            </div>
-            <div class="field-row">
-                <div class="field">
-                    <label>Commodity / Crop Type</label>
-                    <div class="input-wrap">
-                        <input type="text" id="${tid}_crop" value="${uf.crop_type || ''}" placeholder="e.g. Apples">
-                        <button class="dice" onclick="fillEl('${tid}_crop','crop')" title="Random">🎲</button>
+                <div class="card-top">
+                    <div>
+                        <div class="card-title">Phyto Sanitary Application</div>
+                        <div class="card-sub">${tid} · schema: ${task.user_form_id || 'phyto_user_form_v1'}</div>
                     </div>
+                    <span class="badge badge-pending">Pending User</span>
                 </div>
-                <div class="field">
-                    <label>Destination Country</label>
-                    <div class="input-wrap">
-                        <input type="text" id="${tid}_dest" value="${uf.export_destination || ''}" placeholder="e.g. Japan">
-                        <button class="dice" onclick="fillEl('${tid}_dest','dest')" title="Random">🎲</button>
-                    </div>
-                </div>
-            </div>
-            <button class="btn btn-primary" onclick="submitUserForm('${tid}')">Submit Application →</button>
-        </div>`;
+                <div class="card-body">
+                    ${feedback}
+                    ${renderElement(form.schema, form.uischema, data, tid)}
+                    <button class="btn btn-primary" id="submit_${tid}">Submit Application →</button>
+                </div>`;
+
+            card.querySelector(`#submit_${tid}`).addEventListener('click', () => {
+                const payload = collectData(form.schema, form.uischema, tid);
+                if (!payload.userform?.farm_location || !payload.userform?.crop_type || !payload.userform?.export_destination) {
+                    alert('Please fill in all required consignment fields.'); return;
+                }
+                // applicant_name is readonly in schema — carry it forward from stored data
+                if (data.userform?.applicant_name) {
+                    payload.userform = payload.userform || {};
+                    payload.userform.applicant_name = data.userform.applicant_name;
+                }
+                submitTaskData(tid, payload);
+            });
             return card;
         }
 
-        function submitUserForm(tid) {
-            const loc = document.getElementById(tid + '_loc')?.value?.trim();
-            const crop = document.getElementById(tid + '_crop')?.value?.trim();
-            const dest = document.getElementById(tid + '_dest')?.value?.trim();
-            if (!loc || !crop || !dest) { alert('Please fill in all required fields.'); return; }
-            const appName = document.getElementById(tid + '_appname')?.value?.trim();
-            submitTask(tid, {
-                userform: { applicant_name: appName, farm_location: loc, crop_type: crop, export_destination: dest }
-            });
-        }
-
-        function renderReviewerCard(task) {
-            const d = task.data || {};
-            const uf = d.userform || {};
-            const tid = task.task_id;
+        // ── Reviewer card — rendered from phyto_reviewer_form_v1.json ────────────────
+        async function renderReviewerCard(task) {
+            const form = await loadForm(task.reviewer_form_id || 'phyto_reviewer_form_v1');
+            const data = task.data || {};
+            const tid  = task.task_id;
+            const uf   = data.userform || {};
 
             const card = document.createElement('div');
             card.className = 'task-card';
             card.innerHTML = `
-        <div class="card-top">
-            <div>
-                <div class="card-title">Review: ${uf.applicant_name || 'Application'}</div>
-                <div class="card-sub">${tid} · node: ${task.active_activity_id || '—'}</div>
-            </div>
-            <span class="badge badge-queued">Queued Externally</span>
-        </div>
-        <div class="card-body">
-            <div class="section-label">Submitted Application Data (Read Only)</div>
-            <div class="field">
-                <label>Applicant Name</label>
-                <input type="text" value="${uf.applicant_name || ''}" readonly>
-            </div>
-            <div class="field">
-                <label>Farm Address</label>
-                <input type="text" value="${uf.farm_location || ''}" readonly>
-            </div>
-            <div class="field-row">
-                <div class="field"><label>Commodity</label><input type="text" value="${uf.crop_type || ''}" readonly></div>
-                <div class="field"><label>Destination</label><input type="text" value="${uf.export_destination || ''}" readonly></div>
-            </div>
-            <div class="section-label">Official Review</div>
-            <div class="field">
-                <label>Review Decision</label>
-                <div class="radio-group">
-                    <label class="radio-option"><input type="radio" name="outcome_${tid}" value="approve" checked><span>✅ Approve</span></label>
-                    <label class="radio-option"><input type="radio" name="outcome_${tid}" value="reject"><span>❌ Reject</span></label>
-                    <label class="radio-option"><input type="radio" name="outcome_${tid}" value="needs_more_info"><span>🔄 Needs More Info</span></label>
+                <div class="card-top">
+                    <div>
+                        <div class="card-title">Review: ${uf.applicant_name || 'Application'}</div>
+                        <div class="card-sub">${tid} · schema: ${task.reviewer_form_id || 'phyto_reviewer_form_v1'}</div>
+                    </div>
+                    <span class="badge badge-queued">Queued Externally</span>
                 </div>
-            </div>
-            <div class="field">
-                <label>Comments / Justification</label>
-                <div class="input-wrap ta-wrap">
-                    <textarea id="${tid}_comments" rows="2" placeholder="Provide feedback if rejecting or requesting more info…"></textarea>
-                    <button class="dice" onclick="fillEl('${tid}_comments','comment')" title="Random">🎲</button>
-                </div>
-            </div>
-            <button class="btn btn-success" onclick="submitReview('${tid}')">Submit Review →</button>
-        </div>`;
+                <div class="card-body">
+                    ${renderElement(form.schema, form.uischema, data, tid)}
+                    <button class="btn btn-success" id="submit_${tid}">Submit Review →</button>
+                </div>`;
+
+            card.querySelector(`#submit_${tid}`).addEventListener('click', () => {
+                const payload = collectData(form.schema, form.uischema, tid);
+                if (!payload.reviewerform?.review_outcome) {
+                    alert('Please select a review decision.'); return;
+                }
+                submitTaskData(tid, payload);
+            });
             return card;
         }
 
-        function submitReview(tid) {
-            const outcome = document.querySelector(`input[name="outcome_${tid}"]:checked`)?.value;
-            const comments = document.getElementById(tid + '_comments')?.value?.trim();
-            if (!outcome) { alert('Please select a review decision.'); return; }
-            submitTask(tid, {
-                reviewerform: { review_outcome: outcome, reviewer_comments: comments || '' }
-            });
-        }
-
+        // ── History card ──────────────────────────────────────────────────────────────
         function renderHistoryCard(task) {
-            const d = task.data || {};
-            const uf = d.userform || {};
-            const rf = d.reviewerform || {};
+            const uf = task.data?.userform || {};
+            const rf = task.data?.reviewerform || {};
             const outcome = rf.review_outcome || 'unknown';
-
-            let badgeClass = 'badge-info';
-            if (outcome === 'approve') badgeClass = 'badge-done';
-            if (outcome === 'reject') badgeClass = 'badge-reject';
-
+            const cls = outcome === 'approve' ? 'badge-done' : outcome === 'reject' ? 'badge-reject' : 'badge-info';
             const el = document.createElement('details');
             el.className = 'history-card';
             el.innerHTML = `
-        <summary>
-            <span>${uf.applicant_name || task.task_id}</span>
-            <span class="badge ${badgeClass}">${outcome.replace('_', ' ')}</span>
-        </summary>
-        <div class="history-body">
-            <span><b>Task ID:</b> ${task.task_id}</span>
-            <span><b>Farm:</b> ${uf.farm_location || '—'}</span>
-            <span><b>Crop:</b> ${uf.crop_type || '—'} → ${uf.export_destination || '—'}</span>
-            <span><b>Comments:</b> ${rf.reviewer_comments || '—'}</span>
-        </div>`;
+                <summary>
+                    <span>${uf.applicant_name || task.task_id}</span>
+                    <span class="badge ${cls}">${outcome.replace(/_/g, ' ')}</span>
+                </summary>
+                <div class="history-body">
+                    <span><b>Task ID:</b> ${task.task_id}</span>
+                    <span><b>Farm:</b> ${uf.farm_location || '—'}</span>
+                    <span><b>Crop:</b> ${uf.crop_type || '—'} → ${uf.export_destination || '—'}</span>
+                    <span><b>Comments:</b> ${rf.reviewer_comments || '—'}</span>
+                </div>`;
             return el;
         }
 
-        // Auto-refresh every 4 seconds
-        //fetchTasks();
-        //setInterval(fetchTasks, 4000);
+        // ── Boot ──────────────────────────────────────────────────────────────────────
+        fetchTasks();
+        setInterval(fetchTasks, 4000);
     </script>
 </body>
 

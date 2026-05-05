@@ -1,0 +1,75 @@
+{
+  "schema": {
+    "type": "object",
+    "properties": {
+      "userform": {
+        "type": "object",
+        "properties": {
+          "applicant_name":     { "type": "string", "title": "Applicant Name" },
+          "farm_location":      { "type": "string", "title": "Farm Address" },
+          "crop_type":          { "type": "string", "title": "Commodity" },
+          "export_destination": { "type": "string", "title": "Destination" }
+        }
+      },
+      "reviewerform": {
+        "type": "object",
+        "properties": {
+          "review_outcome": {
+            "type": "string",
+            "title": "Review Decision",
+            "enum": ["approve", "reject", "needs_more_info"]
+          },
+          "reviewer_comments": {
+            "type": "string",
+            "title": "Comments / Justification"
+          }
+        },
+        "required": ["review_outcome"]
+      }
+    }
+  },
+  "uischema": {
+    "type": "VerticalLayout",
+    "elements": [
+      {
+        "type": "Group",
+        "label": "Submitted Application Data (Read Only)",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/userform/properties/applicant_name",
+            "options": { "readonly": true }
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/userform/properties/farm_location",
+            "options": { "readonly": true }
+          },
+          {
+            "type": "HorizontalLayout",
+            "elements": [
+              { "type": "Control", "scope": "#/properties/userform/properties/crop_type",          "options": { "readonly": true } },
+              { "type": "Control", "scope": "#/properties/userform/properties/export_destination",  "options": { "readonly": true } }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "Group",
+        "label": "Official Review",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/reviewerform/properties/review_outcome",
+            "options": { "format": "radio" }
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/reviewerform/properties/reviewer_comments",
+            "options": { "multi": true, "placeholder": "Provide feedback if 'Needs More Info' or 'Reject' is selected..." }
+          }
+        ]
+      }
+    ]
+  }
+}

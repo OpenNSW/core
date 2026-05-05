@@ -1,0 +1,50 @@
+{
+  "schema": {
+    "type": "object",
+    "properties": {
+      "userform": {
+        "type": "object",
+        "properties": {
+          "applicant_name": { "type": "string", "title": "Registered Applicant Name" },
+          "farm_location":  { "type": "string", "title": "Farm Address / Location" },
+          "crop_type":      { "type": "string", "title": "Commodity / Crop Type" },
+          "export_destination": { "type": "string", "title": "Destination Country" }
+        },
+        "required": ["farm_location", "crop_type", "export_destination"]
+      }
+    }
+  },
+  "uischema": {
+    "type": "VerticalLayout",
+    "elements": [
+      {
+        "type": "Group",
+        "label": "Applicant Details",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/userform/properties/applicant_name",
+            "options": { "readonly": true, "detail": "Auto-populated from your profile." }
+          }
+        ]
+      },
+      {
+        "type": "Group",
+        "label": "Consignment Details",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/userform/properties/farm_location"
+          },
+          {
+            "type": "HorizontalLayout",
+            "elements": [
+              { "type": "Control", "scope": "#/properties/userform/properties/crop_type" },
+              { "type": "Control", "scope": "#/properties/userform/properties/export_destination" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
