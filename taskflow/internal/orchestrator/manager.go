@@ -117,6 +117,7 @@ func (tm *TaskManager) HandleTask(payload engine.TaskPayload) error {
 
 	case "generic_external_review":
 		record.Status = "QUEUED_EXTERNALLY"
+		// Call the external API to queue the application form request in the external system.
 		log.Printf("[TaskManager] Task %s dispatched to external reviewer at node %s", record.TaskID, payload.NodeID)
 
 	default:
