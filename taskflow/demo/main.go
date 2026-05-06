@@ -4,7 +4,7 @@
 //
 //	go run ./demo
 //
-// It wires together a two-layer Temporal orchestrator and serves the split-pane
+// It wires together the Temporal orchestrators and serves the split-pane
 // portal UI on http://localhost:8080.
 package main
 
@@ -38,83 +38,83 @@ func main() {
 		log.Fatalln("Failed to load task template registry:", err)
 	}
 
-	// 3. Set up Temporal Managers (layer1 and layer2) with deferred task manager wiring
+	// 3. Set up Temporal Managers (parent and task) with deferred task manager wiring
 	var tm *orchestrator.TaskManager
 
-	// --- Layer 1 handlers ---
-	layer1TaskHandler := func(payload engine.TaskPayload) error {
-		log.Printf("\n[Layer 1] Task activated: node=%s template=%s\n", payload.NodeID, payload.TaskTemplateID)
+	// --- Parent Workflow handlers ---
+	parentTaskHandler := func(payload engine.TaskPayload) error {
+		log.Printf("\n[Parent Workflow] Task activated: node=%s template=%s\n", payload.NodeID, payload.TaskTemplateID)
 		if tm != nil {
 			return tm.StartTask(payload)
 		}
 		return nil
 	}
 
-	layer1CompletionHandler := func(workflowID string, finalVariables map[string]any) error {
-		log.Printf("\n[Layer 1] Workflow %s completed. Final state: %v\n", workflowID, finalVariables)
+	parentCompletionHandler := func(workflowID string, finalVariables map[string]any) error {
+		log.Printf("\n[Parent Workflow] Completed. Final state: %v\n", finalVariables)
 		return nil
 	}
 
-	layer1Manager := engine.NewTemporalManager(
+	parentWorkflowManager := engine.NewTemporalManager(
 		c,
-		"nsw-layer1-queue",
-		layer1TaskHandler,
-		layer1CompletionHandler,
+		"nsw-parent-workflow-queue",
+		parentTaskHandler,
+		parentCompletionHandler,
 	)
 
-	// --- Layer 2 handlers ---
-	layer2TaskHandler := func(payload engine.TaskPayload) error {
-		log.Printf("\n[Layer 2] Task activated: node=%s template=%s\n", payload.NodeID, payload.TaskTemplateID)
+	// --- Task Workflow handlers ---
+	taskHandler := func(payload engine.TaskPayload) error {
+		log.Printf("\n[Task Workflow] Step activated: node=%s template=%s\n", payload.NodeID, payload.TaskTemplateID)
 		if tm != nil {
 			return tm.StartSubTask(payload)
 		}
 		return nil
 	}
 
-	layer2CompletionHandler := func(workflowID string, finalVariables map[string]any) error {
-		log.Printf("\n[Layer 2] Workflow %s completed. Final state: %v\n", workflowID, finalVariables)
+	taskCompletionHandler := func(workflowID string, finalVariables map[string]any) error {
+		log.Printf("\n[Task Workflow] Completed. Final state: %v\n", finalVariables)
 		if tm != nil {
 			return tm.HandleTaskCompletion(workflowID, finalVariables)
 		}
 		return nil
 	}
 
-	layer2Manager := engine.NewTemporalManager(
+	taskWorkflowManager := engine.NewTemporalManager(
 		c,
-		"nsw-layer2-queue",
-		layer2TaskHandler,
-		layer2CompletionHandler,
+		"nsw-task-workflow-queue",
+		taskHandler,
+		taskCompletionHandler,
 	)
 
 	// 4. Wire everything together
-	onTaskCompleted := func(layer1WorkflowID string, layer1RunID string, layer1NodeID string, finalVariables map[string]any) error {
-		err := layer1Manager.TaskDone(context.Background(), layer1WorkflowID, layer1RunID, layer1NodeID, finalVariables)
+	onTaskCompleted := func(parentWorkflowID string, parentRunID string, parentNodeID string, finalVariables map[string]any) error {
+		err := parentWorkflowManager.TaskDone(context.Background(), parentWorkflowID, parentRunID, parentNodeID, finalVariables)
 		if err != nil {
-			log.Printf("[TaskManager] Failed to wake Layer 1 workflow %s: %v", layer1WorkflowID, err)
+			log.Printf("[TaskManager] Failed to wake parent workflow %s: %v", parentWorkflowID, err)
 			return err
 		}
-		log.Printf("[TaskManager] Woke Layer 1 workflow %s node %s", layer1WorkflowID, layer1NodeID)
+		log.Printf("[TaskManager] Woke parent workflow %s node %s", parentWorkflowID, parentNodeID)
 		return nil
 	}
 
-	tm = orchestrator.NewTaskManager(db, registry, layer2Manager, onTaskCompleted).
+	tm = orchestrator.NewTaskManager(db, registry, taskWorkflowManager, onTaskCompleted).
 		WithTaskDefPath("demo/task.json")
 
-	apiServer := newServer(tm, layer1Manager)
+	apiServer := newServer(tm, parentWorkflowManager)
 	apiServer.start(":8080")
 
 	// 5. Start workers
-	log.Println("Starting Layer 1 Temporal Worker...")
-	if err := layer1Manager.StartWorker(); err != nil {
-		log.Fatalln("Unable to start layer 1 worker:", err)
+	log.Println("Starting Parent Workflow Temporal Worker...")
+	if err := parentWorkflowManager.StartWorker(); err != nil {
+		log.Fatalln("Unable to start parent workflow worker:", err)
 	}
-	defer layer1Manager.StopWorker()
+	defer parentWorkflowManager.StopWorker()
 
-	log.Println("Starting Layer 2 Temporal Worker...")
-	if err := layer2Manager.StartWorker(); err != nil {
-		log.Fatalln("Unable to start layer 2 worker:", err)
+	log.Println("Starting Task Workflow Temporal Worker...")
+	if err := taskWorkflowManager.StartWorker(); err != nil {
+		log.Fatalln("Unable to start task workflow worker:", err)
 	}
-	defer layer2Manager.StopWorker()
+	defer taskWorkflowManager.StopWorker()
 
 	// Wait for interrupt
 	sigChan := make(chan os.Signal, 1)

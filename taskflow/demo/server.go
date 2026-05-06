@@ -15,12 +15,12 @@ import (
 )
 
 type server struct {
-	manager       *orchestrator.TaskManager
-	layer1Manager engine.TemporalManager
+	manager               *orchestrator.TaskManager
+	parentWorkflowManager engine.TemporalManager
 }
 
-func newServer(manager *orchestrator.TaskManager, layer1Manager engine.TemporalManager) *server {
-	return &server{manager: manager, layer1Manager: layer1Manager}
+func newServer(manager *orchestrator.TaskManager, parentWorkflowManager engine.TemporalManager) *server {
+	return &server{manager: manager, parentWorkflowManager: parentWorkflowManager}
 }
 
 func (s *server) start(addr string) {
@@ -72,16 +72,16 @@ func (s *server) handleStartWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workflowID := "nsw-phyto-" + time.Now().Format("150405")
-	log.Printf("[API] Starting Layer 1 workflow %s (applicant=%s)", workflowID, req.ApplicantName)
+	log.Printf("[API] Starting Parent workflow %s (applicant=%s)", workflowID, req.ApplicantName)
 
 	if req.ApplicantName == "" {
 		req.ApplicantName = "John Doe"
 	}
 	initialVars := map[string]any{"applicant_name": req.ApplicantName}
 
-	err = s.layer1Manager.StartWorkflow(context.Background(), workflowID, def, initialVars)
+	err = s.parentWorkflowManager.StartWorkflow(context.Background(), workflowID, def, initialVars)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to start workflow: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to start parent workflow: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -91,7 +91,7 @@ func (s *server) handleStartWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTaskInteraction is the unified endpoint: POST /api/task/{taskID}
-// It routes the payload to the correct Layer 2 activity using the stored ActiveActivityID.
+// It routes the payload to the correct active Task workflow activity using the stored ActiveActivityID.
 func (s *server) handleTaskInteraction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -123,7 +123,7 @@ func (s *server) handleTaskInteraction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[API] Failed to complete task step: %v", err)
-		http.Error(w, "failed to resume workflow", http.StatusInternalServerError)
+		http.Error(w, "failed to resume task workflow", http.StatusInternalServerError)
 		return
 	}
 
