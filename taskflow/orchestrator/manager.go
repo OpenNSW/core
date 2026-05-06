@@ -144,6 +144,14 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) error {
 		return fmt.Errorf("failed to parse %s: %v", tm.taskDefPath, err)
 	}
 
+	// Verify that there are no parallel execution paths, as TaskRecord only stores coordinates for a single active subtask.
+	for _, node := range def.Nodes {
+		if node.Type == engine.NodeTypeGateway &&
+			(node.GatewayType == engine.GatewayTypeParallelSplit || node.GatewayType == "INCLUSIVE_SPLIT") {
+			return fmt.Errorf("parallel subtasks are not supported: task workflow %s contains parallel gateway %s (%s)", def.ID, node.ID, node.GatewayType)
+		}
+	}
+
 	err = tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, def, initialData)
 	if err != nil {
 		return fmt.Errorf("failed to start task workflow: %v", err)
