@@ -1,7 +1,5 @@
 {
   "template_id": "phyto_application_task",
   "task_type": "APPLICATION",
-  "workflow_id": "Phyto_Application_Flow_v1",
-  "user_jsonforms_id": "phyto_user_form_v1",
-  "reviewer_jsonforms_id": "phyto_reviewer_form_v1"
+  "workflow_id": "Phyto_Application_Flow_v1"
 }

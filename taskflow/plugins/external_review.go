@@ -66,7 +66,8 @@ func (p *ExternalReviewPlugin) Name() string {
 
 // ExternalReviewConfig holds properties decoded from the TaskTemplate's JSON configuration.
 type ExternalReviewConfig struct {
-	ExternalURL string `json:"external_url"`
+	ExternalURL         string `json:"external_url"`
+	ReviewerJsonFormsID string `json:"reviewer_jsonforms_id,omitempty"`
 }
 
 func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
@@ -79,6 +80,10 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 		return fmt.Errorf("missing 'external_url' in external review plugin config")
 	}
 
+	if cfg.ReviewerJsonFormsID != "" {
+		ctx.Record.ReviewerFormID = cfg.ReviewerJsonFormsID
+	}
+
 	ctx.Record.Status = "QUEUED_EXTERNALLY"
 	log.Printf("[Plugin: generic_external_review] Dispatching task %s to external URL: %s", ctx.Record.TaskID, cfg.ExternalURL)
 
@@ -87,6 +92,6 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 		return fmt.Errorf("external dispatch failed: %w", err)
 	}
 
-	log.Printf("[Plugin: generic_external_review] Successfully dispatched task %s (active step: %s)", ctx.Record.TaskID, ctx.Record.ActiveActivityID)
+	log.Printf("[Plugin: generic_external_review] Successfully dispatched task %s (active step: %s, form: %s)", ctx.Record.TaskID, ctx.Record.ActiveActivityID, ctx.Record.ReviewerFormID)
 	return nil
 }

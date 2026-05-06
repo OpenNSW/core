@@ -9,6 +9,7 @@ import (
 	"time"
 
 	engine "github.com/OpenNSW/go-temporal-workflow"
+	"github.com/OpenNSW/nsw-task-flow/plugins"
 	"github.com/OpenNSW/nsw-task-flow/store"
 	"github.com/google/uuid"
 )
@@ -64,6 +65,7 @@ type TaskCompletedCallback func(parentWorkflowID string, parentRunID string, par
 type TaskManager struct {
 	db                  store.TaskStore
 	registry            *TaskTemplateRegistry
+	pluginsRegistry     *plugins.Registry
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
 	taskDefPath         string
@@ -73,18 +75,21 @@ type TaskManager struct {
 //
 //   - db                  — the persistence/in-memory task store.
 //   - registry            — registry holding definitions of task capabilities.
+//   - pluginsRegistry     — registry containing task execution plugin handlers.
 //   - taskWorkflowManager — the TemporalManager used to start and complete Task sub-workflows.
 //   - onTaskCompleted     — callback invoked when a Task workflow finishes;
 //     typically invokes Parent.TaskDone to resume the parent workflow using stored coordinates.
 func NewTaskManager(
 	db store.TaskStore,
 	registry *TaskTemplateRegistry,
+	pluginsRegistry *plugins.Registry,
 	taskWorkflowManager engine.TemporalManager,
 	onTaskCompleted TaskCompletedCallback,
 ) *TaskManager {
 	return &TaskManager{
 		db:                  db,
 		registry:            registry,
+		pluginsRegistry:     pluginsRegistry,
 		onTaskCompleted:     onTaskCompleted,
 		taskWorkflowManager: taskWorkflowManager,
 		taskDefPath:         "task.json",
@@ -119,8 +124,6 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) error {
 	record := store.TaskRecord{
 		TaskID:           taskID,
 		TaskType:         regEntry.TaskType,
-		UserFormID:       regEntry.UserJsonFormsID,
-		ReviewerFormID:   regEntry.ReviewerJsonFormsID,
 		Status:           "STARTING",
 		ParentWorkflowID: payload.WorkflowID,
 		ParentRunID:      payload.RunID,
@@ -150,7 +153,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) error {
 }
 
 // StartSubTask is called by the Task's workflow engine when it activates an interaction step.
-// It routes to the correct capability handler based on task_template_id.
+// It routes to the correct capability handler dynamically from the plugin registry.
 func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) error {
 	record, exists := tm.db.GetTaskByWorkflowID(payload.WorkflowID)
 	if !exists {
@@ -164,18 +167,27 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) error {
 		setNestedKey(record.Data, k, v)
 	}
 
-	switch payload.TaskTemplateID {
-	case "generic_user_input":
-		record.Status = "PENDING_USER"
-		log.Printf("[TaskManager] Task %s waiting for user input at node %s", record.TaskID, payload.NodeID)
+	// 1. Look up the task template to find the associated plugin config
+	regEntry, ok := tm.registry.Get(payload.TaskTemplateID)
+	if !ok {
+		return fmt.Errorf("[StartSubTask] unknown task_template_id: %s", payload.TaskTemplateID)
+	}
 
-	case "generic_external_review":
-		record.Status = "QUEUED_EXTERNALLY"
-		// In a real implementation, dispatch external API requests here.
-		log.Printf("[TaskManager] Task %s dispatched to external reviewer at node %s", record.TaskID, payload.NodeID)
+	// 2. Fetch the plugin from our registry using both TaskType and PluginName
+	plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType, regEntry.PluginName)
+	if !ok {
+		return fmt.Errorf("[StartSubTask] unregistered plugin: %s for task type %s (required for template: %s)", regEntry.PluginName, regEntry.TaskType, payload.TaskTemplateID)
+	}
 
-	default:
-		return fmt.Errorf("unknown task_template_id inside Task workflow: %s", payload.TaskTemplateID)
+	// 3. Execute the plugin
+	pluginCtx := plugins.PluginContext{
+		Context: context.Background(),
+		Record:  &record,
+		Inputs:  payload.Inputs,
+	}
+
+	if err := plugin.Execute(pluginCtx, regEntry.PluginProperties); err != nil {
+		return fmt.Errorf("[StartSubTask] plugin %q execution failed: %w", regEntry.PluginName, err)
 	}
 
 	tm.db.SaveTask(record)
@@ -262,6 +274,11 @@ func (tm *TaskManager) GetDB() store.TaskStore {
 // GetTaskWorkflowManager returns the Task's TemporalManager.
 func (tm *TaskManager) GetTaskWorkflowManager() engine.TemporalManager {
 	return tm.taskWorkflowManager
+}
+
+// GetPluginsRegistry returns the task execution plugins registry.
+func (tm *TaskManager) GetPluginsRegistry() *plugins.Registry {
+	return tm.pluginsRegistry
 }
 
 // setNestedKey sets a value in a map using a dot-separated path.

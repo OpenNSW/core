@@ -27,7 +27,7 @@ type TaskPlugin interface {
 	Execute(ctx PluginContext, config json.RawMessage) error
 }
 
-// Registry is a thread-safe registry of task plugins.
+// Registry is a thread-safe registry of task plugins keyed by taskType and pluginName.
 type Registry struct {
 	mu      sync.RWMutex
 	plugins map[string]TaskPlugin
@@ -40,25 +40,26 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register adds a new plugin to the registry. It returns an error if a plugin with the same name already exists.
-func (r *Registry) Register(p TaskPlugin) error {
+// Register adds a new plugin for a specific taskType. It returns an error if a plugin with the same name already exists for that taskType.
+func (r *Registry) Register(taskType string, p TaskPlugin) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	name := p.Name()
-	if _, exists := r.plugins[name]; exists {
-		return fmt.Errorf("plugin with name %q is already registered", name)
+	key := fmt.Sprintf("%s/%s", taskType, p.Name())
+	if _, exists := r.plugins[key]; exists {
+		return fmt.Errorf("plugin with name %q is already registered for task type %q", p.Name(), taskType)
 	}
 
-	r.plugins[name] = p
+	r.plugins[key] = p
 	return nil
 }
 
-// Get retrieves a registered plugin by name.
-func (r *Registry) Get(name string) (TaskPlugin, bool) {
+// Get retrieves a registered plugin by taskType and pluginName.
+func (r *Registry) Get(taskType string, name string) (TaskPlugin, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	p, exists := r.plugins[name]
+	key := fmt.Sprintf("%s/%s", taskType, name)
+	p, exists := r.plugins[key]
 	return p, exists
 }

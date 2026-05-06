@@ -1,0 +1,8 @@
+{
+  "template_id": "generic_user_input",
+  "task_type": "APPLICATION",
+  "plugin_name": "generic_user_input",
+  "plugin_properties": {
+    "user_jsonforms_id": "phyto_user_form_v1"
+  }
+}

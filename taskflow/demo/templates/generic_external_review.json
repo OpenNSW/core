@@ -1,0 +1,9 @@
+{
+  "template_id": "generic_external_review",
+  "task_type": "APPLICATION",
+  "plugin_name": "generic_external_review",
+  "plugin_properties": {
+    "reviewer_jsonforms_id": "phyto_reviewer_form_v1",
+    "external_url": "http://localhost:3000/api/review"
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	engine "github.com/OpenNSW/go-temporal-workflow"
+	"github.com/OpenNSW/nsw-task-flow/plugins"
 	"github.com/OpenNSW/nsw-task-flow/store"
 )
 
@@ -49,7 +50,7 @@ func (m *mockTemporalManager) StopWorker() {
 	}
 }
 
-func (m *mockTemporalManager) TaskUpdate(ctx context.Context, workflowID, runID string, update engine.UpdateEvent) error {
+func (m *mockTemporalManager) TaskUpdate(ctx context.Context, workflowID string, runID string, event engine.UpdateEvent) error {
 	return nil
 }
 
@@ -57,36 +58,36 @@ func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) 
 	return nil, nil
 }
 
-// safeMockTaskStore is a thread-safe task store for use in all tests.
-// Using a mutex means tests run with -race won't flag the map accesses.
 type safeMockTaskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]store.TaskRecord
 }
 
 func newSafeMockTaskStore() *safeMockTaskStore {
-	return &safeMockTaskStore{tasks: make(map[string]store.TaskRecord)}
+	return &safeMockTaskStore{
+		tasks: make(map[string]store.TaskRecord),
+	}
 }
 
-func (s *safeMockTaskStore) SaveTask(record store.TaskRecord) {
+func (s *safeMockTaskStore) SaveTask(task store.TaskRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tasks[record.TaskID] = record
+	s.tasks[task.TaskID] = task
 }
 
 func (s *safeMockTaskStore) GetTask(taskID string) (store.TaskRecord, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.tasks[taskID]
-	return r, ok
+	task, exists := s.tasks[taskID]
+	return task, exists
 }
 
 func (s *safeMockTaskStore) GetTaskByWorkflowID(workflowID string) (store.TaskRecord, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, r := range s.tasks {
-		if r.TaskWorkflowID == workflowID {
-			return r, true
+	for _, t := range s.tasks {
+		if t.TaskWorkflowID == workflowID {
+			return t, true
 		}
 	}
 	return store.TaskRecord{}, false
@@ -95,7 +96,7 @@ func (s *safeMockTaskStore) GetTaskByWorkflowID(workflowID string) (store.TaskRe
 func (s *safeMockTaskStore) GetAllTasks() []store.TaskRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []store.TaskRecord
+	out := make([]store.TaskRecord, 0, len(s.tasks))
 	for _, r := range s.tasks {
 		out = append(out, r)
 	}
@@ -106,15 +107,46 @@ func (s *safeMockTaskStore) GetAllTasks() []store.TaskRecord {
 // Helpers
 // ---------------------------------------------------------------------------
 
+func newTestPluginsRegistry() *plugins.Registry {
+	pr := plugins.NewRegistry()
+	pr.Register("TEST", plugins.NewUserInputPlugin())
+
+	// Use an offline-friendly mock HTTP dispatcher for unit tests to avoid real HTTP requests
+	mockDispatcher := func(ctx context.Context, url string, taskID string, payload map[string]any) error {
+		return nil
+	}
+	pr.Register("TEST", plugins.NewExternalReviewPlugin(mockDispatcher))
+	return pr
+}
+
 func newTestRegistry() *TaskTemplateRegistry {
 	r := NewTaskTemplateRegistry()
 	r.Register(TaskTemplateEntry{
-		TemplateID:      "test_template",
-		TaskType:        "TEST",
-		WorkflowID:      "test_workflow_v1",
-		UserJsonFormsID: "user_form",
+		TemplateID:       "test_template",
+		TaskType:         "TEST",
+		WorkflowID:       "test_workflow_v1",
+		PluginName:       "generic_user_input",
+		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
+	})
+	r.Register(TaskTemplateEntry{
+		TemplateID:       "generic_user_input",
+		TaskType:         "TEST",
+		WorkflowID:       "test_workflow_v1",
+		PluginName:       "generic_user_input",
+		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
+	})
+	r.Register(TaskTemplateEntry{
+		TemplateID:       "generic_external_review",
+		TaskType:         "TEST",
+		WorkflowID:       "test_workflow_v1",
+		PluginName:       "generic_external_review",
+		PluginProperties: []byte(`{"reviewer_jsonforms_id": "reviewer_form", "external_url": "http://localhost/review"}`),
 	})
 	return r
+}
+
+func newTestTaskManager(db store.TaskStore, registry *TaskTemplateRegistry, tm engine.TemporalManager, cb TaskCompletedCallback) *TaskManager {
+	return NewTaskManager(db, registry, newTestPluginsRegistry(), tm, cb)
 }
 
 func writeTempTaskJSON(t *testing.T, content string) (path string, cleanup func()) {
@@ -160,7 +192,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	path, cleanup := writeTempTaskJSON(t, `{"id": "test_workflow_v1", "nodes": []}`)
 	defer cleanup()
 
-	tm := NewTaskManager(storeMock, registry, mockTaskWFManager, onCompleted).WithTaskDefPath(path)
+	tm := newTestTaskManager(storeMock, registry, mockTaskWFManager, onCompleted).WithTaskDefPath(path)
 
 	// 1. StartTask
 	payload := engine.TaskPayload{
@@ -264,7 +296,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStartTask_UnknownTemplateID(t *testing.T) {
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.StartTask(engine.TaskPayload{
 		WorkflowID:     "parent-wf",
@@ -276,7 +308,7 @@ func TestStartTask_UnknownTemplateID(t *testing.T) {
 }
 
 func TestStartTask_MissingTaskDefFile(t *testing.T) {
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback).
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback).
 		WithTaskDefPath("/tmp/this_file_does_not_exist_xyz.json")
 
 	err := tm.StartTask(engine.TaskPayload{
@@ -292,7 +324,7 @@ func TestStartTask_MalformedTaskDefFile(t *testing.T) {
 	path, cleanup := writeTempTaskJSON(t, `{not valid json`)
 	defer cleanup()
 
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback).
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback).
 		WithTaskDefPath(path)
 
 	err := tm.StartTask(engine.TaskPayload{
@@ -314,7 +346,7 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	path, cleanup := writeTempTaskJSON(t, `{"id":"wf","nodes":[]}`)
 	defer cleanup()
 
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), mockTaskWF, noopCallback).
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), mockTaskWF, noopCallback).
 		WithTaskDefPath(path)
 
 	err := tm.StartTask(engine.TaskPayload{
@@ -331,7 +363,7 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStartSubTask_UnknownWorkflowID(t *testing.T) {
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.StartSubTask(engine.TaskPayload{
 		WorkflowID:     "workflow-that-was-never-registered",
@@ -351,7 +383,7 @@ func TestStartSubTask_UnknownTaskTemplateID(t *testing.T) {
 		Data:           map[string]any{},
 	})
 
-	tm := NewTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.StartSubTask(engine.TaskPayload{
 		WorkflowID:     "task-workflow-1",
@@ -371,7 +403,7 @@ func TestStartSubTask_ExternalReviewPath(t *testing.T) {
 		Data:           map[string]any{},
 	})
 
-	tm := NewTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.StartSubTask(engine.TaskPayload{
 		WorkflowID:     "task-ext-workflow",
@@ -394,7 +426,7 @@ func TestStartSubTask_ExternalReviewPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCompleteTaskStep_UnknownTaskID(t *testing.T) {
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.CompleteTaskStep(context.Background(), "task-ghost", map[string]any{"x": 1})
 	if err == nil {
@@ -410,7 +442,7 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 		Data:   map[string]any{},
 	})
 
-	tm := NewTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.CompleteTaskStep(context.Background(), "task-done", map[string]any{"x": 1})
 	if err == nil {
@@ -423,7 +455,7 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleTaskCompletion_UnknownWorkflowID_ReturnsNil(t *testing.T) {
-	tm := NewTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	err := tm.HandleTaskCompletion("unknown-workflow", map[string]any{"k": "v"})
 	if err != nil {
@@ -441,7 +473,7 @@ func TestHandleTaskCompletion_CallbackError_TaskStillMarkedCompleted(t *testing.
 	})
 
 	callbackErr := errors.New("parent unreachable")
-	tm := NewTaskManager(db, newTestRegistry(), &mockTemporalManager{},
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{},
 		func(_, _, _ string, _ map[string]any) error { return callbackErr },
 	)
 

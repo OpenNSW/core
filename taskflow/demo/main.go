@@ -17,6 +17,7 @@ import (
 
 	engine "github.com/OpenNSW/go-temporal-workflow"
 	"github.com/OpenNSW/nsw-task-flow/orchestrator"
+	"github.com/OpenNSW/nsw-task-flow/plugins"
 	"go.temporal.io/sdk/client"
 )
 
@@ -38,7 +39,30 @@ func main() {
 		log.Fatalln("Failed to load task template registry:", err)
 	}
 
-	// 3. Set up Temporal Managers (parent and task) with deferred task manager wiring
+	// 3. Set up Task Plugins Registry
+	pluginsRegistry := plugins.NewRegistry()
+	if err := pluginsRegistry.Register("APPLICATION", plugins.NewUserInputPlugin()); err != nil {
+		log.Fatalln("Failed to register user input plugin:", err)
+	}
+
+	// Resilient demo HTTP dispatcher: attempts a real HTTP POST request to the external URL,
+	// but gracefully falls back to successful local mock behavior if the external service is offline.
+	demoDispatcher := func(ctx context.Context, url string, taskID string, payload map[string]any) error {
+		log.Printf("[Demo HTTP Dispatcher] Attempting real dispatch to: %s", url)
+		err := plugins.DefaultHTTPDispatcher(ctx, url, taskID, payload)
+		if err != nil {
+			log.Printf("[Demo HTTP Dispatcher] WARNING: Real dispatch failed (%v). Falling back to local demo mock mode.", err)
+		} else {
+			log.Printf("[Demo HTTP Dispatcher] Real dispatch succeeded!")
+		}
+		return nil
+	}
+
+	if err := pluginsRegistry.Register("APPLICATION", plugins.NewExternalReviewPlugin(demoDispatcher)); err != nil {
+		log.Fatalln("Failed to register external review plugin:", err)
+	}
+
+	// 4. Set up Temporal Managers (parent and task) with deferred task manager wiring
 	var tm *orchestrator.TaskManager
 
 	// --- Parent Workflow handlers ---
@@ -86,7 +110,7 @@ func main() {
 		taskCompletionHandler,
 	)
 
-	// 4. Wire everything together
+	// 5. Wire everything together
 	onTaskCompleted := func(parentWorkflowID string, parentRunID string, parentNodeID string, finalVariables map[string]any) error {
 		err := parentWorkflowManager.TaskDone(context.Background(), parentWorkflowID, parentRunID, parentNodeID, finalVariables)
 		if err != nil {
@@ -97,13 +121,13 @@ func main() {
 		return nil
 	}
 
-	tm = orchestrator.NewTaskManager(db, registry, taskWorkflowManager, onTaskCompleted).
+	tm = orchestrator.NewTaskManager(db, registry, pluginsRegistry, taskWorkflowManager, onTaskCompleted).
 		WithTaskDefPath("demo/task.json")
 
 	apiServer := newServer(tm, parentWorkflowManager)
 	apiServer.start(":8080")
 
-	// 5. Start workers
+	// 6. Start workers
 	log.Println("Starting Parent Workflow Temporal Worker...")
 	if err := parentWorkflowManager.StartWorker(); err != nil {
 		log.Fatalln("Unable to start parent workflow worker:", err)

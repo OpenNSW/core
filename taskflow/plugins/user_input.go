@@ -16,9 +16,10 @@ func (p *UserInputPlugin) Name() string {
 	return "generic_user_input"
 }
 
-// UserInputConfig can be expanded if we need custom properties per form step
+// UserInputConfig holds properties specific to the user input step
 type UserInputConfig struct {
-	StatusOverride string `json:"status_override,omitempty"`
+	StatusOverride  string `json:"status_override,omitempty"`
+	UserJsonFormsID string `json:"user_jsonforms_id,omitempty"`
 }
 
 func (p *UserInputPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
@@ -26,12 +27,17 @@ func (p *UserInputPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) 
 
 	if len(configRaw) > 0 && string(configRaw) != "null" {
 		var cfg UserInputConfig
-		if err := json.Unmarshal(configRaw, &cfg); err == nil && cfg.StatusOverride != "" {
-			status = cfg.StatusOverride
+		if err := json.Unmarshal(configRaw, &cfg); err == nil {
+			if cfg.StatusOverride != "" {
+				status = cfg.StatusOverride
+			}
+			if cfg.UserJsonFormsID != "" {
+				ctx.Record.UserFormID = cfg.UserJsonFormsID
+			}
 		}
 	}
 
 	ctx.Record.Status = status
-	log.Printf("[Plugin: generic_user_input] Task %s waiting for user interaction at node %s", ctx.Record.TaskID, ctx.Record.ActiveActivityID)
+	log.Printf("[Plugin: generic_user_input] Task %s waiting for user interaction (form: %s) at node %s", ctx.Record.TaskID, ctx.Record.UserFormID, ctx.Record.ActiveActivityID)
 	return nil
 }
