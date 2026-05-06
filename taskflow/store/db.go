@@ -4,7 +4,7 @@ import "time"
 
 // TaskRecord is the single DB entry per task instance, as described in the architecture doc.
 // It stores both Parent (macro journey) and Task (active sub-process) coordinates separately,
-// and holds Data as a namespaced map mirroring the JSONForms structure.
+// and holds dynamic task execution data as a generic key-value map.
 type TaskRecord struct {
 	TaskID         string `json:"task_id"`
 	TaskType       string `json:"task_type"`
@@ -23,7 +23,7 @@ type TaskRecord struct {
 	TaskRunID        string `json:"task_run_id"`
 	ActiveActivityID string `json:"active_activity_id"`
 
-	// Data mirrors the namespaced JSONForms structure: {"userform": {...}, "reviewerform": {...}}
+	// Data holds generic, dynamic task execution state variables.
 	Data map[string]any `json:"data"`
 
 	CreatedAt time.Time `json:"created_at"`
