@@ -208,14 +208,27 @@ func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[st
 	}
 
 	for globalKey, localKey := range inputMapping {
-		val, exists := g.instance.WorkflowVariables[globalKey]
+		val, exists := getNestedKey(g.instance.WorkflowVariables, globalKey)
 		if !exists {
 			return nil, fmt.Errorf("input mapping error: required global variable '%s' not found in workflow variables for task node", globalKey)
 		}
-		inputs[localKey] = val
+		setNestedKey(inputs, localKey, val)
 	}
 
 	return inputs, nil
+}
+
+func (g *graphInterpreter) mapTaskOutputs(outputMapping map[string]string, result map[string]any) {
+	if len(outputMapping) == 0 || result == nil {
+		return nil
+	}
+
+	for taskKey, globalKey := range outputMapping {
+		val, exists := getNestedKey(result, taskKey)
+		if exists {	
+			setNestedKey(g.instance.WorkflowVariables, globalKey, val)
+		}
+	}
 }
 
 func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
@@ -235,13 +248,15 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		return err
 	}
 
-	if len(node.OutputMapping) > 0 && result != nil {
-		for taskKey, globalKey := range node.OutputMapping {
-			if val, exists := result[taskKey]; exists {
-				g.instance.WorkflowVariables[globalKey] = val
-			}
-		}
-	}
+	g.mapTaskOutputs(node.OutputMapping, result); err != nil {
+	
+	// if len(node.OutputMapping) > 0 && result != nil {
+	// 	for taskKey, globalKey := range node.OutputMapping {
+	// 		if val, exists := result[taskKey]; exists {
+	// 			g.instance.WorkflowVariables[globalKey] = val
+	// 		}
+	// 	}
+	// }
 
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
