@@ -1,0 +1,357 @@
+{
+    "id": "npqs-export-phytosanitary-reg",
+    "name": "NPQS Export Consignment & Phytosanitary Registration",
+    "version": 2,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "n1_apply",
+            "type": "TASK",
+            "task_template_id": "npqs-apply-phyto-cert-flow",
+            "input_mapping": {},
+            "output_mapping": {
+                "reviewerform.reference_number": "npqs.reference_number",
+                "reviewerform.sample_required": "npqs.sample_required",
+                "reviewerform.fumigation_required": "npqs.fumigation_required",
+                "reviewerform.review_outcome": "npqs.application_review_outcome"
+            }
+        },
+        {
+            "id": "n1_apply_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "sample_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "n2_sample_wait",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-sample-received-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {}
+        },
+        {
+            "id": "n2_lab_wait",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-lab-result-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "lab_result": "npqs.lab_result"
+            }
+        },
+        {
+            "id": "lab_result_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "fumigation_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "n3_fumigation_wait",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-fumigation-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {}
+        },
+        {
+            "id": "join_pre_visual",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_JOIN"
+        },
+        {
+            "id": "n4_visual_decision_wait",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-visual-decision-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "visual_inspection_required": "npqs.visual_inspection_required"
+            }
+        },
+        {
+            "id": "visual_req_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "n5_visual_insp_wait",
+            "type": "TASK",
+            "task_template_id": "npqs-visual-inspection-result-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "visual_result": "npqs.visual_result"
+            }
+        },
+        {
+            "id": "visual_result_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "join_post_visual",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_JOIN"
+        },
+        {
+            "id": "n6_docs_apply",
+            "type": "TASK",
+            "task_template_id": "npqs-submit-shipping-docs-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "doc_review_result": "npqs.doc_review_result"
+            }
+        },
+        {
+            "id": "doc_review_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "n7_payment",
+            "type": "TASK",
+            "task_template_id": "npqs-pay-certificate-fee-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "payment_status": "npqs.payment_status",
+                "payment_reference_number": "npqs.payment_reference_number"
+            }
+        },
+        {
+            "id": "payment_split",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "n8_issue_certificate",
+            "type": "TASK",
+            "task_template_id": "npqs-issue-certificate-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "certificate_id": "npqs.certificate_id",
+                "certificate_url": "npqs.certificate_url"
+            }
+        },
+        {
+            "id": "n9_ippc_upload",
+            "type": "TASK",
+            "task_template_id": "npqs-upload-ippc-flow",
+            "input_mapping": {
+                "npqs.reference_number": "reference_number",
+                "npqs.certificate_id": "certificate_id",
+                "npqs.certificate_url": "certificate_url"
+            },
+            "output_mapping": {}
+        },
+        {
+            "id": "end_success",
+            "type": "END"
+        },
+        {
+            "id": "end_rejected",
+            "type": "END"
+        },
+        {
+            "id": "end_lab_failed",
+            "type": "END"
+        },
+        {
+            "id": "end_visual_failed",
+            "type": "END"
+        },
+        {
+            "id": "end_docs_failed",
+            "type": "END"
+        },
+        {
+            "id": "end_payment_failed",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e_start",
+            "source_id": "start",
+            "target_id": "n1_apply"
+        },
+        {
+            "id": "e_apply_gateway",
+            "source_id": "n1_apply",
+            "target_id": "n1_apply_split"
+        },
+        {
+            "id": "e_apply_rejected",
+            "source_id": "n1_apply_split",
+            "target_id": "end_rejected",
+            "condition": "npqs.application_review_outcome == 'reject'"
+        },
+        {
+            "id": "e_apply_approved",
+            "source_id": "n1_apply_split",
+            "target_id": "sample_split",
+            "condition": "npqs.application_review_outcome == 'approve'"
+        },
+        {
+            "id": "e_sample_yes",
+            "source_id": "sample_split",
+            "target_id": "n2_sample_wait",
+            "condition": "npqs.sample_required == true"
+        },
+        {
+            "id": "e_sample_no",
+            "source_id": "sample_split",
+            "target_id": "join_pre_visual",
+            "condition": "npqs.sample_required == false"
+        },
+        {
+            "id": "e_sample_to_lab",
+            "source_id": "n2_sample_wait",
+            "target_id": "n2_lab_wait"
+        },
+        {
+            "id": "e_lab_result",
+            "source_id": "n2_lab_wait",
+            "target_id": "lab_result_split"
+        },
+        {
+            "id": "e_lab_fail",
+            "source_id": "lab_result_split",
+            "target_id": "end_lab_failed",
+            "condition": "npqs.lab_result == 'fail'"
+        },
+        {
+            "id": "e_lab_pass",
+            "source_id": "lab_result_split",
+            "target_id": "fumigation_split",
+            "condition": "npqs.lab_result == 'pass'"
+        },
+        {
+            "id": "e_fum_yes",
+            "source_id": "fumigation_split",
+            "target_id": "n3_fumigation_wait",
+            "condition": "npqs.fumigation_required == true"
+        },
+        {
+            "id": "e_fum_no",
+            "source_id": "fumigation_split",
+            "target_id": "join_pre_visual",
+            "condition": "npqs.fumigation_required == false"
+        },
+        {
+            "id": "e_fum_to_visual",
+            "source_id": "n3_fumigation_wait",
+            "target_id": "join_pre_visual"
+        },
+        {
+            "id": "e_join_to_visual_decision",
+            "source_id": "join_pre_visual",
+            "target_id": "n4_visual_decision_wait"
+        },
+        {
+            "id": "e_visual_decision",
+            "source_id": "n4_visual_decision_wait",
+            "target_id": "visual_req_split"
+        },
+        {
+            "id": "e_visual_yes",
+            "source_id": "visual_req_split",
+            "target_id": "n5_visual_insp_wait",
+            "condition": "npqs.visual_inspection_required == true"
+        },
+        {
+            "id": "e_visual_no",
+            "source_id": "visual_req_split",
+            "target_id": "join_post_visual",
+            "condition": "npqs.visual_inspection_required == false"
+        },
+        {
+            "id": "e_visual_result",
+            "source_id": "n5_visual_insp_wait",
+            "target_id": "visual_result_split"
+        },
+        {
+            "id": "e_visual_fail",
+            "source_id": "visual_result_split",
+            "target_id": "end_visual_failed",
+            "condition": "npqs.visual_result == 'fail'"
+        },
+        {
+            "id": "e_visual_pass",
+            "source_id": "visual_result_split",
+            "target_id": "join_post_visual",
+            "condition": "npqs.visual_result == 'pass'"
+        },
+        {
+            "id": "e_join_to_docs",
+            "source_id": "join_post_visual",
+            "target_id": "n6_docs_apply"
+        },
+        {
+            "id": "e_docs_result",
+            "source_id": "n6_docs_apply",
+            "target_id": "doc_review_split"
+        },
+        {
+            "id": "e_docs_fail",
+            "source_id": "doc_review_split",
+            "target_id": "end_docs_failed",
+            "condition": "npqs.doc_review_result == 'reject'"
+        },
+        {
+            "id": "e_docs_pass",
+            "source_id": "doc_review_split",
+            "target_id": "n7_payment",
+            "condition": "npqs.doc_review_result == 'approve'"
+        },
+        {
+            "id": "e_payment_result",
+            "source_id": "n7_payment",
+            "target_id": "payment_split"
+        },
+        {
+            "id": "e_payment_fail",
+            "source_id": "payment_split",
+            "target_id": "end_payment_failed",
+            "condition": "npqs.payment_status == 'fail'"
+        },
+        {
+            "id": "e_payment_pass",
+            "source_id": "payment_split",
+            "target_id": "n8_issue_certificate",
+            "condition": "npqs.payment_status == 'success'"
+        },
+        {
+            "id": "e_issue_to_ippc",
+            "source_id": "n8_issue_certificate",
+            "target_id": "n9_ippc_upload"
+        },
+        {
+            "id": "e_ippc_to_end",
+            "source_id": "n9_ippc_upload",
+            "target_id": "end_success"
+        }
+    ]
+}

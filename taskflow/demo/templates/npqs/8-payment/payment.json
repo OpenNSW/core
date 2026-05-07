@@ -1,0 +1,8 @@
+{
+    "template_id": "npqs-pay-certificate-fee--payment",
+    "task_type": "PAYMENT",
+    "plugin_name": "generic_payment",
+    "plugin_properties": {
+        "payment_service_url": "http://npqs-payment/api/pay"
+    }
+}

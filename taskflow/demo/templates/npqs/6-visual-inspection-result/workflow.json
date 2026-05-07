@@ -1,0 +1,38 @@
+{
+    "id": "npqs-visual-inspection-result-flow",
+    "name": "Visual Inspection Result",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "wait_visual_insp",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-visual-result--wait",
+            "input_mapping": {
+                "reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "visual_result": "visual_result"
+            }
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "wait_visual_insp"
+        },
+        {
+            "id": "e2",
+            "source_id": "wait_visual_insp",
+            "target_id": "end"
+        }
+    ]
+}

@@ -1,0 +1,39 @@
+{
+    "id": "npqs-issue-certificate-flow",
+    "name": "Issue Phyto Certificate",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "officer_input",
+            "type": "TASK",
+            "task_template_id": "npqs-issue-certificate--officer-input",
+            "input_mapping": {
+                "reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "certificate_id": "certificate_id",
+                "certificate_url": "certificate_url"
+            }
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "officer_input"
+        },
+        {
+            "id": "e2",
+            "source_id": "officer_input",
+            "target_id": "end"
+        }
+    ]
+}

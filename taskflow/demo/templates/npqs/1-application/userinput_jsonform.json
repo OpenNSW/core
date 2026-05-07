@@ -1,0 +1,130 @@
+{
+  "id": "npqs-apply-phyto-cert--user-form",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "exporter_name": {
+        "type": "string",
+        "title": "Exporter Name"
+      },
+      "exporter_address": {
+        "type": "string",
+        "title": "Exporter Address"
+      },
+      "consignee_name": {
+        "type": "string",
+        "title": "Consignee Name"
+      },
+      "consignee_country": {
+        "type": "string",
+        "title": "Country of Destination"
+      },
+      "commodity": {
+        "type": "string",
+        "title": "Commodity Description"
+      },
+      "hs_code": {
+        "type": "string",
+        "title": "HS Code"
+      },
+      "quantity": {
+        "type": "number",
+        "title": "Quantity"
+      },
+      "quantity_unit": {
+        "type": "string",
+        "title": "Unit of Measure",
+        "enum": [
+          "kg",
+          "mt",
+          "units",
+          "litres"
+        ]
+      },
+      "port_of_export": {
+        "type": "string",
+        "title": "Port of Export"
+      },
+      "intended_ship_date": {
+        "type": "string",
+        "format": "date",
+        "title": "Intended Shipment Date"
+      }
+    },
+    "required": [
+      "exporter_name",
+      "consignee_name",
+      "consignee_country",
+      "commodity",
+      "hs_code",
+      "quantity",
+      "quantity_unit"
+    ]
+  },
+  "uischema": {
+    "type": "VerticalLayout",
+    "elements": [
+      {
+        "type": "Group",
+        "label": "Exporter Details",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/exporter_name"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/exporter_address",
+            "options": {
+              "multi": true
+            }
+          }
+        ]
+      },
+      {
+        "type": "Group",
+        "label": "Consignee Details",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/consignee_name"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/consignee_country"
+          }
+        ]
+      },
+      {
+        "type": "Group",
+        "label": "Consignment Details",
+        "elements": [
+          {
+            "type": "Control",
+            "scope": "#/properties/commodity"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/hs_code"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/quantity"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/quantity_unit"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/port_of_export"
+          },
+          {
+            "type": "Control",
+            "scope": "#/properties/intended_ship_date"
+          }
+        ]
+      }
+    ]
+  }
+}

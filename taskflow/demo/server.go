@@ -56,23 +56,29 @@ func (s *server) handleStartWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		ApplicantName string `json:"applicant_name"`
+		WorkflowType  string `json:"workflow_type"` // "classic" or "npqs"
 	}
 	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
 
-	fileBytes, err := os.ReadFile("demo/templates/graphs/workflow_phyto_journey.json")
+	filePath := "demo/templates/graphs/workflow_phyto_journey.json"
+	if req.WorkflowType == "npqs" {
+		filePath = "demo/templates/npqs/npqs_workflow.json"
+	}
+
+	fileBytes, err := os.ReadFile(filePath)
 	if err != nil {
-		http.Error(w, "Failed to read demo/templates/graphs/workflow_phyto_journey.json", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to read %s", filePath), http.StatusInternalServerError)
 		return
 	}
 
 	var def engine.WorkflowDefinition
 	if err := json.Unmarshal(fileBytes, &def); err != nil {
-		http.Error(w, "Failed to parse demo/templates/graphs/workflow_phyto_journey.json", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to parse %s", filePath), http.StatusInternalServerError)
 		return
 	}
 
 	workflowID := "nsw-phyto-" + time.Now().Format("150405")
-	log.Printf("[API] Starting Parent workflow %s (applicant=%s)", workflowID, req.ApplicantName)
+	log.Printf("[API] Starting Parent workflow %s using %s (applicant=%s)", workflowID, filePath, req.ApplicantName)
 
 	if req.ApplicantName == "" {
 		req.ApplicantName = "John Doe"

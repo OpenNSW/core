@@ -1,0 +1,8 @@
+{
+    "template_id": "npqs-submit-shipping-docs--user-input",
+    "task_type": "APPLICATION",
+    "plugin_name": "generic_user_input",
+    "plugin_properties": {
+        "user_jsonforms_id": "npqs-submit-shipping-docs--user-form"
+    }
+}

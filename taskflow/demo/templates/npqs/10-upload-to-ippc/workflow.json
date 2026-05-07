@@ -1,0 +1,38 @@
+{
+    "id": "npqs-upload-ippc-flow",
+    "name": "Upload to IPPC Hub",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "ippc_post",
+            "type": "TASK",
+            "task_template_id": "npqs-upload-ippc--post",
+            "input_mapping": {
+                "reference_number": "reference_number",
+                "certificate_id": "certificate_id",
+                "certificate_url": "certificate_url"
+            },
+            "output_mapping": {}
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "ippc_post"
+        },
+        {
+            "id": "e2",
+            "source_id": "ippc_post",
+            "target_id": "end"
+        }
+    ]
+}

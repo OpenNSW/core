@@ -518,7 +518,15 @@
     <div class="launch-bar">
         <label for="applicantInput">Applicant Name</label>
         <input id="applicantInput" type="text" placeholder="e.g. Acme Farms Ltd." value="Acme Farms Ltd.">
-        <button class="btn btn-primary" onclick="startWorkflow()">🚀 Launch Phyto Permit Application</button>
+
+        <label for="workflowSelect">Workflow Blueprint</label>
+        <select id="workflowSelect"
+            style="max-width: 250px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; color: var(--text); font-family: inherit; font-size: 0.9rem; outline: none; transition: border-color 0.15s;">
+            <option value="classic">Standard Phyto Application (3-Step)</option>
+            <option value="npqs" selected>NPQS Phytosanitary Permit (10-Step)</option>
+        </select>
+
+        <button class="btn btn-primary" onclick="startWorkflow()">🚀 Launch Process Application</button>
     </div>
 
     <main>
@@ -528,7 +536,7 @@
                 <div class="col-title">
                     <div class="dot dot-blue"></div> User Portal
                 </div>
-                <span style="font-size:.75rem;color:var(--muted);">PENDING_USER</span>
+                <span style="font-size:.75rem;color:var(--muted);">APPLICANT ACTIONS</span>
             </div>
             <div class="col-body" id="userCol">
                 <div class="empty">
@@ -542,9 +550,9 @@
         <div class="portal-col">
             <div class="col-header">
                 <div class="col-title">
-                    <div class="dot dot-cyan"></div> Reviewer Portal
+                    <div class="dot dot-cyan"></div> Reviewer / External Portal
                 </div>
-                <span style="font-size:.75rem;color:var(--muted);">QUEUED_EXTERNALLY</span>
+                <span style="font-size:.75rem;color:var(--muted);">OFFICER & LAB ACTIONS</span>
             </div>
             <div class="col-body" id="reviewerCol">
                 <div class="empty">
@@ -558,7 +566,7 @@
         <div class="portal-col">
             <div class="col-header">
                 <div class="col-title">
-                    <div class="dot" style="background:var(--muted)"></div> Completed
+                    <div class="dot" style="background:var(--muted)"></div> Completed / Dispatched
                 </div>
             </div>
             <div class="col-body" id="historyCol">
@@ -585,10 +593,11 @@
         // ── API ──────────────────────────────────────────────────────────────────────
         async function startWorkflow() {
             const name = document.getElementById('applicantInput').value.trim() || 'Applicant';
+            const wfType = document.getElementById('workflowSelect').value;
             try {
                 const r = await fetch('/api/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ applicant_name: name })
+                    body: JSON.stringify({ applicant_name: name, workflow_type: wfType })
                 });
                 if (r.ok) { fetchTasks(); }
                 else { alert('Failed to start: ' + await r.text()); }
@@ -620,9 +629,9 @@
             const reviewerCol = document.getElementById('reviewerCol');
             const historyCol = document.getElementById('historyCol');
 
-            const pending = tasks.filter(t => t.status === 'PENDING_USER');
-            const queued = tasks.filter(t => t.status === 'QUEUED_EXTERNALLY');
-            const completed = tasks.filter(t => t.status === 'COMPLETED');
+            const pending = tasks.filter(t => t.status === 'PENDING_USER' || t.status === 'PENDING_PAYMENT');
+            const queued = tasks.filter(t => t.status === 'QUEUED_EXTERNALLY' || t.status === 'WAITING_FOR_EVENT');
+            const completed = tasks.filter(t => t.status === 'COMPLETED' || t.status === 'DISPATCHED');
 
             userCol.innerHTML = pending.length ? '' : '<div class="empty"><div class="empty-icon">📋</div><p>No active tasks</p></div>';
             reviewerCol.innerHTML = queued.length ? '' : '<div class="empty"><div class="empty-icon">🔍</div><p>No pending reviews</p></div>';
@@ -633,143 +642,571 @@
             completed.forEach(t => historyCol.appendChild(renderHistoryCard(t)));
         }
 
-        function getStr(data, ...keys) {
-            let obj = data || {};
-            for (const k of keys) {
-                if (obj == null) return '';
-                obj = obj[k];
-            }
-            return obj || '';
-        }
-
         function renderUserCard(task) {
             const d = task.data || {};
             const uf = d.userform || {};
             const rf = d.reviewerform || {};
             const tid = task.task_id;
 
-            // Show reviewer feedback if looping back
-            let feedbackHtml = '';
-            if (rf.reviewer_comments) {
-                feedbackHtml = `<div class="feedback-box">
-            <div class="fb-label">⚠ Reviewer Feedback</div>
-            <p>${rf.reviewer_comments}</p>
-        </div>`;
-            }
-
             const card = document.createElement('div');
             card.className = 'task-card';
+
+            if (task.status === 'PENDING_PAYMENT') {
+                card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">💳 Certificate Payment Checkout</div>
+                <div class="card-sub">${tid} · node: ${task.subtask_node_id || '—'}</div>
+            </div>
+            <span class="badge badge-info" style="color:var(--warning); border-color:var(--warning)">Pending Payment</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Consignment Fees Summary</div>
+            <div style="background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.75rem; font-size:0.85rem; display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.4rem;">
+                <div style="display:flex; justify-content:space-between;"><span>Quarantine Service Fee</span><b>$150.00</b></div>
+                <div style="display:flex; justify-content:space-between;"><span>Physical Inspection Charge</span><b>$50.00</b></div>
+                <div style="display:flex; justify-content:space-between;"><span>NSW Digital Clearance Processing</span><b>$25.00</b></div>
+                <div style="border-top:1px solid var(--border); padding-top:0.4rem; display:flex; justify-content:space-between; font-weight:700; color:var(--success)"><span>Total Payable</span><span>$225.00</span></div>
+            </div>
+            <div class="section-label">Payment Authorization</div>
+            <div class="field">
+                <label>Cardholder Name</label>
+                <input type="text" id="${tid}_pay_name" value="${uf.exporter_name || uf.applicant_name || 'Acme Farms Ltd.'}" placeholder="Cardholder Name">
+            </div>
+            <div class="field">
+                <label>Credit Card Number</label>
+                <input type="text" id="${tid}_pay_card" value="4111 2222 3333 4444" placeholder="4111 2222 3333 4444">
+            </div>
+            <div class="field-row">
+                <div class="field"><label>Expiry</label><input type="text" value="12/29" placeholder="MM/YY"></div>
+                <div class="field"><label>CVC</label><input type="text" value="321" placeholder="CVC"></div>
+            </div>
+            <button class="btn btn-success" style="color:#000; font-weight:700;" onclick="submitPayment('${tid}')">Authorize & Pay $225.00 →</button>
+        </div>`;
+                return card;
+            }
+
+            if (task.user_form_id === 'npqs-submit-shipping-docs--user-form') {
+                card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">📤 Submit Shipping Documents</div>
+                <div class="card-sub">${tid} · node: ${task.subtask_node_id || '—'}</div>
+            </div>
+            <span class="badge badge-pending">Required Docs</span>
+        </div>
+        <div class="card-body">
+            ${rf.reviewer_comments ? `<div class="feedback-box"><div class="fb-label">⚠ Feedback from Officer</div><p>${rf.reviewer_comments}</p></div>` : ''}
+            <div class="section-label">File Uploads</div>
+            
+            <div class="field">
+                <label>Bill of Lading (PDF, JPG)</label>
+                <input type="text" id="${tid}_doc_bl" value="bill_of_lading_signed.pdf" placeholder="Upload or name your file">
+            </div>
+            <div class="field">
+                <label>Packing List (PDF, XLSX)</label>
+                <input type="text" id="${tid}_doc_pl" value="packing_list_final.xlsx" placeholder="Upload or name your file">
+            </div>
+            <div class="field">
+                <label>Commercial Invoice (PDF)</label>
+                <input type="text" id="${tid}_doc_ci" value="invoice_acme_10294.pdf" placeholder="Upload or name your file">
+            </div>
+            <div class="field">
+                <label>Certificate of Origin (Optional)</label>
+                <input type="text" id="${tid}_doc_co" value="origin_co_approved.pdf" placeholder="Upload or name your file">
+            </div>
+            <button class="btn btn-primary" onclick="submitShippingDocs('${tid}')">Upload & Submit Documents →</button>
+        </div>`;
+                return card;
+            }
+
+            // Default Form Template
+            const isDetailed = task.user_form_id && task.user_form_id.includes("npqs");
+            const appLabel = isDetailed ? "NPQS Export Application" : "Phyto Sanitary Application";
+
             card.innerHTML = `
         <div class="card-top">
             <div>
-                <div class="card-title">Phyto Sanitary Application</div>
-                <div class="card-sub">${tid} · node: ${task.active_activity_id || '—'}</div>
+                <div class="card-title">${appLabel}</div>
+                <div class="card-sub">${tid} · node: ${task.subtask_node_id || '—'}</div>
             </div>
             <span class="badge badge-pending">Pending User</span>
         </div>
         <div class="card-body">
-            ${feedbackHtml}
-            <div class="section-label">Applicant Details</div>
+            ${rf.reviewer_comments ? `<div class="feedback-box"><div class="fb-label">⚠ Reviewer Feedback</div><p>${rf.reviewer_comments}</p></div>` : ''}
+            <div class="section-label">Exporter Details</div>
             <div class="field">
-                <label>Registered Applicant Name</label>
-                <input type="text" id="${tid}_appname" value="${uf.applicant_name || ''}" readonly title="Auto-populated from your profile">
-            </div>
-            <div class="section-label">Consignment Details</div>
-            <div class="field">
-                <label>Farm Address / Location</label>
+                <label>Exporter / Applicant Name</label>
                 <div class="input-wrap">
-                    <input type="text" id="${tid}_loc" value="${uf.farm_location || ''}" placeholder="e.g. 123 Farm Rd, Orange NSW">
-                    <button class="dice" onclick="fillEl('${tid}_loc','loc')" title="Random">🎲</button>
+                    <input type="text" id="${tid}_exp_name" value="${uf.exporter_name || uf.applicant_name || ''}">
+                    <button class="dice" onclick="fillEl('${tid}_exp_name','name')" title="Random">🎲</button>
+                </div>
+            </div>
+            <div class="field">
+                <label>Exporter Address</label>
+                <div class="input-wrap">
+                    <input type="text" id="${tid}_exp_addr" value="${uf.exporter_address || uf.farm_location || '123 Farm Rd, Orange NSW 2800'}">
+                    <button class="dice" onclick="fillEl('${tid}_exp_addr','loc')" title="Random">🎲</button>
+                </div>
+            </div>
+            
+            <div class="section-label">Consignment & Destination</div>
+            <div class="field-row">
+                <div class="field">
+                    <label>Consignee Name</label>
+                    <input type="text" id="${tid}_cons_name" value="${uf.consignee_name || 'Global Imports Inc.'}">
+                </div>
+                <div class="field">
+                    <label>Country of Destination</label>
+                    <div class="input-wrap">
+                        <input type="text" id="${tid}_cons_country" value="${uf.consignee_country || uf.export_destination || ''}">
+                        <button class="dice" onclick="fillEl('${tid}_cons_country','dest')" title="Random">🎲</button>
+                    </div>
                 </div>
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Commodity / Crop Type</label>
+                    <label>Commodity Description</label>
                     <div class="input-wrap">
-                        <input type="text" id="${tid}_crop" value="${uf.crop_type || ''}" placeholder="e.g. Apples">
-                        <button class="dice" onclick="fillEl('${tid}_crop','crop')" title="Random">🎲</button>
+                        <input type="text" id="${tid}_commodity" value="${uf.commodity || uf.crop_type || ''}">
+                        <button class="dice" onclick="fillEl('${tid}_commodity','crop')" title="Random">🎲</button>
                     </div>
                 </div>
                 <div class="field">
-                    <label>Destination Country</label>
-                    <div class="input-wrap">
-                        <input type="text" id="${tid}_dest" value="${uf.export_destination || ''}" placeholder="e.g. Japan">
-                        <button class="dice" onclick="fillEl('${tid}_dest','dest')" title="Random">🎲</button>
-                    </div>
+                    <label>HS Code</label>
+                    <input type="text" id="${tid}_hscode" value="${uf.hs_code || '0808.10.00'}">
                 </div>
             </div>
-            <button class="btn btn-primary" onclick="submitUserForm('${tid}')">Submit Application →</button>
+            <div class="field-row">
+                <div class="field">
+                    <label>Quantity</label>
+                    <input type="number" id="${tid}_qty" value="${uf.quantity || 1500}">
+                </div>
+                <div class="field">
+                    <label>Unit of Measure</label>
+                    <select id="${tid}_unit">
+                        <option value="kg" ${uf.quantity_unit === 'kg' ? 'selected' : ''}>kg</option>
+                        <option value="mt" ${uf.quantity_unit === 'mt' ? 'selected' : ''}>mt</option>
+                        <option value="units" ${uf.quantity_unit === 'units' ? 'selected' : ''}>units</option>
+                        <option value="litres" ${uf.quantity_unit === 'litres' ? 'selected' : ''}>litres</option>
+                    </select>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="submitPhytoApplication('${tid}')">Submit Application →</button>
         </div>`;
             return card;
         }
 
-        function submitUserForm(tid) {
-            const loc = document.getElementById(tid + '_loc')?.value?.trim();
-            const crop = document.getElementById(tid + '_crop')?.value?.trim();
-            const dest = document.getElementById(tid + '_dest')?.value?.trim();
-            if (!loc || !crop || !dest) { alert('Please fill in all required fields.'); return; }
-            const appName = document.getElementById(tid + '_appname')?.value?.trim();
+        function submitPayment(tid) {
             submitTask(tid, {
-                userform: { applicant_name: appName, farm_location: loc, crop_type: crop, export_destination: dest }
+                payment_status: 'success',
+                payment_reference_number: 'PAY-NPQS-' + Math.random().toString(36).substr(2, 9).toUpperCase()
+            });
+        }
+
+        function submitShippingDocs(tid) {
+            const bl = document.getElementById(tid + '_doc_bl').value.trim();
+            const pl = document.getElementById(tid + '_doc_pl').value.trim();
+            const ci = document.getElementById(tid + '_doc_ci').value.trim();
+            const co = document.getElementById(tid + '_doc_co').value.trim();
+            submitTask(tid, {
+                userform: {
+                    bill_of_lading: bl,
+                    packing_list: pl,
+                    commercial_invoice: ci,
+                    certificate_of_origin: co
+                }
+            });
+        }
+
+        function submitPhytoApplication(tid) {
+            const expName = document.getElementById(tid + '_exp_name').value.trim();
+            const expAddr = document.getElementById(tid + '_exp_addr').value.trim();
+            const consName = document.getElementById(tid + '_cons_name').value.trim();
+            const consCountry = document.getElementById(tid + '_cons_country').value.trim();
+            const commodity = document.getElementById(tid + '_commodity').value.trim();
+            const hscode = document.getElementById(tid + '_hscode').value.trim();
+            const qty = parseFloat(document.getElementById(tid + '_qty').value);
+            const unit = document.getElementById(tid + '_unit').value;
+
+            if (!expName || !expAddr || !consName || !consCountry || !commodity) {
+                alert("Please fill out all required fields.");
+                return;
+            }
+
+            submitTask(tid, {
+                userform: {
+                    exporter_name: expName,
+                    exporter_address: expAddr,
+                    consignee_name: consName,
+                    consignee_country: consCountry,
+                    commodity: commodity,
+                    hs_code: hscode,
+                    quantity: qty,
+                    quantity_unit: unit,
+                    // Compatibility mappings for classic flow:
+                    applicant_name: expName,
+                    farm_location: expAddr,
+                    crop_type: commodity,
+                    export_destination: consCountry
+                }
             });
         }
 
         function renderReviewerCard(task) {
             const d = task.data || {};
             const uf = d.userform || {};
+            const rf = d.reviewerform || {};
             const tid = task.task_id;
 
             const card = document.createElement('div');
             card.className = 'task-card';
+
+            if (task.status === 'WAITING_FOR_EVENT') {
+                const nodeID = task.subtask_node_id || '';
+
+                if (nodeID.includes('sample')) {
+                    card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">🔬 Sample Reception Desk</div>
+                <div class="card-sub">${tid} · node: ${nodeID}</div>
+            </div>
+            <span class="badge badge-queued" style="background:rgba(159,122,234,0.12); color:#9f7aea; border-color:rgba(159,122,234,0.3)">Awaiting Sample</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Consignment Info</div>
+            <div style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.25rem;">
+                <div>Exporter: <b>${uf.exporter_name || uf.applicant_name || '—'}</b></div>
+                <div>Commodity: <b>${uf.commodity || uf.crop_type || '—'}</b></div>
+                <div>Reference No: <b>${rf.reference_number || d.reference_number || '—'}</b></div>
+            </div>
+            <div class="queued-notice" style="background:rgba(159,122,234,0.07); border-color:rgba(159,122,234,0.2); color:#b794f4">
+                <span>📍 Physical sample is being shipped to NPQS Quarantine center.</span>
+            </div>
+            <button class="btn btn-success" style="background:#9f7aea; color:#fff" onclick="submitEventAction('${tid}', {})">📋 Mark Sample as Received & Logged</button>
+        </div>`;
+                    return card;
+                }
+
+                if (nodeID.includes('lab')) {
+                    card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">🧪 Phytosanitary Lab Testing</div>
+                <div class="card-sub">${tid} · node: ${nodeID}</div>
+            </div>
+            <span class="badge badge-queued" style="background:rgba(56,139,253,0.12); color:var(--primary); border-color:rgba(56,139,253,0.3)">Under Analysis</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Sample Info</div>
+            <div style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.25rem;">
+                <div>Sample Tag: <b>SMP-${tid.substr(0, 6).toUpperCase()}</b></div>
+                <div>Commodity: <b>${uf.commodity || uf.crop_type || '—'}</b></div>
+            </div>
+            <div class="section-label">Submit Test Outcome</div>
+            <div class="field">
+                <label>Microbiology & Pesticide Clearance</label>
+                <div class="radio-group">
+                    <label class="radio-option"><input type="radio" name="lab_${tid}" value="pass" checked><span>🟢 PASS (Clear of Pathogens)</span></label>
+                    <label class="radio-option"><input type="radio" name="lab_${tid}" value="fail"><span>🔴 FAIL (Contamination Detected)</span></label>
+                </div>
+            </div>
+            <button class="btn btn-success" style="color:#000; font-weight:700;" onclick="submitLabResults('${tid}')">🔬 Submit Lab Diagnostics Report</button>
+        </div>`;
+                    return card;
+                }
+
+                if (nodeID.includes('fumigation')) {
+                    card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">💨 Fumigation Treatment Log</div>
+                <div class="card-sub">${tid} · node: ${nodeID}</div>
+            </div>
+            <span class="badge badge-queued" style="background:rgba(210,153,34,0.12); color:var(--warning); border-color:rgba(210,153,34,0.3)">Treatment Req</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Consignment Details</div>
+            <div style="font-size:0.85rem;">
+                Commodity: <b>${uf.commodity || uf.crop_type || '—'}</b> (${uf.quantity || '—'} ${uf.quantity_unit || ''})
+            </div>
+            <div class="queued-notice" style="background:rgba(210,153,34,0.07); border-color:rgba(210,153,34,0.2); color:var(--warning)">
+                <span>💨 Consignment must undergo Methyl Bromide fumigation treatment.</span>
+            </div>
+            <button class="btn btn-success" style="background:var(--warning); color:#000; font-weight:700;" onclick="submitEventAction('${tid}', {})">💨 Confirm Treatment Completed</button>
+        </div>`;
+                    return card;
+                }
+
+                if (nodeID.includes('visual_decision') || nodeID.includes('visual-requirement') || nodeID.includes('visual_requirement') || nodeID.includes('visual_decision_wait')) {
+                    card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">🔍 Visual Inspection Decision</div>
+                <div class="card-sub">${tid} · node: ${nodeID}</div>
+            </div>
+            <span class="badge badge-pending">Needs Decision</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Country Profile Risk Check</div>
+            <div style="font-size:0.85rem; margin-bottom:0.4rem;">
+                Destination: <b style="color:var(--cyan)">${uf.consignee_country || uf.export_destination || '—'}</b>
+            </div>
+            <div class="field">
+                <label>Is physical visual crop inspection required?</label>
+                <div class="radio-group">
+                    <label class="radio-option"><input type="radio" name="vis_req_${tid}" value="yes" checked><span>🔎 YES (Perform visual check)</span></label>
+                    <label class="radio-option"><input type="radio" name="vis_req_${tid}" value="no"><span>🌾 NO (Skip to documents)</span></label>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="submitVisualDecision('${tid}')">💾 Save Requirement Decision</button>
+        </div>`;
+                    return card;
+                }
+
+                if (nodeID.includes('visual')) {
+                    card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">🔎 Field Visual Inspection</div>
+                <div class="card-sub">${tid} · node: ${nodeID}</div>
+            </div>
+            <span class="badge badge-queued">Officer Dispatched</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Inspection Target</div>
+            <div style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.25rem;">
+                <div>Location: <b>${uf.exporter_address || uf.farm_location || '—'}</b></div>
+                <div>Commodity: <b>${uf.commodity || uf.crop_type || '—'}</b></div>
+            </div>
+            <div class="section-label">Submit Inspection Report</div>
+            <div class="field">
+                <label>Visual crop health outcome</label>
+                <div class="radio-group">
+                    <label class="radio-option"><input type="radio" name="vis_res_${tid}" value="pass" checked><span>🟢 PASS (Healthy crop, no pests)</span></label>
+                    <label class="radio-option"><input type="radio" name="vis_res_${tid}" value="fail"><span>🔴 FAIL (Pests or decay observed)</span></label>
+                </div>
+            </div>
+            <button class="btn btn-success" style="color:#000; font-weight:700;" onclick="submitVisualResult('${tid}')">👁 Submit Physical Report</button>
+        </div>`;
+                    return card;
+                }
+
+                card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">⏳ Waiting for Event</div>
+                <div class="card-sub">${tid} · node: ${nodeID}</div>
+            </div>
+            <span class="badge badge-queued">Waiting</span>
+        </div>
+        <div class="card-body">
+            <div class="queued-notice">
+                <span>Waiting for external event to trigger task completion.</span>
+            </div>
+            <button class="btn btn-ghost" onclick="submitEventAction('${tid}', {})">Resume Step manually →</button>
+        </div>`;
+                return card;
+            }
+
+            if (task.reviewer_form_id === 'npqs-submit-shipping-docs--reviewer-form') {
+                const u_docs = d.userform || {};
+                card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">🔎 Review Shipping Documents</div>
+                <div class="card-sub">${tid} · node: ${task.subtask_node_id || '—'}</div>
+            </div>
+            <span class="badge badge-queued" style="color:var(--cyan); border-color:var(--cyan)">Pending Review</span>
+        </div>
+        <div class="card-body">
+            <div class="section-label">Submitted Files</div>
+            <div style="background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.6rem; font-size:0.82rem; display:flex; flex-direction:column; gap:0.35rem;">
+                <div>📄 Bill of Lading: <a href="#" onclick="return false" style="color:var(--primary); text-decoration:none">${u_docs.bill_of_lading || 'bill_of_lading.pdf'}</a></div>
+                <div>📄 Packing List: <a href="#" onclick="return false" style="color:var(--primary); text-decoration:none">${u_docs.packing_list || 'packing_list.xlsx'}</a></div>
+                <div>📄 Commercial Invoice: <a href="#" onclick="return false" style="color:var(--primary); text-decoration:none">${u_docs.commercial_invoice || 'invoice.pdf'}</a></div>
+                ${u_docs.certificate_of_origin ? `<div>📄 Certificate of Origin: <a href="#" style="color:var(--primary); text-decoration:none">${u_docs.certificate_of_origin}</a></div>` : ''}
+            </div>
+            <div class="section-label">Document Verification Decision</div>
+            <div class="field">
+                <div class="radio-group">
+                    <label class="radio-option"><input type="radio" name="doc_outcome_${tid}" value="approve" checked><span>✅ Approve Documents</span></label>
+                    <label class="radio-option"><input type="radio" name="doc_outcome_${tid}" value="reject"><span>❌ Reject & Decline</span></label>
+                    <label class="radio-option"><input type="radio" name="doc_outcome_${tid}" value="needs_more_info"><span>🔄 Request revisions</span></label>
+                </div>
+            </div>
+            <div class="field">
+                <label>Officer Comments</label>
+                <input type="text" id="${tid}_doc_comments" placeholder="Comments or reason if declining...">
+            </div>
+            <button class="btn btn-success" style="color:#000; font-weight:700;" onclick="submitDocsReview('${tid}')">Verify Documents →</button>
+        </div>`;
+                return card;
+            }
+
+            if (task.reviewer_form_id === 'npqs-issue-certificate--officer-form') {
+                const certVal = 'PH-NSW-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+                const certURL = 'https://nsw.gov.au/certs/' + certVal + '.pdf';
+                card.innerHTML = `
+        <div class="card-top">
+            <div>
+                <div class="card-title">📜 Issue Phytosanitary Certificate</div>
+                <div class="card-sub">${tid} · node: ${task.subtask_node_id || '—'}</div>
+            </div>
+            <span class="badge badge-queued" style="background:rgba(63,185,80,0.1); color:var(--success)">Approved</span>
+        </div>
+        <div class="card-body">
+            <div class="queued-notice" style="background:rgba(63,185,80,0.05); border-color:rgba(63,185,80,0.2); color:var(--success)">
+                <span>All tests passed, payments cleared, and docs verified. Ready for issuance.</span>
+            </div>
+            <div class="section-label">Certificate Metadata</div>
+            <div class="field">
+                <label>Certificate ID</label>
+                <input type="text" id="${tid}_cert_id" value="${certVal}">
+            </div>
+            <div class="field">
+                <label>Certificate URL</label>
+                <input type="text" id="${tid}_cert_url" value="${certURL}">
+            </div>
+            <button class="btn btn-success" style="color:#000; font-weight:700;" onclick="submitCertIssuance('${tid}')">📜 Generate & Sign Phytosanitary Certificate</button>
+        </div>`;
+                return card;
+            }
+
+            // Default Application Review Form
             card.innerHTML = `
         <div class="card-top">
             <div>
-                <div class="card-title">Review: ${uf.applicant_name || 'Application'}</div>
-                <div class="card-sub">${tid} · node: ${task.active_activity_id || '—'}</div>
+                <div class="card-title">Review: ${uf.exporter_name || uf.applicant_name || 'Application'}</div>
+                <div class="card-sub">${tid} · node: ${task.subtask_node_id || '—'}</div>
             </div>
-            <span class="badge badge-queued">Queued Externally</span>
+            <span class="badge badge-queued">Review Entry</span>
         </div>
         <div class="card-body">
-            <div class="section-label">Submitted Application Data (Read Only)</div>
-            <div class="field">
-                <label>Applicant Name</label>
-                <input type="text" value="${uf.applicant_name || ''}" readonly>
+            <div class="section-label">Consignment Data (Read Only)</div>
+            <div style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.25rem; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.6rem;">
+                <div>Exporter: <b>${uf.exporter_name || uf.applicant_name || '—'}</b></div>
+                <div>Farm: <b>${uf.exporter_address || uf.farm_location || '—'}</b></div>
+                <div>Commodity: <b>${uf.commodity || uf.crop_type || '—'} (${uf.quantity || '—'} ${uf.quantity_unit || ''})</b></div>
+                <div>Destination: <b>${uf.consignee_country || uf.export_destination || '—'}</b></div>
             </div>
+            <div class="section-label">Assessment</div>
             <div class="field">
-                <label>Farm Address</label>
-                <input type="text" value="${uf.farm_location || ''}" readonly>
-            </div>
-            <div class="field-row">
-                <div class="field"><label>Commodity</label><input type="text" value="${uf.crop_type || ''}" readonly></div>
-                <div class="field"><label>Destination</label><input type="text" value="${uf.export_destination || ''}" readonly></div>
-            </div>
-            <div class="section-label">Official Review</div>
-            <div class="field">
-                <label>Review Decision</label>
+                <label>Decision Outcome</label>
                 <div class="radio-group">
                     <label class="radio-option"><input type="radio" name="outcome_${tid}" value="approve" checked><span>✅ Approve</span></label>
                     <label class="radio-option"><input type="radio" name="outcome_${tid}" value="reject"><span>❌ Reject</span></label>
                     <label class="radio-option"><input type="radio" name="outcome_${tid}" value="needs_more_info"><span>🔄 Needs More Info</span></label>
                 </div>
             </div>
-            <div class="field">
-                <label>Comments / Justification</label>
+            <div class="field-row" style="margin-top:0.4rem;">
+                <div class="field" style="display:flex; flex-direction:row; gap:0.5rem; align-items:center;">
+                    <input type="checkbox" id="${tid}_ref_sample" checked style="width:16px; height:16px; accent-color:var(--primary); cursor:pointer;">
+                    <label for="${tid}_ref_sample" style="cursor:pointer; margin-bottom:0; font-size:0.85rem;">Require Sample Lab Test?</label>
+                </div>
+            </div>
+            <div class="field-row">
+                <div class="field" style="display:flex; flex-direction:row; gap:0.5rem; align-items:center;">
+                    <input type="checkbox" id="${tid}_ref_fumigation" style="width:16px; height:16px; accent-color:var(--primary); cursor:pointer;">
+                    <label for="${tid}_ref_fumigation" style="cursor:pointer; margin-bottom:0; font-size:0.85rem;">Require Fumigation Treatment?</label>
+                </div>
+            </div>
+            <div class="field" style="margin-top:0.4rem;">
+                <label>Comments / Reason</label>
                 <div class="input-wrap ta-wrap">
-                    <textarea id="${tid}_comments" rows="2" placeholder="Provide feedback if rejecting or requesting more info…"></textarea>
+                    <textarea id="${tid}_comments" rows="2" placeholder="Comments or feedback..."></textarea>
                     <button class="dice" onclick="fillEl('${tid}_comments','comment')" title="Random">🎲</button>
                 </div>
             </div>
-            <button class="btn btn-success" onclick="submitReview('${tid}')">Submit Review →</button>
+            <button class="btn btn-success" onclick="submitAppReview('${tid}')">Submit Assessment →</button>
         </div>`;
             return card;
         }
 
-        function submitReview(tid) {
-            const outcome = document.querySelector(`input[name="outcome_${tid}"]:checked`)?.value;
-            const comments = document.getElementById(tid + '_comments')?.value?.trim();
-            if (!outcome) { alert('Please select a review decision.'); return; }
+        function submitEventAction(tid, payload) {
+            submitTask(tid, payload);
+        }
+
+        function submitLabResults(tid) {
+            const outcome = document.querySelector(`input[name="lab_${tid}"]:checked`)?.value || 'passed';
             submitTask(tid, {
-                reviewerform: { review_outcome: outcome, reviewer_comments: comments || '' }
+                lab_result: outcome,
+                npqs: {
+                    lab_result: outcome
+                }
+            });
+        }
+
+        function submitVisualDecision(tid) {
+            const outcome = document.querySelector(`input[name="vis_req_${tid}"]:checked`)?.value || 'no';
+            const req = outcome === 'yes';
+            submitTask(tid, {
+                visual_inspection_required: req,
+                npqs: {
+                    visual_inspection_required: req
+                }
+            });
+        }
+
+        function submitVisualResult(tid) {
+            const outcome = document.querySelector(`input[name="vis_res_${tid}"]:checked`)?.value || 'passed';
+            submitTask(tid, {
+                visual_result: outcome,
+                npqs: {
+                    visual_result: outcome
+                }
+            });
+        }
+
+        function submitDocsReview(tid) {
+            const outcome = document.querySelector(`input[name="doc_outcome_${tid}"]:checked`)?.value || 'approve';
+            const comments = document.getElementById(tid + '_doc_comments')?.value?.trim() || '';
+            submitTask(tid, {
+                reviewerform: {
+                    review_outcome: outcome,
+                    rejection_reason: comments
+                },
+                doc_review_result: outcome,
+                npqs: {
+                    doc_review_result: outcome
+                }
+            });
+        }
+
+        function submitCertIssuance(tid) {
+            const certID = document.getElementById(tid + '_cert_id')?.value?.trim() || 'CERT-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+            const certURL = document.getElementById(tid + '_cert_url')?.value?.trim() || 'https://ippc.int/certs/REF-1234.pdf';
+            submitTask(tid, {
+                certificate_id: certID,
+                certificate_url: certURL,
+                npqs: {
+                    certificate_id: certID,
+                    certificate_url: certURL
+                }
+            });
+        }
+
+        function submitAppReview(tid) {
+            const outcome = document.querySelector(`input[name="outcome_${tid}"]:checked`)?.value || 'approve';
+            const comments = document.getElementById(tid + '_comments')?.value?.trim() || '';
+            const sampleReq = document.getElementById(tid + '_ref_sample')?.checked || false;
+            const fumReq = document.getElementById(tid + '_ref_fumigation')?.checked || false;
+            const refNum = 'REF-NPQS-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+
+            submitTask(tid, {
+                reviewerform: {
+                    review_outcome: outcome,
+                    reference_number: refNum,
+                    sample_required: sampleReq,
+                    fumigation_required: fumReq,
+                    rejection_reason: comments
+                },
+                npqs: {
+                    sample_required: sampleReq,
+                    fumigation_required: fumReq
+                },
+                reference_number: refNum
             });
         }
 
@@ -777,24 +1214,28 @@
             const d = task.data || {};
             const uf = d.userform || {};
             const rf = d.reviewerform || {};
-            const outcome = rf.review_outcome || 'unknown';
+            const outcome = rf.review_outcome || (task.status === 'DISPATCHED' ? 'dispatched' : 'success');
 
             let badgeClass = 'badge-info';
-            if (outcome === 'approve') badgeClass = 'badge-done';
-            if (outcome === 'reject') badgeClass = 'badge-reject';
+            if (outcome === 'approve' || outcome === 'success') badgeClass = 'badge-done';
+            if (outcome === 'reject' || outcome === 'fail') badgeClass = 'badge-reject';
+            if (outcome === 'dispatched') badgeClass = 'badge-queued';
 
             const el = document.createElement('details');
             el.className = 'history-card';
             el.innerHTML = `
         <summary>
-            <span>${uf.applicant_name || task.task_id}</span>
+            <span>${uf.exporter_name || uf.applicant_name || task.task_id}</span>
             <span class="badge ${badgeClass}">${outcome.replace('_', ' ')}</span>
         </summary>
         <div class="history-body">
             <span><b>Task ID:</b> ${task.task_id}</span>
-            <span><b>Farm:</b> ${uf.farm_location || '—'}</span>
-            <span><b>Crop:</b> ${uf.crop_type || '—'} → ${uf.export_destination || '—'}</span>
-            <span><b>Comments:</b> ${rf.reviewer_comments || '—'}</span>
+            <span><b>Exporter Address:</b> ${uf.exporter_address || uf.farm_location || '—'}</span>
+            <span><b>Commodity:</b> ${uf.commodity || uf.crop_type || '—'} → ${uf.consignee_country || uf.export_destination || '—'}</span>
+            <span><b>Final Status:</b> ${task.status}</span>
+            ${rf.reviewer_comments ? `<span><b>Comments:</b> ${rf.reviewer_comments}</span>` : ''}
+            ${d.certificate_id ? `<span><b>Certificate ID:</b> <b style="color:var(--success)">${d.certificate_id}</b></span>` : ''}
+            ${d.certificate_url ? `<span><b>Download Certificate:</b> <a href="${d.certificate_url}" target="_blank" style="color:var(--primary); text-decoration:none">${d.certificate_url}</a></span>` : ''}
         </div>`;
             return el;
         }

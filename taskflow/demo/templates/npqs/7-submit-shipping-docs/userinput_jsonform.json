@@ -1,0 +1,75 @@
+{
+    "id": "npqs-submit-shipping-docs--user-form",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "bill_of_lading": {
+                "type": "string",
+                "format": "data-url",
+                "title": "Bill of Lading"
+            },
+            "packing_list": {
+                "type": "string",
+                "format": "data-url",
+                "title": "Packing List"
+            },
+            "commercial_invoice": {
+                "type": "string",
+                "format": "data-url",
+                "title": "Commercial Invoice"
+            },
+            "certificate_of_origin": {
+                "type": "string",
+                "format": "data-url",
+                "title": "Certificate of Origin"
+            },
+            "additional_docs": {
+                "type": "string",
+                "format": "data-url",
+                "title": "Additional Documents (if any)"
+            }
+        },
+        "required": [
+            "bill_of_lading",
+            "packing_list",
+            "commercial_invoice"
+        ]
+    },
+    "uischema": {
+        "type": "VerticalLayout",
+        "elements": [
+            {
+                "type": "Group",
+                "label": "Required Documents",
+                "elements": [
+                    {
+                        "type": "Control",
+                        "scope": "#/properties/bill_of_lading"
+                    },
+                    {
+                        "type": "Control",
+                        "scope": "#/properties/packing_list"
+                    },
+                    {
+                        "type": "Control",
+                        "scope": "#/properties/commercial_invoice"
+                    }
+                ]
+            },
+            {
+                "type": "Group",
+                "label": "Optional Documents",
+                "elements": [
+                    {
+                        "type": "Control",
+                        "scope": "#/properties/certificate_of_origin"
+                    },
+                    {
+                        "type": "Control",
+                        "scope": "#/properties/additional_docs"
+                    }
+                ]
+            }
+        ]
+    }
+}

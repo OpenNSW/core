@@ -1,0 +1,52 @@
+{
+    "id": "npqs-submit-shipping-docs--reviewer-form",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "review_outcome": {
+                "type": "string",
+                "title": "Review Outcome",
+                "enum": [
+                    "approve",
+                    "reject",
+                    "needs_more_info"
+                ]
+            },
+            "rejection_reason": {
+                "type": "string",
+                "title": "Reason"
+            }
+        },
+        "required": [
+            "review_outcome"
+        ]
+    },
+    "uischema": {
+        "type": "VerticalLayout",
+        "elements": [
+            {
+                "type": "Control",
+                "scope": "#/properties/review_outcome"
+            },
+            {
+                "type": "Control",
+                "scope": "#/properties/rejection_reason",
+                "options": {
+                    "multi": true
+                },
+                "rule": {
+                    "effect": "SHOW",
+                    "condition": {
+                        "scope": "#/properties/review_outcome",
+                        "schema": {
+                            "enum": [
+                                "reject",
+                                "needs_more_info"
+                            ]
+                        }
+                    }
+                }
+            }
+        ]
+    }
+}

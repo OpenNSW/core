@@ -1,0 +1,34 @@
+{
+    "id": "npqs-issue-certificate--officer-form",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "certificate_id": {
+                "type": "string",
+                "title": "Certificate ID"
+            },
+            "certificate_url": {
+                "type": "string",
+                "title": "Certificate URL",
+                "format": "uri"
+            }
+        },
+        "required": [
+            "certificate_id",
+            "certificate_url"
+        ]
+    },
+    "uischema": {
+        "type": "VerticalLayout",
+        "elements": [
+            {
+                "type": "Control",
+                "scope": "#/properties/certificate_id"
+            },
+            {
+                "type": "Control",
+                "scope": "#/properties/certificate_url"
+            }
+        ]
+    }
+}

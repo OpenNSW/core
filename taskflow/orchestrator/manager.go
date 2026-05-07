@@ -107,9 +107,31 @@ func (tm *TaskManager) WithTaskDefPath(path string) *TaskManager {
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
 func (tm *TaskManager) StartTask(payload engine.TaskPayload) error {
-	regEntry, ok := tm.registry.Get(payload.TaskTemplateID)
-	if !ok {
-		return fmt.Errorf("unknown task_template_id: %s", payload.TaskTemplateID)
+	var def engine.WorkflowDefinition
+	var regEntry TaskTemplateEntry
+
+	if workflowDef, exists := tm.registry.GetWorkflow(payload.TaskTemplateID); exists {
+		def = workflowDef
+		regEntry = TaskTemplateEntry{
+			TemplateID: payload.TaskTemplateID,
+			TaskType:   "COMPOSITE",
+		}
+		log.Printf("[TaskManager] Found registered sub-workflow definition for template ID %s", payload.TaskTemplateID)
+	} else {
+		var ok bool
+		regEntry, ok = tm.registry.Get(payload.TaskTemplateID)
+		if !ok {
+			return fmt.Errorf("unknown task_template_id: %s (neither registered as sub-workflow nor task template)", payload.TaskTemplateID)
+		}
+
+		// Fallback to reading the default static task definition file (backward compatibility)
+		fileBytes, err := os.ReadFile(tm.taskDefPath)
+		if err != nil {
+			return fmt.Errorf("failed to read task def file %s: %v", tm.taskDefPath, err)
+		}
+		if err := json.Unmarshal(fileBytes, &def); err != nil {
+			return fmt.Errorf("failed to parse task def file %s: %v", tm.taskDefPath, err)
+		}
 	}
 
 	taskID := "task-" + uuid.New().String()[:8]
@@ -133,16 +155,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) error {
 		CreatedAt:        time.Now(),
 	}
 	tm.db.SaveTask(record)
-	log.Printf("[TaskManager] Created Task record %s (template=%s)", taskID, payload.TaskTemplateID)
-
-	fileBytes, err := os.ReadFile(tm.taskDefPath)
-	if err != nil {
-		return fmt.Errorf("failed to read %s: %v", tm.taskDefPath, err)
-	}
-	var def engine.WorkflowDefinition
-	if err := json.Unmarshal(fileBytes, &def); err != nil {
-		return fmt.Errorf("failed to parse %s: %v", tm.taskDefPath, err)
-	}
+	log.Printf("[TaskManager] Created Task record %s (template=%s, task_type=%s)", taskID, payload.TaskTemplateID, regEntry.TaskType)
 
 	// Verify that there are no parallel execution paths, as TaskRecord only stores coordinates for a single active subtask.
 	for _, node := range def.Nodes {
@@ -152,7 +165,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) error {
 		}
 	}
 
-	err = tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, def, initialData)
+	err := tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, def, initialData)
 	if err != nil {
 		return fmt.Errorf("failed to start task workflow: %v", err)
 	}

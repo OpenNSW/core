@@ -1,6 +1,10 @@
 package orchestrator
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	engine "github.com/OpenNSW/go-temporal-workflow"
+)
 
 // TaskTemplateEntry defines the core common fields of any task configuration.
 // All plugin-specific parameters are stored inside PluginProperties and decoded
@@ -15,13 +19,17 @@ type TaskTemplateEntry struct {
 
 // TaskTemplateRegistry is a simple in-process registry mapping template IDs to their config.
 type TaskTemplateRegistry struct {
-	entries map[string]TaskTemplateEntry
+	entries   map[string]TaskTemplateEntry
+	workflows map[string]engine.WorkflowDefinition
 }
 
 // NewTaskTemplateRegistry returns an empty registry.
 // Call Register to add templates, or use NewTaskTemplateRegistryFromDir to load from JSON files.
 func NewTaskTemplateRegistry() *TaskTemplateRegistry {
-	return &TaskTemplateRegistry{entries: make(map[string]TaskTemplateEntry)}
+	return &TaskTemplateRegistry{
+		entries:   make(map[string]TaskTemplateEntry),
+		workflows: make(map[string]engine.WorkflowDefinition),
+	}
 }
 
 func (r *TaskTemplateRegistry) Register(entry TaskTemplateEntry) {
@@ -31,4 +39,13 @@ func (r *TaskTemplateRegistry) Register(entry TaskTemplateEntry) {
 func (r *TaskTemplateRegistry) Get(templateID string) (TaskTemplateEntry, bool) {
 	entry, ok := r.entries[templateID]
 	return entry, ok
+}
+
+func (r *TaskTemplateRegistry) RegisterWorkflow(def engine.WorkflowDefinition) {
+	r.workflows[def.ID] = def
+}
+
+func (r *TaskTemplateRegistry) GetWorkflow(id string) (engine.WorkflowDefinition, bool) {
+	def, ok := r.workflows[id]
+	return def, ok
 }

@@ -1,0 +1,9 @@
+{
+    "template_id": "npqs-submit-shipping-docs--officer-review",
+    "task_type": "APPLICATION",
+    "plugin_name": "generic_external_review",
+    "plugin_properties": {
+        "reviewer_jsonforms_id": "npqs-submit-shipping-docs--reviewer-form",
+        "external_url": "http://npqs-officer/api/review"
+    }
+}

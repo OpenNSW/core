@@ -1,0 +1,75 @@
+{
+    "id": "npqs-apply-phyto-cert-flow",
+    "name": "Apply for Phyto Certificate",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "applicant_submission",
+            "type": "TASK",
+            "task_template_id": "npqs-apply-phyto-cert--user-input",
+            "input_mapping": {},
+            "output_mapping": {
+                "userform": "userform"
+            }
+        },
+        {
+            "id": "officer_review",
+            "type": "TASK",
+            "task_template_id": "npqs-apply-phyto-cert--officer-review",
+            "input_mapping": {
+                "userform": "userform"
+            },
+            "output_mapping": {
+                "reviewerform": "reviewerform"
+            }
+        },
+        {
+            "id": "review_gateway",
+            "type": "GATEWAY",
+            "gateway_type": "EXCLUSIVE_SPLIT"
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "applicant_submission"
+        },
+        {
+            "id": "e2",
+            "source_id": "applicant_submission",
+            "target_id": "officer_review"
+        },
+        {
+            "id": "e3",
+            "source_id": "officer_review",
+            "target_id": "review_gateway"
+        },
+        {
+            "id": "e_approve",
+            "source_id": "review_gateway",
+            "target_id": "end",
+            "condition": "reviewerform.review_outcome == 'approve'"
+        },
+        {
+            "id": "e_reject",
+            "source_id": "review_gateway",
+            "target_id": "end",
+            "condition": "reviewerform.review_outcome == 'reject'"
+        },
+        {
+            "id": "e_needs_info",
+            "source_id": "review_gateway",
+            "target_id": "applicant_submission",
+            "condition": "reviewerform.review_outcome == 'needs_more_info'"
+        }
+    ]
+}

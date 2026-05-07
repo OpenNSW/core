@@ -1,0 +1,8 @@
+{
+    "template_id": "npqs-wait-lab-result--wait",
+    "task_type": "WAIT_FOR_EVENT",
+    "plugin_name": "register_task_and_wait",
+    "plugin_properties": {
+        "external_url": "http://npqs-external/api/queue"
+    }
+}

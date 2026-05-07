@@ -1,0 +1,36 @@
+{
+    "id": "npqs-wait-sample-received-flow",
+    "name": "Wait for Sample Receipt",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "wait_sample",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-sample-received--wait",
+            "input_mapping": {
+                "reference_number": "reference_number"
+            },
+            "output_mapping": {}
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "wait_sample"
+        },
+        {
+            "id": "e2",
+            "source_id": "wait_sample",
+            "target_id": "end"
+        }
+    ]
+}

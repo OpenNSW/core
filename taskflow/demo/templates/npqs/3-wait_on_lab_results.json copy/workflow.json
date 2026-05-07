@@ -1,0 +1,38 @@
+{
+    "id": "npqs-wait-lab-result-flow",
+    "name": "Wait for Lab Result",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "wait_lab",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-lab-result--wait",
+            "input_mapping": {
+                "reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "lab_result": "lab_result"
+            }
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "wait_lab"
+        },
+        {
+            "id": "e2",
+            "source_id": "wait_lab",
+            "target_id": "end"
+        }
+    ]
+}

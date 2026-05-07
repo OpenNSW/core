@@ -1,0 +1,39 @@
+{
+    "id": "npqs-pay-certificate-fee-flow",
+    "name": "Pay Certificate Fee",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "payment",
+            "type": "TASK",
+            "task_template_id": "npqs-pay-certificate-fee--payment",
+            "input_mapping": {
+                "reference_number": "reference_number"
+            },
+            "output_mapping": {
+                "payment_status": "payment_status",
+                "payment_reference_number": "payment_reference_number"
+            }
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "payment"
+        },
+        {
+            "id": "e2",
+            "source_id": "payment",
+            "target_id": "end"
+        }
+    ]
+}

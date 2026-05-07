@@ -1,0 +1,36 @@
+{
+    "id": "npqs-wait-fumigation-flow",
+    "name": "Wait for Fumigation Completion",
+    "version": 1,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "START"
+        },
+        {
+            "id": "wait_fumigation",
+            "type": "TASK",
+            "task_template_id": "npqs-wait-fumigation--wait",
+            "input_mapping": {
+                "reference_number": "reference_number"
+            },
+            "output_mapping": {}
+        },
+        {
+            "id": "end",
+            "type": "END"
+        }
+    ],
+    "edges": [
+        {
+            "id": "e1",
+            "source_id": "start",
+            "target_id": "wait_fumigation"
+        },
+        {
+            "id": "e2",
+            "source_id": "wait_fumigation",
+            "target_id": "end"
+        }
+    ]
+}
