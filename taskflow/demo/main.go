@@ -70,7 +70,7 @@ func main() {
 		log.Fatalln("Failed to register payment plugin:", err)
 	}
 
-	if err := pluginsRegistry.Register("FIRE_AND_FORGET", plugins.NewHTTPPostPlugin(demoDispatcher)); err != nil {
+	if err := pluginsRegistry.Register("FIRE_AND_FORGET", plugins.NewAPICallPlugin(demoDispatcher)); err != nil {
 		log.Fatalln("Failed to register http post plugin:", err)
 	}
 
