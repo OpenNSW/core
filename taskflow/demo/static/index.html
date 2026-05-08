@@ -23,6 +23,25 @@
             --cyan: #39d0d8;
         }
 
+        body.light-mode {
+            --bg: #f6f8fa;
+            --surface: #ffffff;
+            --surface2: #f3f4f6;
+            --border: #d0d7de;
+            --primary: #0969da;
+            --primary-hover: #1f85ff;
+            --text: #24292f;
+            --muted: #57606a;
+            --success: #1a7f37;
+            --danger: #cf222e;
+            --warning: #9a6700;
+            --cyan: #0599a0;
+        }
+
+        body.light-mode .btn-success {
+            color: #fff;
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
@@ -535,11 +554,17 @@
         <div class="logo">
             <div class="logo-badge">NSW</div>
             <div>
-                <div style="font-weight:600;font-size:1rem;">Phyto Permit Portal</div>
+                <div style="font-weight:600;font-size:1rem;">National Single Window</div>
                 <div class="header-sub">Data-Driven Orchestration Demo</div>
             </div>
         </div>
-        <button class="btn btn-ghost" onclick="fetchTasks()">↻ Refresh</button>
+        <div style="display:flex; align-items:center; gap:0.75rem;">
+            <!-- Theme Toggle Button -->
+            <button class="btn btn-ghost" id="themeToggleBtn" onclick="toggleTheme()" style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; padding:0.4rem 0.8rem; border-radius:20px;">
+                <span id="themeToggleIcon">☀️</span> <span id="themeToggleLabel">Light Mode</span>
+            </button>
+            <button class="btn btn-ghost" onclick="fetchTasks()">↻ Refresh</button>
+        </div>
     </header>
 
     <div class="launch-bar">
@@ -606,6 +631,36 @@
     </main>
 
     <script>
+        // Theme toggling logic
+        function initTheme() {
+            const savedTheme = localStorage.getItem('portal-theme') || 'dark';
+            if (savedTheme === 'light') {
+                document.body.classList.add('light-mode');
+                updateThemeBtn(true);
+            } else {
+                document.body.classList.remove('light-mode');
+                updateThemeBtn(false);
+            }
+        }
+
+        function toggleTheme() {
+            const isLight = document.body.classList.toggle('light-mode');
+            localStorage.setItem('portal-theme', isLight ? 'light' : 'dark');
+            updateThemeBtn(isLight);
+        }
+
+        function updateThemeBtn(isLight) {
+            const icon = document.getElementById('themeToggleIcon');
+            const label = document.getElementById('themeToggleLabel');
+            if (icon && label) {
+                icon.textContent = isLight ? '🌙' : '☀️';
+                label.textContent = isLight ? 'Dark Mode' : 'Light Mode';
+            }
+        }
+
+        // Initialize theme right away
+        initTheme();
+
         // ── Random fill helpers ──────────────────────────────────────────────────────
         const RAND = {
             name: ["Acme Farms Ltd.", "Green Valley Co.", "Sunrise Orchards", "Blue Ridge Produce", "Coastal Growers"],
@@ -796,6 +851,7 @@
             const uf = d.userform || {};
             const rf = d.reviewerform || {};
             const tid = task.task_id;
+            const refNum = rf.reference_number || d.reference_number || (d.npqs ? d.npqs.reference_number : '') || '—';
 
             const card = document.createElement('div');
             card.className = 'task-card';
@@ -897,25 +953,20 @@
         <div class="card-body">
             <div class="section-label">Consignment Fees Summary</div>
             <div style="background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.75rem; font-size:0.85rem; display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.4rem;">
-                <div style="display:flex; justify-content:space-between;"><span>Quarantine Service Fee</span><b>$150.00</b></div>
-                <div style="display:flex; justify-content:space-between;"><span>Physical Inspection Charge</span><b>$50.00</b></div>
-                <div style="display:flex; justify-content:space-between;"><span>NSW Digital Clearance Processing</span><b>$25.00</b></div>
-                <div style="border-top:1px solid var(--border); padding-top:0.4rem; display:flex; justify-content:space-between; font-weight:700; color:var(--success)"><span>Total Payable</span><span>$225.00</span></div>
+                <div style="display:flex; justify-content:space-between;"><span>NPQS Quarantine Inspection Fee</span><b>Rs. 12,500.00</b></div>
+                <div style="display:flex; justify-content:space-between;"><span>Laboratory Diagnostics Charge</span><b>Rs. 5,000.00</b></div>
+                <div style="display:flex; justify-content:space-between;"><span>NSW Digital Customs Clearance Portal</span><b>Rs. 2,500.00</b></div>
+                <div style="border-top:1px solid var(--border); padding-top:0.4rem; display:flex; justify-content:space-between; font-weight:700; color:var(--success)"><span>Total Payable</span><span>Rs. 20,000.00</span></div>
             </div>
-            <div class="section-label">Payment Authorization</div>
-            <div class="field">
-                <label>Cardholder Name</label>
-                <input type="text" id="${tid}_pay_name" value="${uf.exporter_name || uf.applicant_name || 'Acme Farms Ltd.'}" placeholder="Cardholder Name">
+            <div class="section-label">GovPay Portal Instructions</div>
+            <div style="background:rgba(5,153,160,0.06); border:1px solid rgba(5,153,160,0.2); border-radius:6px; padding:0.85rem; font-size:0.85rem; line-height:1.5; color:var(--text); margin-bottom:0.75rem; display:flex; flex-direction:column; gap:0.5rem;">
+                <span>Please initiate the fee settlement of <b>Rs. 20,000.00</b> through your <b>GovPay Mobile App</b> or the central Treasury settlement portal.</span>
+                <div style="background:var(--surface2); border:1px dashed var(--border); padding:0.5rem 0.75rem; border-radius:4px; display:flex; justify-content:space-between; align-items:center; margin-top:0.25rem;">
+                    <span style="font-size:0.8rem; color:var(--muted)">Application Reference:</span>
+                    <b style="color:var(--primary); font-family:monospace; font-size:0.95rem; letter-spacing:0.5px;">${refNum}</b>
+                </div>
             </div>
-            <div class="field">
-                <label>Credit Card Number</label>
-                <input type="text" id="${tid}_pay_card" value="4111 2222 3333 4444" placeholder="4111 2222 3333 4444">
-            </div>
-            <div class="field-row">
-                <div class="field"><label>Expiry</label><input type="text" value="12/29" placeholder="MM/YY"></div>
-                <div class="field"><label>CVC</label><input type="text" value="321" placeholder="CVC"></div>
-            </div>
-            <button class="btn btn-success" style="color:#000; font-weight:700;" onclick="submitPayment('${tid}')">Authorize & Pay $225.00 →</button>
+            <button class="btn btn-success" style="color:#000; font-weight:700; width:100%; display:flex; align-items:center; justify-content:center; gap:0.4rem; padding:0.65rem 0;" onclick="submitPayment('${tid}')">✅ Mock Payment Done</button>
         </div>`;
                 return card;
             }
@@ -1713,11 +1764,73 @@
             });
         }
 
+        function getStepHumanName(task) {
+            const nodeID = task.parent_node_id || '';
+            const subNodeID = task.subtask_node_id || '';
+            const templateID = task.active_task_template_id || task.user_form_id || task.reviewer_form_id || '';
+
+            // 1. Direct Node-ID Mapping
+            const nodeMapping = {
+                'n1_apply': 'Initial Application Review',
+                'n2_sample_wait': 'Sample Reception',
+                'n2_lab_wait': 'Laboratory Testing Diagnostics',
+                'n3_fumigation_wait': 'Fumigation Treatment Verification',
+                'n4_visual_decision_wait': 'Visual Inspection Decision',
+                'n5_visual_insp_wait': 'Physical Crop Field Inspection',
+                'n6_docs_apply': 'Document Verification Review',
+                'n7_payment': 'Certificate Payment',
+                'n8_issue_certificate': 'Certificate Issuance',
+                'n9_ippc_upload': 'Upload to IPPC Hub',
+                'phase1_app': 'Phytosanitary Initial Application Review',
+            };
+
+            if (nodeMapping[nodeID]) return nodeMapping[nodeID];
+
+            // 2. Direct Sub-node/Sub-task ID Mapping
+            if (subNodeID) {
+                const subClean = subNodeID.split(':')[0].toLowerCase();
+                if (subClean.includes('payment')) return 'Certificate Payment';
+                if (subClean.includes('sample')) return 'Sample Reception';
+                if (subClean.includes('lab')) return 'Laboratory Testing Diagnostics';
+                if (subClean.includes('fumigation')) return 'Fumigation Treatment Verification';
+                if (subClean.includes('visual_decision')) return 'Visual Inspection Decision';
+                if (subClean.includes('visual')) return 'Physical Crop Field Inspection';
+                if (subClean.includes('doc')) return 'Document Verification Review';
+                if (subClean.includes('issue_certificate') || subClean.includes('cert')) return 'Certificate Issuance';
+                if (subClean.includes('upload') || subClean.includes('ippc')) return 'Upload to IPPC Hub';
+                if (subClean.includes('officer_review') || subClean.includes('apply_review')) return 'Initial Application Review';
+            }
+
+            // 3. Fallback to active template ID or form ID mapping
+            if (templateID) {
+                const tempClean = templateID.toLowerCase();
+                if (tempClean.includes('payment') || tempClean.includes('pay')) return 'Certificate Payment';
+                if (tempClean.includes('sample')) return 'Sample Reception';
+                if (tempClean.includes('lab')) return 'Laboratory Testing Diagnostics';
+                if (tempClean.includes('fumigation')) return 'Fumigation Treatment Verification';
+                if (tempClean.includes('visual_decision') || tempClean.includes('visual-decision')) return 'Visual Inspection Decision';
+                if (tempClean.includes('visual')) return 'Physical Crop Field Inspection';
+                if (tempClean.includes('doc')) return 'Document Verification Review';
+                if (tempClean.includes('issue') || tempClean.includes('cert')) return 'Certificate Issuance';
+                if (tempClean.includes('upload') || tempClean.includes('ippc')) return 'Upload to IPPC Hub';
+                if (tempClean.includes('apply') || tempClean.includes('review') || tempClean.includes('userinput')) return 'Initial Application Review';
+            }
+
+            // Standard fallback cleanup
+            let fallback = subNodeID || templateID || 'Completed Step';
+            fallback = fallback.split(':')[0].replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            return fallback;
+        }
+
         function renderHistoryCard(task) {
             const d = task.data || {};
             const uf = d.userform || {};
             const rf = d.reviewerform || {};
+            const tid = task.task_id;
+            const refNum = rf.reference_number || d.reference_number || (d.npqs ? d.npqs.reference_number : '') || '—';
             const outcome = rf.review_outcome || (task.status === 'DISPATCHED' ? 'dispatched' : 'success');
+
+            const stepName = getStepHumanName(task);
 
             let badgeClass = 'badge-info';
             if (outcome === 'approve' || outcome === 'success') badgeClass = 'badge-done';
@@ -1728,10 +1841,17 @@
             el.className = 'history-card';
             el.innerHTML = `
         <summary>
-            <span>${uf.exporter_name || uf.applicant_name || task.task_id}</span>
+            <div style="display:flex; flex-direction:column; gap:0.25rem; text-align:left;">
+                <span style="font-weight:700; font-size:0.92rem; color:var(--text);">${stepName}</span>
+                <span style="font-size:0.78rem; color:var(--muted); font-weight:500;">
+                    ${uf.exporter_name || uf.applicant_name || 'Application'} · Ref: <b style="color:var(--primary)">${refNum}</b> · Type: <span style="text-transform:capitalize;">${(task.task_type || 'task').toLowerCase().replace(/_/g, ' ')}</span>
+                </span>
+            </div>
             <span class="badge ${badgeClass}">${outcome.replace('_', ' ')}</span>
         </summary>
         <div class="history-body">
+            <span><b>Step Name:</b> ${stepName}</span>
+            <span><b>Reference No:</b> ${refNum}</span>
             <span><b>Task ID:</b> ${task.task_id}</span>
             <span><b>Exporter Address:</b> ${uf.exporter_address || uf.farm_location || '—'}</span>
             <span><b>Commodity:</b> ${uf.commodity || uf.crop_type || '—'} → ${uf.consignee_country || uf.export_destination || '—'}</span>
