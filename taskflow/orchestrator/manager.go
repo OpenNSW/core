@@ -379,8 +379,14 @@ func (tm *TaskManager) GetTaskRenderInfo(taskID string) (map[string]any, error) 
 					} else if err != nil {
 						log.Printf("[TaskManager] Render warning on task %s (plugin %s): %v", taskID, regEntry.PluginName, err)
 					}
+				} else {
+					log.Printf("[TaskManager] Warning: plugin %s (task type: %s) for task %s is not renderable", regEntry.PluginName, regEntry.TaskType, taskID)
 				}
+			} else {
+				log.Printf("[TaskManager] Warning: plugin %s (task type: %s) not found in plugins registry for task %s", regEntry.PluginName, regEntry.TaskType, taskID)
 			}
+		} else {
+			log.Printf("[TaskManager] Warning: active task template %s not found in registry for task %s", record.ActiveTaskTemplateID, taskID)
 		}
 	}
 

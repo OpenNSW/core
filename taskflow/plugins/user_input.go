@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"github.com/OpenNSW/nsw-task-flow/store"
@@ -55,12 +56,15 @@ func (p *UserInputPlugin) Render(configRaw json.RawMessage, record store.TaskRec
 	}
 
 	if cfg.UserJsonFormsID != "" {
-		if raw, exists := getTemplate(cfg.UserJsonFormsID); exists {
-			var decoded map[string]any
-			if err := json.Unmarshal(raw, &decoded); err == nil {
-				renderInfo["user_form_schema"] = decoded
-			}
+		raw, exists := getTemplate(cfg.UserJsonFormsID)
+		if !exists {
+			return nil, fmt.Errorf("user json form template %q not found", cfg.UserJsonFormsID)
 		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal user json form template %q: %w", cfg.UserJsonFormsID, err)
+		}
+		renderInfo["user_form_schema"] = decoded
 	}
 	return renderInfo, nil
 }

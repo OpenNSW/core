@@ -70,12 +70,15 @@ func (p *ExternalReviewPlugin) Render(configRaw json.RawMessage, record store.Ta
 	}
 
 	if cfg.ReviewerJsonFormsID != "" {
-		if raw, exists := getTemplate(cfg.ReviewerJsonFormsID); exists {
-			var decoded map[string]any
-			if err := json.Unmarshal(raw, &decoded); err == nil {
-				renderInfo["reviewer_form_schema"] = decoded
-			}
+		raw, exists := getTemplate(cfg.ReviewerJsonFormsID)
+		if !exists {
+			return nil, fmt.Errorf("reviewer json form template %q not found", cfg.ReviewerJsonFormsID)
 		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal reviewer json form template %q: %w", cfg.ReviewerJsonFormsID, err)
+		}
+		renderInfo["reviewer_form_schema"] = decoded
 	}
 	return renderInfo, nil
 }
