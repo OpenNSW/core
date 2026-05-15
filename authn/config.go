@@ -14,7 +14,7 @@ type Config struct {
 	InsecureSkipTLSVerify bool
 }
 
-func (c *Config) Validate() error {
+func (c Config) Validate() error {
 	if c.JWKSURL == "" {
 		return fmt.Errorf("AUTH_JWKS_URL is required")
 	}
