@@ -115,8 +115,8 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 	if workflowDef, exists := tm.registry.GetWorkflow(payload.TaskTemplateID); exists {
 		def = workflowDef
 		regEntry = TaskTemplateEntry{
-			TemplateID: payload.TaskTemplateID,
-			TaskType:   "COMPOSITE",
+			ID:       payload.TaskTemplateID,
+			TaskType: "COMPOSITE",
 		}
 		log.Printf("[TaskManager] Found registered sub-workflow definition for template ID %s", payload.TaskTemplateID)
 	} else {

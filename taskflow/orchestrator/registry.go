@@ -10,9 +10,8 @@ import (
 // All plugin-specific parameters are stored inside PluginProperties and decoded
 // by each individual plugin.
 type TaskTemplateEntry struct {
-	TemplateID       string          `json:"template_id"`
-	TaskType         string          `json:"task_type"` // e.g. "APPLICATION"
-	WorkflowID       string          `json:"workflow_id"`
+	ID               string          `json:"id"`
+	TaskType         string          `json:"task_type"`         // e.g. "APPLICATION"
 	PluginName       string          `json:"plugin_name"`       // e.g. "generic_user_input"
 	PluginProperties json.RawMessage `json:"plugin_properties"` // plugin-specific config (like user_jsonforms_id, external_url)
 }
@@ -35,11 +34,11 @@ func NewTaskTemplateRegistry() *TaskTemplateRegistry {
 }
 
 func (r *TaskTemplateRegistry) Register(entry TaskTemplateEntry) {
-	r.entries[entry.TemplateID] = entry
+	r.entries[entry.ID] = entry
 }
 
-func (r *TaskTemplateRegistry) Get(templateID string) (TaskTemplateEntry, bool) {
-	entry, ok := r.entries[templateID]
+func (r *TaskTemplateRegistry) Get(id string) (TaskTemplateEntry, bool) {
+	entry, ok := r.entries[id]
 	return entry, ok
 }
 

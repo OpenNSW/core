@@ -123,23 +123,20 @@ func newTestPluginsRegistry() *plugins.Registry {
 func newTestRegistry() *TaskTemplateRegistry {
 	r := NewTaskTemplateRegistry()
 	r.Register(TaskTemplateEntry{
-		TemplateID:       "test_template",
+		ID:               "test_template",
 		TaskType:         "TEST",
-		WorkflowID:       "test_workflow_v1",
 		PluginName:       "generic_user_input",
 		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
 	})
 	r.Register(TaskTemplateEntry{
-		TemplateID:       "generic_user_input",
+		ID:               "generic_user_input",
 		TaskType:         "TEST",
-		WorkflowID:       "test_workflow_v1",
 		PluginName:       "generic_user_input",
 		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
 	})
 	r.Register(TaskTemplateEntry{
-		TemplateID:       "generic_external_review",
+		ID:               "generic_external_review",
 		TaskType:         "TEST",
-		WorkflowID:       "test_workflow_v1",
 		PluginName:       "generic_external_review",
 		PluginProperties: []byte(`{"reviewer_jsonforms_id": "reviewer_form", "external_url": "http://localhost/review"}`),
 	})

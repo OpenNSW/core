@@ -29,9 +29,9 @@ func loadTemplates(registry *orchestrator.TaskTemplateRegistry, templatesDir str
 		// 1. Try to unmarshal and register as a task template entry
 		var entry orchestrator.TaskTemplateEntry
 		errTemplate := json.Unmarshal(data, &entry)
-		if errTemplate == nil && entry.TemplateID != "" && entry.PluginName != "" {
+		if errTemplate == nil && entry.ID != "" && entry.PluginName != "" {
 			registry.Register(entry)
-			log.Printf("[Registry] Loaded template: %s (task_type=%s, plugin=%s)", entry.TemplateID, entry.TaskType, entry.PluginName)
+			log.Printf("[Registry] Loaded template: %s (task_type=%s, plugin=%s)", entry.ID, entry.TaskType, entry.PluginName)
 			return nil
 		}
 
