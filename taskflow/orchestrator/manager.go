@@ -249,16 +249,6 @@ func (tm *TaskManager) HandleTaskCompletion(workflowID string, finalVariables ma
 	return nil
 }
 
-// GetTask retrieves a single task record by its ID.
-func (tm *TaskManager) GetTask(taskID string) (store.TaskRecord, bool) {
-	return tm.db.GetTask(taskID)
-}
-
-// GetAllTasks retrieves all task records in the store.
-func (tm *TaskManager) GetAllTasks() []store.TaskRecord {
-	return tm.db.GetAllTasks()
-}
-
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
 // data and resume the active step in the corresponding Task workflow.
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
@@ -295,21 +285,6 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	}
 
 	return nil
-}
-
-// GetDB returns the underlying task store.
-func (tm *TaskManager) GetDB() store.TaskStore {
-	return tm.db
-}
-
-// GetTaskWorkflowManager returns the Task's TemporalManager.
-func (tm *TaskManager) GetTaskWorkflowManager() engine.TemporalManager {
-	return tm.taskWorkflowManager
-}
-
-// GetPluginsRegistry returns the task execution plugins registry.
-func (tm *TaskManager) GetPluginsRegistry() *plugins.Registry {
-	return tm.pluginsRegistry
 }
 
 // GetTaskRenderInfo retrieves a task record and dynamically decorates it with rich render metadata
