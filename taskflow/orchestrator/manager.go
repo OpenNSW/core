@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	engine "github.com/OpenNSW/go-temporal-workflow"
@@ -70,7 +69,6 @@ type TaskManager struct {
 	pluginsRegistry     *plugins.Registry
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
-	taskDefPath         string
 }
 
 // NewTaskManager creates a TaskManager instance.
@@ -94,15 +92,7 @@ func NewTaskManager(
 		pluginsRegistry:     pluginsRegistry,
 		onTaskCompleted:     onTaskCompleted,
 		taskWorkflowManager: taskWorkflowManager,
-		taskDefPath:         "task.json",
 	}
-}
-
-// WithTaskDefPath overrides the path to the Task workflow definition JSON.
-// Useful when running tests or running from an alternate directory.
-func (tm *TaskManager) WithTaskDefPath(path string) *TaskManager {
-	tm.taskDefPath = path
-	return tm
 }
 
 // StartTask is called by the parent workflow engine when it activates a TASK node.
@@ -124,15 +114,6 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 		regEntry, ok = tm.registry.Get(payload.TaskTemplateID)
 		if !ok {
 			return nil, fmt.Errorf("unknown task_template_id: %s (neither registered as sub-workflow nor task template)", payload.TaskTemplateID)
-		}
-
-		// Fallback to reading the default static task definition file (backward compatibility)
-		fileBytes, err := os.ReadFile(tm.taskDefPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read task def file %s: %v", tm.taskDefPath, err)
-		}
-		if err := json.Unmarshal(fileBytes, &def); err != nil {
-			return nil, fmt.Errorf("failed to parse task def file %s: %v", tm.taskDefPath, err)
 		}
 	}
 

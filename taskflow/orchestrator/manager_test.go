@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 
@@ -147,19 +146,6 @@ func newTestTaskManager(db store.TaskStore, registry *TaskTemplateRegistry, tm e
 	return NewTaskManager(db, registry, newTestPluginsRegistry(), tm, cb)
 }
 
-func writeTempTaskJSON(t *testing.T, content string) (path string, cleanup func()) {
-	t.Helper()
-	f, err := os.CreateTemp("", "task_*.json")
-	if err != nil {
-		t.Fatalf("could not create temp file: %v", err)
-	}
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatalf("could not write temp file: %v", err)
-	}
-	f.Close()
-	return f.Name(), func() { os.Remove(f.Name()) }
-}
-
 func noopCallback(_, _, _ string, _ map[string]any) error { return nil }
 
 // ---------------------------------------------------------------------------
@@ -187,10 +173,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		return nil
 	}
 
-	path, cleanup := writeTempTaskJSON(t, `{"id": "test_workflow_v1", "nodes": []}`)
-	defer cleanup()
-
-	tm := newTestTaskManager(storeMock, registry, mockTaskWFManager, onCompleted).WithTaskDefPath(path)
+	tm := newTestTaskManager(storeMock, registry, mockTaskWFManager, onCompleted)
 
 	// 1. StartTask
 	payload := engine.TaskPayload{
@@ -305,35 +288,6 @@ func TestStartTask_UnknownTemplateID(t *testing.T) {
 	}
 }
 
-func TestStartTask_MissingTaskDefFile(t *testing.T) {
-	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback).
-		WithTaskDefPath("/tmp/this_file_does_not_exist_xyz.json")
-
-	_, err := tm.StartTask(engine.TaskPayload{
-		WorkflowID:     "parent-wf",
-		TaskTemplateID: "test_template",
-	})
-	if err == nil {
-		t.Fatal("expected error for missing task def file, got nil")
-	}
-}
-
-func TestStartTask_MalformedTaskDefFile(t *testing.T) {
-	path, cleanup := writeTempTaskJSON(t, `{not valid json`)
-	defer cleanup()
-
-	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback).
-		WithTaskDefPath(path)
-
-	_, err := tm.StartTask(engine.TaskPayload{
-		WorkflowID:     "parent-wf",
-		TaskTemplateID: "test_template",
-	})
-	if err == nil {
-		t.Fatal("expected error for malformed JSON, got nil")
-	}
-}
-
 func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	mockTaskWF := &mockTemporalManager{
 		startWorkflowFunc: func(_ context.Context, _ string, _ engine.WorkflowDefinition, _ map[string]any) error {
@@ -341,11 +295,7 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 		},
 	}
 
-	path, cleanup := writeTempTaskJSON(t, `{"id":"wf","nodes":[]}`)
-	defer cleanup()
-
-	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), mockTaskWF, noopCallback).
-		WithTaskDefPath(path)
+	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), mockTaskWF, noopCallback)
 
 	_, err := tm.StartTask(engine.TaskPayload{
 		WorkflowID:     "parent-wf",

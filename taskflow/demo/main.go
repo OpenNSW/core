@@ -133,8 +133,7 @@ func main() {
 		return nil
 	}
 
-	tm = orchestrator.NewTaskManager(db, registry, pluginsRegistry, taskWorkflowManager, onTaskCompleted).
-		WithTaskDefPath("demo/templates/graphs/taskworkflow_phyto_application.json")
+	tm = orchestrator.NewTaskManager(db, registry, pluginsRegistry, taskWorkflowManager, onTaskCompleted)
 
 	apiServer := newServer(tm, parentWorkflowManager)
 	apiServer.start(":8080")
