@@ -1,5 +1,5 @@
 {
-  "template_id": "demo_phyto_application_task",
+  "id": "demo_phyto_application_task",
   "task_type": "APPLICATION",
   "workflow_id": "Phyto_Application_Flow_v1"
 }

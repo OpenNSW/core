@@ -11,8 +11,7 @@ import (
 // by each individual plugin.
 type TaskTemplateEntry struct {
 	ID               string          `json:"id"`
-	TaskType         string          `json:"task_type"`         // e.g. "APPLICATION"
-	PluginName       string          `json:"plugin_name"`       // e.g. "generic_user_input"
+	TaskType         string          `json:"task_type"`         // e.g. "USER_INPUT"
 	PluginProperties json.RawMessage `json:"plugin_properties"` // plugin-specific config (like user_jsonforms_id, external_url)
 }
 

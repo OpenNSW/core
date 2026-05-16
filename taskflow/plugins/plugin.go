@@ -23,9 +23,6 @@ type PluginContext struct {
 
 // TaskPlugin is the interface that all interaction and system action handlers must implement.
 type TaskPlugin interface {
-	// Name returns the unique identifier for the plugin (e.g. "generic_user_input").
-	Name() string
-
 	// Execute runs the custom logic of the plugin, updating the task record status and metadata.
 	// The config argument contains the custom plugin configuration parameters unmarshaled from JSON.
 	Execute(ctx PluginContext, config json.RawMessage) error
@@ -58,21 +55,19 @@ func (r *Registry) Register(taskType string, p TaskPlugin) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := fmt.Sprintf("%s/%s", taskType, p.Name())
-	if _, exists := r.plugins[key]; exists {
-		return fmt.Errorf("plugin with name %q is already registered for task type %q", p.Name(), taskType)
+	if _, exists := r.plugins[taskType]; exists {
+		return fmt.Errorf("plugin with name %q is already registered for task type", taskType)
 	}
 
-	r.plugins[key] = p
+	r.plugins[taskType] = p
 	return nil
 }
 
 // Get retrieves a registered plugin by taskType and pluginName.
-func (r *Registry) Get(taskType string, name string) (TaskPlugin, bool) {
+func (r *Registry) Get(taskType string) (TaskPlugin, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	key := fmt.Sprintf("%s/%s", taskType, name)
-	p, exists := r.plugins[key]
+	p, exists := r.plugins[taskType]
 	return p, exists
 }

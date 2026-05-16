@@ -42,7 +42,7 @@ func main() {
 
 	// 3. Set up Task Plugins Registry
 	pluginsRegistry := plugins.NewRegistry()
-	if err := pluginsRegistry.Register("APPLICATION", plugins.NewUserInputPlugin()); err != nil {
+	if err := pluginsRegistry.Register("USER_INPUT", plugins.NewUserInputPlugin()); err != nil {
 		log.Fatalln("Failed to register user input plugin:", err)
 	}
 
@@ -54,12 +54,8 @@ func main() {
 		return nil
 	}
 
-	if err := pluginsRegistry.Register("APPLICATION", plugins.NewExternalReviewPlugin(demoDispatcher)); err != nil {
+	if err := pluginsRegistry.Register("EXTERNAL_REVIEW", plugins.NewExternalReviewPlugin(demoDispatcher)); err != nil {
 		log.Fatalln("Failed to register external review plugin:", err)
-	}
-
-	if err := pluginsRegistry.Register("APPLICATION", plugins.NewOfficerInputPlugin()); err != nil {
-		log.Fatalln("Failed to register officer input plugin:", err)
 	}
 
 	if err := pluginsRegistry.Register("PAYMENT", plugins.NewPaymentPlugin(demoDispatcher)); err != nil {

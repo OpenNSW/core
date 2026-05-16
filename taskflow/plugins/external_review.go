@@ -23,10 +23,6 @@ func NewExternalReviewPlugin(dispatcher Dispatcher) *ExternalReviewPlugin {
 	}
 }
 
-func (p *ExternalReviewPlugin) Name() string {
-	return "generic_external_review"
-}
-
 // ExternalReviewConfig holds properties decoded from the TaskTemplate's JSON configuration.
 type ExternalReviewConfig struct {
 	ExternalURL         string `json:"external_url"`

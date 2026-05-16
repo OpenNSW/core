@@ -22,10 +22,6 @@ func NewPaymentPlugin(dispatcher Dispatcher) *PaymentPlugin {
 	}
 }
 
-func (p *PaymentPlugin) Name() string {
-	return "generic_payment"
-}
-
 // PaymentConfig holds properties decoded from the TaskTemplate's JSON configuration.
 type PaymentConfig struct {
 	PaymentServiceURL string `json:"payment_service_url"`

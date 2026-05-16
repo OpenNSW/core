@@ -15,10 +15,6 @@ func NewUserInputPlugin() *UserInputPlugin {
 	return &UserInputPlugin{}
 }
 
-func (p *UserInputPlugin) Name() string {
-	return "generic_user_input"
-}
-
 // UserInputConfig holds properties specific to the user input step
 type UserInputConfig struct {
 	StatusOverride      string `json:"status_override,omitempty"`

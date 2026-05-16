@@ -109,13 +109,13 @@ func (s *safeMockTaskStore) GetAllTasks() []store.TaskRecord {
 
 func newTestPluginsRegistry() *plugins.Registry {
 	pr := plugins.NewRegistry()
-	pr.Register("TEST", plugins.NewUserInputPlugin())
+	pr.Register("USER_INPUT", plugins.NewUserInputPlugin())
 
 	// Use an offline-friendly mock HTTP dispatcher for unit tests to avoid real HTTP requests
 	mockDispatcher := func(ctx context.Context, url string, taskID string, payload map[string]any) error {
 		return nil
 	}
-	pr.Register("TEST", plugins.NewExternalReviewPlugin(mockDispatcher))
+	pr.Register("EXTERNAL_REVIEW", plugins.NewExternalReviewPlugin(mockDispatcher))
 	return pr
 }
 
@@ -123,20 +123,17 @@ func newTestRegistry() *TaskTemplateRegistry {
 	r := NewTaskTemplateRegistry()
 	r.Register(TaskTemplateEntry{
 		ID:               "test_template",
-		TaskType:         "TEST",
-		PluginName:       "generic_user_input",
+		TaskType:         "USER_INPUT",
 		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
 	})
 	r.Register(TaskTemplateEntry{
 		ID:               "generic_user_input",
-		TaskType:         "TEST",
-		PluginName:       "generic_user_input",
+		TaskType:         "USER_INPUT",
 		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
 	})
 	r.Register(TaskTemplateEntry{
 		ID:               "generic_external_review",
-		TaskType:         "TEST",
-		PluginName:       "generic_external_review",
+		TaskType:         "EXTERNAL_REVIEW",
 		PluginProperties: []byte(`{"reviewer_jsonforms_id": "reviewer_form", "external_url": "http://localhost/review"}`),
 	})
 	return r

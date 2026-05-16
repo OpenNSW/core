@@ -178,10 +178,10 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 		return nil, fmt.Errorf("[StartSubTask] unknown task_template_id: %s", payload.TaskTemplateID)
 	}
 
-	// 2. Fetch the plugin from our registry using both TaskType and PluginName
-	plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType, regEntry.PluginName)
+	// 2. Fetch the plugin from our registry using TaskType
+	plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType)
 	if !ok {
-		return nil, fmt.Errorf("[StartSubTask] unregistered plugin: %s for task type %s (required for template: %s)", regEntry.PluginName, regEntry.TaskType, payload.TaskTemplateID)
+		return nil, fmt.Errorf("[StartSubTask] unregistered plugin for task type %s (required for template: %s)", regEntry.TaskType, payload.TaskTemplateID)
 	}
 
 	// 3. Execute the plugin
@@ -197,7 +197,7 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 		return nil, activity.ErrResultPending
 	}
 	if err != nil {
-		return nil, fmt.Errorf("[StartSubTask] plugin %q execution failed: %w", regEntry.PluginName, err)
+		return nil, fmt.Errorf("[StartSubTask] plugin for task type %q execution failed: %w", regEntry.TaskType, err)
 	}
 
 	tm.db.SaveTask(record)
@@ -295,7 +295,7 @@ func (tm *TaskManager) GetTaskRenderInfo(taskID string) (map[string]any, error) 
 	// If there is an active subtask, fetch its template and let the plugin contribute render schemas/info
 	if record.ActiveTaskTemplateID != "" {
 		if regEntry, ok := tm.registry.Get(record.ActiveTaskTemplateID); ok {
-			if plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType, regEntry.PluginName); ok {
+			if plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType); ok {
 				if renderable, ok := plugin.(plugins.RenderableTaskPlugin); ok {
 					getGenericTemplateFunc := func(id string) (json.RawMessage, bool) {
 						return tm.registry.GetGenericTemplate(id)
@@ -306,11 +306,11 @@ func (tm *TaskManager) GetTaskRenderInfo(taskID string) (map[string]any, error) 
 							res[k] = v
 						}
 					} else if err != nil {
-						log.Printf("[TaskManager] Render warning on task %s (plugin %s): %v", taskID, regEntry.PluginName, err)
+						log.Printf("[TaskManager] Render warning on task %s (task type %s): %v", taskID, regEntry.TaskType, err)
 					}
 				}
 			} else {
-				log.Printf("[TaskManager] Warning: plugin %s (task type: %s) not found in plugins registry for task %s", regEntry.PluginName, regEntry.TaskType, taskID)
+				log.Printf("[TaskManager] Warning: plugin for task type %s not found in plugins registry for task %s", regEntry.TaskType, taskID)
 			}
 		} else {
 			log.Printf("[TaskManager] Warning: active task template %s not found in registry for task %s", record.ActiveTaskTemplateID, taskID)

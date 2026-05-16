@@ -1,7 +1,6 @@
 {
-  "template_id": "demo_generic_user_input",
-  "task_type": "APPLICATION",
-  "plugin_name": "generic_user_input",
+  "id": "demo_generic_user_input",
+  "task_type": "USER_INPUT",
   "plugin_properties": {
     "user_jsonforms_id": "phyto_user_form_v1"
   }

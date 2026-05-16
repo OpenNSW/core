@@ -22,10 +22,6 @@ func NewAPICallPlugin(dispatcher Dispatcher) *APICallPlugin {
 	}
 }
 
-func (p *APICallPlugin) Name() string {
-	return "generic_api_call"
-}
-
 // APICallConfig holds properties decoded from the TaskTemplate's JSON configuration.
 type APICallConfig struct {
 	URL string `json:"url"`
