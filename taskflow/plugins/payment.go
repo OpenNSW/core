@@ -13,7 +13,7 @@ type PaymentPlugin struct {
 }
 
 // NewPaymentPlugin creates a new PaymentPlugin.
-func NewPaymentPlugin(dispatcher Dispatcher) *PaymentPlugin {
+func NewPaymentPlugin(dispatcher Dispatcher) TaskPlugin {
 	if dispatcher == nil {
 		dispatcher = DefaultHTTPDispatcher
 	}
@@ -37,7 +37,7 @@ func (p *PaymentPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 		return fmt.Errorf("missing 'payment_service_url' in generic_payment config")
 	}
 
-	ctx.Record.Status = "PENDING_PAYMENT"
+	ctx.Record.State = "PENDING_PAYMENT"
 
 	log.Printf("[Plugin: generic_payment] Dispatching payment request for task %s to URL: %s", ctx.Record.TaskID, cfg.PaymentServiceURL)
 

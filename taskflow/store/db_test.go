@@ -42,13 +42,13 @@ func TestTaskStoreInterface(t *testing.T) {
 	record := TaskRecord{
 		TaskID:           "test-1",
 		TaskType:         "TEST",
-		Status:           "PENDING_USER",
+		State:            "PENDING_USER",
 		ParentWorkflowID: "parent-wf-1",
 		ParentRunID:      "parent-run-1",
 		ParentNodeID:     "node-1",
 		TaskWorkflowID:   "task-wf-1",
 		TaskRunID:        "task-run-1",
-		SubTaskNodeID:  "activity-1",
+		SubTaskNodeID:    "activity-1",
 		Data:             map[string]any{"userform": map[string]any{"name": "Alice"}},
 		CreatedAt:        time.Now(),
 	}

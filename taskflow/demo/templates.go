@@ -11,8 +11,14 @@ import (
 	"github.com/OpenNSW/nsw-task-flow/orchestrator"
 )
 
-// loadTemplates scans all *.json files recursively in templatesDir and registers them in the registry.
-func loadTemplates(registry *orchestrator.TaskTemplateRegistry, templatesDir string) error {
+// loadTemplates scans all *.json files recursively in templatesDir and registers
+// them in the registry. Each file is discriminated by the JSON fields it carries:
+//
+//   - workflow_id present       → TaskTemplate
+//   - plugin_properties present → SubTaskTemplate
+//   - nodes present             → engine.WorkflowDefinition
+//   - otherwise (has id)        → generic JSON template (e.g. render config, form schema)
+func loadTemplates(registry *TemplateRegistry, templatesDir string) error {
 	err := filepath.WalkDir(templatesDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -26,41 +32,52 @@ func loadTemplates(registry *orchestrator.TaskTemplateRegistry, templatesDir str
 			return fmt.Errorf("read %s: %w", path, err)
 		}
 
-		// 1. Try to unmarshal and register as a task template entry
-		var entry orchestrator.TaskTemplateEntry
-		errTemplate := json.Unmarshal(data, &entry)
-		if errTemplate == nil && entry.ID != "" && entry.TaskType != "" {
-			registry.Register(entry)
-			log.Printf("[Registry] Loaded template: %s (task_type=%s)", entry.ID, entry.TaskType)
+		var probe struct {
+			ID               string          `json:"id"`
+			WorkflowID       string          `json:"workflow_id"`
+			PluginProperties json.RawMessage `json:"plugin_properties"`
+			Nodes            json.RawMessage `json:"nodes"`
+		}
+		if err := json.Unmarshal(data, &probe); err != nil {
+			log.Printf("[Registry] Warning: Invalid JSON syntax in %s: %v", path, err)
+			return nil
+		}
+		if probe.ID == "" {
+			log.Printf("[Registry] Warning: Skipping %s (no \"id\" field)", path)
 			return nil
 		}
 
-		// 2. Try to unmarshal and register as a composite workflow template definition
-		var workflowDef engine.WorkflowDefinition
-		errWorkflow := json.Unmarshal(data, &workflowDef)
-		if errWorkflow == nil && workflowDef.ID != "" && len(workflowDef.Nodes) > 0 {
-			registry.RegisterWorkflow(workflowDef)
-			log.Printf("[Registry] Loaded sub-workflow template: %s (%s)", workflowDef.ID, workflowDef.Name)
-			return nil
-		}
-
-		// 3. Try to unmarshal and register as a generic template (must have an "id" field at the top level)
-		var genericEntry struct {
-			ID string `json:"id"`
-		}
-		errGeneric := json.Unmarshal(data, &genericEntry)
-		if errGeneric == nil && genericEntry.ID != "" {
-			registry.RegisterGenericTemplate(genericEntry.ID, data)
-			log.Printf("[Registry] Loaded generic JSON template: %s", genericEntry.ID)
-			return nil
-		}
-
-		// If it's not any of the above, check if the JSON is malformed
-		if errTemplate != nil && errWorkflow != nil && errGeneric != nil {
-			var raw map[string]any
-			if errRaw := json.Unmarshal(data, &raw); errRaw != nil {
-				log.Printf("[Registry] Warning: Invalid JSON syntax in file %s: %v", path, errRaw)
+		switch {
+		case probe.WorkflowID != "":
+			var t orchestrator.TaskTemplate
+			if err := json.Unmarshal(data, &t); err != nil {
+				log.Printf("[Registry] Warning: Failed to parse task template %s: %v", path, err)
+				return nil
 			}
+			registry.RegisterTaskTemplate(t)
+			log.Printf("[Registry] Loaded task template: %s (type=%s, workflow=%s)", t.ID, t.Type, t.WorkflowID)
+
+		case len(probe.PluginProperties) > 0:
+			var s orchestrator.SubTaskTemplate
+			if err := json.Unmarshal(data, &s); err != nil {
+				log.Printf("[Registry] Warning: Failed to parse subtask template %s: %v", path, err)
+				return nil
+			}
+			registry.RegisterSubTaskTemplate(s)
+			log.Printf("[Registry] Loaded subtask template: %s (task_type=%s)", s.ID, s.TaskType)
+
+		case len(probe.Nodes) > 0:
+			var wf engine.WorkflowDefinition
+			if err := json.Unmarshal(data, &wf); err != nil {
+				log.Printf("[Registry] Warning: Failed to parse workflow %s: %v", path, err)
+				return nil
+			}
+			registry.RegisterWorkflow(wf)
+			log.Printf("[Registry] Loaded workflow definition: %s (%s)", wf.ID, wf.Name)
+
+		default:
+			registry.RegisterGenericTemplate(probe.ID, data)
+			log.Printf("[Registry] Loaded generic JSON template: %s", probe.ID)
 		}
 
 		return nil

@@ -6,55 +6,30 @@ import (
 	engine "github.com/OpenNSW/go-temporal-workflow"
 )
 
-// TaskTemplateEntry defines the core common fields of any task configuration.
-// All plugin-specific parameters are stored inside PluginProperties and decoded
-// by each individual plugin.
-type TaskTemplateEntry struct {
+// TaskTemplate describes a Task — the macro unit of work activated by a parent
+// workflow. A Task runs a child workflow whose nodes invoke SubTaskTemplates.
+type TaskTemplate struct {
+	ID             string `json:"id"`
+	Type           string `json:"type"`             // user-facing category (e.g. "APPLICATION")
+	WorkflowID     string `json:"workflow_id"`      // points at a registered engine.WorkflowDefinition
+	RenderConfigID string `json:"render_config_id"` // task-level render config
+}
+
+// SubTaskTemplate describes a SubTask — an individual execution step inside a
+// Task's workflow that delegates to a plugin.
+type SubTaskTemplate struct {
 	ID               string          `json:"id"`
-	TaskType         string          `json:"task_type"`         // e.g. "USER_INPUT"
-	PluginProperties json.RawMessage `json:"plugin_properties"` // plugin-specific config (like user_jsonforms_id, external_url)
+	TaskType         string          `json:"task_type"`         // plugin routing key (e.g. "USER_INPUT")
+	PluginProperties json.RawMessage `json:"plugin_properties"` // plugin-specific config
 }
 
-// TaskTemplateRegistry is a simple in-process registry mapping template IDs to their config.
-type TaskTemplateRegistry struct {
-	entries          map[string]TaskTemplateEntry
-	workflows        map[string]engine.WorkflowDefinition
-	genericTemplates map[string]json.RawMessage
-}
-
-// NewTaskTemplateRegistry returns an empty registry.
-// Call Register to add templates, or use NewTaskTemplateRegistryFromDir to load from JSON files.
-func NewTaskTemplateRegistry() *TaskTemplateRegistry {
-	return &TaskTemplateRegistry{
-		entries:          make(map[string]TaskTemplateEntry),
-		workflows:        make(map[string]engine.WorkflowDefinition),
-		genericTemplates: make(map[string]json.RawMessage),
-	}
-}
-
-func (r *TaskTemplateRegistry) Register(entry TaskTemplateEntry) {
-	r.entries[entry.ID] = entry
-}
-
-func (r *TaskTemplateRegistry) Get(id string) (TaskTemplateEntry, bool) {
-	entry, ok := r.entries[id]
-	return entry, ok
-}
-
-func (r *TaskTemplateRegistry) RegisterWorkflow(def engine.WorkflowDefinition) {
-	r.workflows[def.ID] = def
-}
-
-func (r *TaskTemplateRegistry) GetWorkflow(id string) (engine.WorkflowDefinition, bool) {
-	def, ok := r.workflows[id]
-	return def, ok
-}
-
-func (r *TaskTemplateRegistry) RegisterGenericTemplate(id string, raw json.RawMessage) {
-	r.genericTemplates[id] = raw
-}
-
-func (r *TaskTemplateRegistry) GetGenericTemplate(id string) (json.RawMessage, bool) {
-	raw, ok := r.genericTemplates[id]
-	return raw, ok
+// TaskTemplateRegistry is the read-only contract the orchestrator depends on
+// for resolving task definitions, subtask definitions, child workflows, and
+// generic JSON templates. Library consumers supply their own implementation
+// (in-memory, DB-backed, remote, etc.).
+type TaskTemplateRegistry interface {
+	GetTaskTemplate(id string) (TaskTemplate, bool)
+	GetSubTaskTemplate(id string) (SubTaskTemplate, bool)
+	GetWorkflow(id string) (engine.WorkflowDefinition, bool)
+	GetGenericTemplate(id string) (json.RawMessage, bool)
 }

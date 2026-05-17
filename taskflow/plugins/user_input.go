@@ -2,24 +2,19 @@ package plugins
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
-
-	"github.com/OpenNSW/nsw-task-flow/store"
 )
 
 // UserInputPlugin implements a standard human interaction / form submission step.
 type UserInputPlugin struct{}
 
-func NewUserInputPlugin() *UserInputPlugin {
+func NewUserInputPlugin() TaskPlugin {
 	return &UserInputPlugin{}
 }
 
 // UserInputConfig holds properties specific to the user input step
 type UserInputConfig struct {
-	StatusOverride      string `json:"status_override,omitempty"`
-	UserJsonFormsID     string `json:"user_jsonforms_id,omitempty"`
-	ReviewerJsonFormsID string `json:"reviewer_jsonforms_id,omitempty"`
+	StatusOverride string `json:"status_override,omitempty"`
 }
 
 func (p *UserInputPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
@@ -31,51 +26,10 @@ func (p *UserInputPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) 
 			if cfg.StatusOverride != "" {
 				status = cfg.StatusOverride
 			}
-			if cfg.UserJsonFormsID != "" {
-				ctx.Record.UserFormID = cfg.UserJsonFormsID
-			}
 		}
 	}
 
-	ctx.Record.Status = status
-	log.Printf("[Plugin: generic_user_input] Task %s waiting for user interaction (form: %s) at node %s", ctx.Record.TaskID, ctx.Record.UserFormID, ctx.Record.SubTaskNodeID)
+	ctx.Record.State = status
+	log.Printf("[Plugin: generic_user_input] Task %s, at node %s", ctx.Record.TaskID, ctx.Record.SubTaskNodeID)
 	return ErrSuspended
-}
-
-func (p *UserInputPlugin) Render(configRaw json.RawMessage, record store.TaskRecord, getTemplate TemplateRetriever) (map[string]any, error) {
-	var cfg UserInputConfig
-	if len(configRaw) > 0 && string(configRaw) != "null" {
-		_ = json.Unmarshal(configRaw, &cfg)
-	}
-
-	renderInfo := map[string]any{
-		"form_type": "user_input",
-	}
-
-	if cfg.UserJsonFormsID != "" {
-		raw, exists := getTemplate(cfg.UserJsonFormsID)
-		if !exists {
-			return nil, fmt.Errorf("user json form template %q not found", cfg.UserJsonFormsID)
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal user json form template %q: %w", cfg.UserJsonFormsID, err)
-		}
-		renderInfo["user_form_id"] = cfg.UserJsonFormsID
-		renderInfo["user_form_schema"] = decoded
-	}
-
-	if cfg.ReviewerJsonFormsID != "" {
-		raw, exists := getTemplate(cfg.ReviewerJsonFormsID)
-		if !exists {
-			return nil, fmt.Errorf("reviewer json form template %q not found", cfg.ReviewerJsonFormsID)
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal reviewer json form template %q: %w", cfg.ReviewerJsonFormsID, err)
-		}
-		renderInfo["reviewer_form_schema"] = decoded
-		renderInfo["reviewer_form_id"] = cfg.ReviewerJsonFormsID
-	}
-	return renderInfo, nil
 }

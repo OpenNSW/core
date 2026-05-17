@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -8,12 +9,10 @@ import (
 // It stores both Parent (macro journey) and Task (active sub-process) coordinates separately,
 // and holds dynamic task execution data as a generic key-value map.
 type TaskRecord struct {
-	TaskID         string `json:"task_id"`
-	TaskType       string `json:"task_type"`
-	UserFormID     string `json:"user_form_id"`
-	ReviewerFormID string `json:"reviewer_form_id"`
-	// Status drives UI rendering ("PENDING_USER", "QUEUED_EXTERNALLY", "COMPLETED")
-	Status string `json:"status"`
+	TaskID       string          `json:"task_id"`
+	TaskType     string          `json:"task_type"`
+	State        string          `json:"status"` // State drives UI rendering ("PENDING_USER", "QUEUED_EXTERNALLY", "COMPLETED")
+	RenderConfig json.RawMessage `json:"render_config"`
 
 	// Parent coordinates — used to wake the parent workflow when this task finishes
 	ParentWorkflowID string `json:"parent_workflow_id"`
@@ -32,6 +31,7 @@ type TaskRecord struct {
 	Data map[string]any `json:"data"`
 
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TaskStore is an interface that any persistent or in-memory database used by the TaskManager should implement.

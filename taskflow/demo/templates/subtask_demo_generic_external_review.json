@@ -2,7 +2,6 @@
   "id": "demo_generic_external_review",
   "task_type": "EXTERNAL_REVIEW",
   "plugin_properties": {
-    "reviewer_jsonforms_id": "phyto_reviewer_form_v1",
     "external_url": "http://review-agency/api/review"
   }
 }

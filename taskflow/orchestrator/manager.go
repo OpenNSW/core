@@ -2,14 +2,15 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"time"
 
 	engine "github.com/OpenNSW/go-temporal-workflow"
 	"github.com/OpenNSW/nsw-task-flow/plugins"
+	"github.com/OpenNSW/nsw-task-flow/renderer"
 	"github.com/OpenNSW/nsw-task-flow/store"
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/activity"
@@ -65,7 +66,8 @@ type TaskCompletedCallback func(parentWorkflowID string, parentRunID string, par
 // It bridges macro-level workflows and micro-level interactive tasks via a single DB entry per task.
 type TaskManager struct {
 	db                  store.TaskStore
-	registry            *TaskTemplateRegistry
+	renderer            renderer.Renderer
+	registry            TaskTemplateRegistry
 	pluginsRegistry     *plugins.Registry
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
@@ -81,10 +83,11 @@ type TaskManager struct {
 //     typically invokes Parent.TaskDone to resume the parent workflow using stored coordinates.
 func NewTaskManager(
 	db store.TaskStore,
-	registry *TaskTemplateRegistry,
+	registry TaskTemplateRegistry,
 	pluginsRegistry *plugins.Registry,
 	taskWorkflowManager engine.TemporalManager,
 	onTaskCompleted TaskCompletedCallback,
+	renderer renderer.Renderer,
 ) *TaskManager {
 	return &TaskManager{
 		db:                  db,
@@ -92,6 +95,7 @@ func NewTaskManager(
 		pluginsRegistry:     pluginsRegistry,
 		onTaskCompleted:     onTaskCompleted,
 		taskWorkflowManager: taskWorkflowManager,
+		renderer:            renderer,
 	}
 }
 
@@ -99,22 +103,19 @@ func NewTaskManager(
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
 func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, error) {
-	var def engine.WorkflowDefinition
-	var regEntry TaskTemplateEntry
+	template, ok := tm.registry.GetTaskTemplate(payload.TaskTemplateID)
+	if !ok {
+		return nil, fmt.Errorf("unknown task_template_id: %s", payload.TaskTemplateID)
+	}
 
-	if workflowDef, exists := tm.registry.GetWorkflow(payload.TaskTemplateID); exists {
-		def = workflowDef
-		regEntry = TaskTemplateEntry{
-			ID:       payload.TaskTemplateID,
-			TaskType: "COMPOSITE",
-		}
-		log.Printf("[TaskManager] Found registered sub-workflow definition for template ID %s", payload.TaskTemplateID)
-	} else {
-		var ok bool
-		regEntry, ok = tm.registry.Get(payload.TaskTemplateID)
-		if !ok {
-			return nil, fmt.Errorf("unknown task_template_id: %s (neither registered as sub-workflow nor task template)", payload.TaskTemplateID)
-		}
+	wfDef, ok := tm.registry.GetWorkflow(template.WorkflowID)
+	if !ok {
+		return nil, fmt.Errorf("workflow %q referenced by task template %q not registered", template.WorkflowID, template.ID)
+	}
+
+	renderConfig, ok := tm.registry.GetGenericTemplate(template.RenderConfigID)
+	if !ok {
+		return nil, fmt.Errorf("render config %q referenced by task template %q not registered", template.RenderConfigID, template.ID)
 	}
 
 	taskID := "task-" + uuid.New().String()[:8]
@@ -128,8 +129,9 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 
 	record := store.TaskRecord{
 		TaskID:           taskID,
-		TaskType:         regEntry.TaskType,
-		Status:           "STARTING",
+		TaskType:         template.Type,
+		State:            "STARTING",
+		RenderConfig:     renderConfig,
 		ParentWorkflowID: payload.WorkflowID,
 		ParentRunID:      payload.RunID,
 		ParentNodeID:     payload.NodeID,
@@ -138,17 +140,17 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 		CreatedAt:        time.Now(),
 	}
 	tm.db.SaveTask(record)
-	log.Printf("[TaskManager] Created Task record %s (template=%s, task_type=%s)", taskID, payload.TaskTemplateID, regEntry.TaskType)
+	log.Printf("[TaskManager] Created Task record %s (template=%s, type=%s)", taskID, payload.TaskTemplateID, template.Type)
 
 	// Verify that there are no parallel execution paths, as TaskRecord only stores coordinates for a single active subtask.
-	for _, node := range def.Nodes {
+	for _, node := range wfDef.Nodes {
 		if node.Type == engine.NodeTypeGateway &&
 			(node.GatewayType == engine.GatewayTypeParallelSplit || node.GatewayType == "INCLUSIVE_SPLIT") {
-			return nil, fmt.Errorf("parallel subtasks are not supported: task workflow %s contains parallel gateway %s (%s)", def.ID, node.ID, node.GatewayType)
+			return nil, fmt.Errorf("parallel subtasks are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType)
 		}
 	}
 
-	err := tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, def, initialData)
+	err := tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, wfDef, initialData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start task workflow: %v", err)
 	}
@@ -172,16 +174,16 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 		setNestedKey(record.Data, k, v)
 	}
 
-	// 1. Look up the task template to find the associated plugin config
-	regEntry, ok := tm.registry.Get(payload.TaskTemplateID)
+	// 1. Look up the subtask template to find the associated plugin config
+	subTemplate, ok := tm.registry.GetSubTaskTemplate(payload.TaskTemplateID)
 	if !ok {
 		return nil, fmt.Errorf("[StartSubTask] unknown task_template_id: %s", payload.TaskTemplateID)
 	}
 
 	// 2. Fetch the plugin from our registry using TaskType
-	plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType)
+	plugin, ok := tm.pluginsRegistry.Get(subTemplate.TaskType)
 	if !ok {
-		return nil, fmt.Errorf("[StartSubTask] unregistered plugin for task type %s (required for template: %s)", regEntry.TaskType, payload.TaskTemplateID)
+		return nil, fmt.Errorf("[StartSubTask] unregistered plugin for task type %s (required for template: %s)", subTemplate.TaskType, payload.TaskTemplateID)
 	}
 
 	// 3. Execute the plugin
@@ -191,13 +193,13 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 		Inputs:  payload.Inputs,
 	}
 
-	err := plugin.Execute(pluginCtx, regEntry.PluginProperties)
+	err := plugin.Execute(pluginCtx, subTemplate.PluginProperties)
 	if errors.Is(err, plugins.ErrSuspended) {
 		tm.db.SaveTask(record)
 		return nil, activity.ErrResultPending
 	}
 	if err != nil {
-		return nil, fmt.Errorf("[StartSubTask] plugin for task type %q execution failed: %w", regEntry.TaskType, err)
+		return nil, fmt.Errorf("[StartSubTask] plugin for task type %q execution failed: %w", subTemplate.TaskType, err)
 	}
 
 	tm.db.SaveTask(record)
@@ -217,7 +219,7 @@ func (tm *TaskManager) HandleTaskCompletion(workflowID string, finalVariables ma
 
 	log.Printf("[TaskManager] Task workflow %s completed for task %s", workflowID, record.TaskID)
 
-	record.Status = "COMPLETED"
+	record.State = "COMPLETED"
 	tm.db.SaveTask(record)
 
 	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
@@ -238,7 +240,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	if record.Status == "COMPLETED" {
+	if record.State == "COMPLETED" {
 		return fmt.Errorf("task %s already completed", taskID)
 	}
 
@@ -270,76 +272,39 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 
 // GetTaskRenderInfo retrieves a task record and dynamically decorates it with rich render metadata
 // (like JSON schemas) fetched on-the-fly from its executing plugin.
-func (tm *TaskManager) GetTaskRenderInfo(taskID string) (map[string]any, error) {
+func (tm *TaskManager) GetTaskRenderInfo(taskID string) (TaskView, error) {
 	record, exists := tm.db.GetTask(taskID)
 	if !exists {
-		return nil, fmt.Errorf("task record %s not found", taskID)
+		return TaskView{}, fmt.Errorf("task record %s not found", taskID)
 	}
 
-	// Base render info matching the database record
-	res := map[string]any{
-		"task_id":                 record.TaskID,
-		"task_type":               record.TaskType,
-		"status":                  record.Status,
-		"parent_workflow_id":      record.ParentWorkflowID,
-		"parent_run_id":           record.ParentRunID,
-		"parent_node_id":          record.ParentNodeID,
-		"task_workflow_id":        record.TaskWorkflowID,
-		"task_run_id":             record.TaskRunID,
-		"subtask_node_id":         record.SubTaskNodeID,
-		"active_task_template_id": record.ActiveTaskTemplateID,
-		"data":                    record.Data,
-		"created_at":              record.CreatedAt,
+	view, err := tm.renderer.Render(record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
+	if err != nil {
+		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
 	}
 
-	// If there is an active subtask, fetch its template and let the plugin contribute render schemas/info
-	if record.ActiveTaskTemplateID != "" {
-		if regEntry, ok := tm.registry.Get(record.ActiveTaskTemplateID); ok {
-			if plugin, ok := tm.pluginsRegistry.Get(regEntry.TaskType); ok {
-				if renderable, ok := plugin.(plugins.RenderableTaskPlugin); ok {
-					getGenericTemplateFunc := func(id string) (json.RawMessage, bool) {
-						return tm.registry.GetGenericTemplate(id)
-					}
-					pluginInfo, err := renderable.Render(regEntry.PluginProperties, record, getGenericTemplateFunc)
-					if err == nil && pluginInfo != nil {
-						for k, v := range pluginInfo {
-							res[k] = v
-						}
-					} else if err != nil {
-						log.Printf("[TaskManager] Render warning on task %s (task type %s): %v", taskID, regEntry.TaskType, err)
-					}
-				}
-			} else {
-				log.Printf("[TaskManager] Warning: plugin for task type %s not found in plugins registry for task %s", regEntry.TaskType, taskID)
-			}
-		} else {
-			log.Printf("[TaskManager] Warning: active task template %s not found in registry for task %s", record.ActiveTaskTemplateID, taskID)
-		}
+	res := TaskView{
+		TaskID:    record.TaskID,
+		TaskType:  record.TaskType,
+		State:     record.State,
+		CreatedAt: record.CreatedAt,
+		UpdatedAt: record.UpdatedAt,
+		View:      view, // actually attach the render output
 	}
 
 	return res, nil
 }
 
 // GetAllTasksRenderInfo retrieves all tasks in the store and decorates each of them with dynamic render info.
-func (tm *TaskManager) GetAllTasksRenderInfo() []map[string]any {
+func (tm *TaskManager) GetAllTasksRenderInfo() []TaskView {
 	records := tm.db.GetAllTasks()
-	resList := make([]map[string]any, 0, len(records))
+	resList := make([]TaskView, 0, len(records))
 	for _, r := range records {
 		info, err := tm.GetTaskRenderInfo(r.TaskID)
-		if err == nil {
-			resList = append(resList, info)
-		} else {
-			// Fallback to basic record mapping on error
-			resList = append(resList, map[string]any{
-				"task_id":          r.TaskID,
-				"task_type":        r.TaskType,
-				"user_form_id":     r.UserFormID,
-				"reviewer_form_id": r.ReviewerFormID,
-				"status":           r.Status,
-				"data":             r.Data,
-				"created_at":       r.CreatedAt,
-			})
+		if err != nil {
+			slog.Info(fmt.Sprintf("failed to render task %s: %v", r.TaskID, err))
 		}
+		resList = append(resList, info)
 	}
 	return resList
 }

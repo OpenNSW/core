@@ -28,15 +28,6 @@ type TaskPlugin interface {
 	Execute(ctx PluginContext, config json.RawMessage) error
 }
 
-// TemplateRetriever defines the function signature for fetching raw JSON templates by their unique ID.
-type TemplateRetriever func(string) (json.RawMessage, bool)
-
-// RenderableTaskPlugin extends TaskPlugin with the ability to dynamically resolve and supply frontend schema components or custom metadata for interactive steps.
-type RenderableTaskPlugin interface {
-	TaskPlugin
-	Render(configRaw json.RawMessage, record store.TaskRecord, getTemplate TemplateRetriever) (map[string]any, error)
-}
-
 // Registry is a thread-safe registry of task plugins keyed by taskType and pluginName.
 type Registry struct {
 	mu      sync.RWMutex

@@ -2,15 +2,64 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
 
 	engine "github.com/OpenNSW/go-temporal-workflow"
 	"github.com/OpenNSW/nsw-task-flow/plugins"
+	"github.com/OpenNSW/nsw-task-flow/renderer"
 	"github.com/OpenNSW/nsw-task-flow/store"
 	"go.temporal.io/sdk/activity"
 )
+
+// ---------------------------------------------------------------------------
+// Fake registry (in-memory implementation of TaskTemplateRegistry for tests)
+// ---------------------------------------------------------------------------
+
+type fakeRegistry struct {
+	tasks    map[string]TaskTemplate
+	subTasks map[string]SubTaskTemplate
+	wfs      map[string]engine.WorkflowDefinition
+	generics map[string]json.RawMessage
+}
+
+func newFakeRegistry() *fakeRegistry {
+	return &fakeRegistry{
+		tasks:    make(map[string]TaskTemplate),
+		subTasks: make(map[string]SubTaskTemplate),
+		wfs:      make(map[string]engine.WorkflowDefinition),
+		generics: make(map[string]json.RawMessage),
+	}
+}
+
+func (r *fakeRegistry) GetTaskTemplate(id string) (TaskTemplate, bool) {
+	t, ok := r.tasks[id]
+	return t, ok
+}
+func (r *fakeRegistry) GetSubTaskTemplate(id string) (SubTaskTemplate, bool) {
+	s, ok := r.subTasks[id]
+	return s, ok
+}
+func (r *fakeRegistry) GetWorkflow(id string) (engine.WorkflowDefinition, bool) {
+	w, ok := r.wfs[id]
+	return w, ok
+}
+func (r *fakeRegistry) GetGenericTemplate(id string) (json.RawMessage, bool) {
+	g, ok := r.generics[id]
+	return g, ok
+}
+
+// ---------------------------------------------------------------------------
+// No-op renderer
+// ---------------------------------------------------------------------------
+
+type noopRenderer struct{}
+
+func (noopRenderer) Render(_ json.RawMessage, _ renderer.Facts) (renderer.RenderResult, error) {
+	return renderer.RenderResult{}, nil
+}
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -119,28 +168,32 @@ func newTestPluginsRegistry() *plugins.Registry {
 	return pr
 }
 
-func newTestRegistry() *TaskTemplateRegistry {
-	r := NewTaskTemplateRegistry()
-	r.Register(TaskTemplateEntry{
-		ID:               "test_template",
-		TaskType:         "USER_INPUT",
-		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
-	})
-	r.Register(TaskTemplateEntry{
+func newTestRegistry() *fakeRegistry {
+	r := newFakeRegistry()
+	r.tasks["test_template"] = TaskTemplate{
+		ID:             "test_template",
+		Type:           "APPLICATION",
+		WorkflowID:     "test_workflow",
+		RenderConfigID: "test_render_config",
+	}
+	r.wfs["test_workflow"] = engine.WorkflowDefinition{ID: "test_workflow"}
+	r.generics["test_render_config"] = json.RawMessage(`{}`)
+
+	r.subTasks["generic_user_input"] = SubTaskTemplate{
 		ID:               "generic_user_input",
 		TaskType:         "USER_INPUT",
 		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
-	})
-	r.Register(TaskTemplateEntry{
+	}
+	r.subTasks["generic_external_review"] = SubTaskTemplate{
 		ID:               "generic_external_review",
 		TaskType:         "EXTERNAL_REVIEW",
 		PluginProperties: []byte(`{"reviewer_jsonforms_id": "reviewer_form", "external_url": "http://localhost/review"}`),
-	})
+	}
 	return r
 }
 
-func newTestTaskManager(db store.TaskStore, registry *TaskTemplateRegistry, tm engine.TemporalManager, cb TaskCompletedCallback) *TaskManager {
-	return NewTaskManager(db, registry, newTestPluginsRegistry(), tm, cb)
+func newTestTaskManager(db store.TaskStore, registry TaskTemplateRegistry, tm engine.TemporalManager, cb TaskCompletedCallback) *TaskManager {
+	return NewTaskManager(db, registry, newTestPluginsRegistry(), tm, cb, noopRenderer{})
 }
 
 func noopCallback(_, _, _ string, _ map[string]any) error { return nil }
@@ -193,8 +246,8 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		t.Fatalf("expected exactly 1 task record, got %d", len(tasks))
 	}
 	task := tasks[0]
-	if task.Status != "STARTING" {
-		t.Errorf("expected status 'STARTING', got '%s'", task.Status)
+	if task.State != "STARTING" {
+		t.Errorf("expected status 'STARTING', got '%s'", task.State)
 	}
 	if task.ParentWorkflowID != "parent-workflow" {
 		t.Errorf("expected parent workflow 'parent-workflow', got '%s'", task.ParentWorkflowID)
@@ -212,8 +265,8 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	}
 
 	task, _ = storeMock.GetTask(task.TaskID)
-	if task.Status != "PENDING_USER" {
-		t.Errorf("expected status 'PENDING_USER', got '%s'", task.Status)
+	if task.State != "PENDING_USER" {
+		t.Errorf("expected status 'PENDING_USER', got '%s'", task.State)
 	}
 	if task.TaskRunID != "task-run" {
 		t.Errorf("expected Task run ID 'task-run', got '%s'", task.TaskRunID)
@@ -261,8 +314,8 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	}
 
 	task, _ = storeMock.GetTask(task.TaskID)
-	if task.Status != "COMPLETED" {
-		t.Errorf("expected task status 'COMPLETED', got '%s'", task.Status)
+	if task.State != "COMPLETED" {
+		t.Errorf("expected task status 'COMPLETED', got '%s'", task.State)
 	}
 	if !parentCallbackCalled {
 		t.Error("expected parent wake-up callback to be invoked")
@@ -324,7 +377,7 @@ func TestStartSubTask_UnknownTaskTemplateID(t *testing.T) {
 	db.SaveTask(store.TaskRecord{
 		TaskID:         "task-1",
 		TaskWorkflowID: "task-workflow-1",
-		Status:         "STARTING",
+		State:          "STARTING",
 		Data:           map[string]any{},
 	})
 
@@ -344,7 +397,7 @@ func TestStartSubTask_ExternalReviewPath(t *testing.T) {
 	db.SaveTask(store.TaskRecord{
 		TaskID:         "task-ext",
 		TaskWorkflowID: "task-ext-workflow",
-		Status:         "STARTING",
+		State:          "STARTING",
 		Data:           map[string]any{},
 	})
 
@@ -361,8 +414,8 @@ func TestStartSubTask_ExternalReviewPath(t *testing.T) {
 	}
 
 	task, _ := db.GetTask("task-ext")
-	if task.Status != "QUEUED_EXTERNALLY" {
-		t.Errorf("expected status QUEUED_EXTERNALLY, got %s", task.Status)
+	if task.State != "QUEUED_EXTERNALLY" {
+		t.Errorf("expected status QUEUED_EXTERNALLY, got %s", task.State)
 	}
 }
 
@@ -383,7 +436,7 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.SaveTask(store.TaskRecord{
 		TaskID: "task-done",
-		Status: "COMPLETED",
+		State:  "COMPLETED",
 		Data:   map[string]any{},
 	})
 
@@ -413,7 +466,7 @@ func TestHandleTaskCompletion_CallbackError_TaskStillMarkedCompleted(t *testing.
 	db.SaveTask(store.TaskRecord{
 		TaskID:         "task-cb-err",
 		TaskWorkflowID: "task-cb-workflow",
-		Status:         "PENDING_USER",
+		State:          "PENDING_USER",
 		Data:           map[string]any{},
 	})
 
@@ -428,8 +481,8 @@ func TestHandleTaskCompletion_CallbackError_TaskStillMarkedCompleted(t *testing.
 	}
 
 	task, _ := db.GetTask("task-cb-err")
-	if task.Status != "COMPLETED" {
-		t.Errorf("expected status COMPLETED even after callback error, got %s", task.Status)
+	if task.State != "COMPLETED" {
+		t.Errorf("expected status COMPLETED even after callback error, got %s", task.State)
 	}
 }
 

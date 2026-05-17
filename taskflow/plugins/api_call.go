@@ -13,7 +13,7 @@ type APICallPlugin struct {
 }
 
 // NewAPICallPlugin creates a new APICallPlugin.
-func NewAPICallPlugin(dispatcher Dispatcher) *APICallPlugin {
+func NewAPICallPlugin(dispatcher Dispatcher) TaskPlugin {
 	if dispatcher == nil {
 		dispatcher = DefaultHTTPDispatcher
 	}
@@ -37,7 +37,7 @@ func (p *APICallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 		return fmt.Errorf("missing 'url' in generic_api_call config")
 	}
 
-	ctx.Record.Status = "DISPATCHED"
+	ctx.Record.State = "DISPATCHED"
 
 	log.Printf("[Plugin: generic_api_call] Dispatching fire-and-forget payload for task %s to URL: %s", ctx.Record.TaskID, cfg.URL)
 

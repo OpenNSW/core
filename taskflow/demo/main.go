@@ -35,7 +35,7 @@ func main() {
 	// 2. Store & Task Template Registry
 	// Templates are loaded from ./demo/templates/*.json — add a new file to register a new flow.
 	db := NewTaskDB()
-	registry := orchestrator.NewTaskTemplateRegistry()
+	registry := NewTemplateRegistry()
 	if err := loadTemplates(registry, "demo/templates"); err != nil {
 		log.Fatalln("Failed to load task template registry:", err)
 	}
@@ -125,7 +125,7 @@ func main() {
 		return nil
 	}
 
-	tm = orchestrator.NewTaskManager(db, registry, pluginsRegistry, taskWorkflowManager, onTaskCompleted)
+	tm = orchestrator.NewTaskManager(db, registry, pluginsRegistry, taskWorkflowManager, onTaskCompleted, SimpleRenderer{})
 
 	apiServer := newServer(tm, parentWorkflowManager)
 	apiServer.start(":8080")

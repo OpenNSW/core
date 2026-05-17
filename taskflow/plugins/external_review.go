@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-
-	"github.com/OpenNSW/nsw-task-flow/store"
 )
 
 // ExternalReviewPlugin manages asynchronous delegation of task steps to third-party government agencies.
@@ -14,7 +12,7 @@ type ExternalReviewPlugin struct {
 }
 
 // NewExternalReviewPlugin returns a plugin with a custom or default HTTP dispatcher.
-func NewExternalReviewPlugin(dispatcher Dispatcher) *ExternalReviewPlugin {
+func NewExternalReviewPlugin(dispatcher Dispatcher) TaskPlugin {
 	if dispatcher == nil {
 		dispatcher = DefaultHTTPDispatcher
 	}
@@ -25,9 +23,7 @@ func NewExternalReviewPlugin(dispatcher Dispatcher) *ExternalReviewPlugin {
 
 // ExternalReviewConfig holds properties decoded from the TaskTemplate's JSON configuration.
 type ExternalReviewConfig struct {
-	ExternalURL         string `json:"external_url"`
-	ReviewerJsonFormsID string `json:"reviewer_jsonforms_id,omitempty"`
-	UserJsonFormsID     string `json:"user_jsonforms_id,omitempty"`
+	ExternalURL string `json:"external_url"`
 }
 
 func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
@@ -40,11 +36,7 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 		return fmt.Errorf("missing 'external_url' in external review plugin config")
 	}
 
-	if cfg.ReviewerJsonFormsID != "" {
-		ctx.Record.ReviewerFormID = cfg.ReviewerJsonFormsID
-	}
-
-	ctx.Record.Status = "QUEUED_EXTERNALLY"
+	ctx.Record.State = "QUEUED_EXTERNALLY"
 	log.Printf("[Plugin: generic_external_review] Dispatching task %s to external URL: %s", ctx.Record.TaskID, cfg.ExternalURL)
 
 	err := p.dispatcher(ctx.Context, cfg.ExternalURL, ctx.Record.TaskID, ctx.Record.Data)
@@ -52,45 +44,6 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 		return fmt.Errorf("external dispatch failed: %w", err)
 	}
 
-	log.Printf("[Plugin: generic_external_review] Successfully dispatched task %s (active step: %s, form: %s)", ctx.Record.TaskID, ctx.Record.SubTaskNodeID, ctx.Record.ReviewerFormID)
+	log.Printf("[Plugin: generic_external_review] Successfully dispatched task %s (active step: %s)", ctx.Record.TaskID, ctx.Record.SubTaskNodeID)
 	return ErrSuspended
-}
-
-func (p *ExternalReviewPlugin) Render(configRaw json.RawMessage, record store.TaskRecord, getTemplate TemplateRetriever) (map[string]any, error) {
-	var cfg ExternalReviewConfig
-	if len(configRaw) > 0 && string(configRaw) != "null" {
-		_ = json.Unmarshal(configRaw, &cfg)
-	}
-
-	renderInfo := map[string]any{
-		"form_type": "external_review",
-	}
-
-	if cfg.ReviewerJsonFormsID != "" {
-		raw, exists := getTemplate(cfg.ReviewerJsonFormsID)
-		if !exists {
-			return nil, fmt.Errorf("reviewer json form template %q not found", cfg.ReviewerJsonFormsID)
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal reviewer json form template %q: %w", cfg.ReviewerJsonFormsID, err)
-		}
-		renderInfo["reviewer_form_schema"] = decoded
-		renderInfo["reviewer_form_id"] = cfg.ReviewerJsonFormsID
-	}
-
-	if cfg.UserJsonFormsID != "" {
-		raw, exists := getTemplate(cfg.UserJsonFormsID)
-		if !exists {
-			return nil, fmt.Errorf("user json form template %q not found", cfg.UserJsonFormsID)
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal user json form template %q: %w", cfg.UserJsonFormsID, err)
-		}
-		renderInfo["user_form_schema"] = decoded
-		renderInfo["user_form_id"] = cfg.UserJsonFormsID
-	}
-
-	return renderInfo, nil
 }
