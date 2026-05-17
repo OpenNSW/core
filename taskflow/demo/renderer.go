@@ -25,16 +25,25 @@ func (SimpleRenderer) Render(config json.RawMessage, facts renderer.Facts) (rend
 		return renderer.RenderResult{}, nil
 	}
 
-	var byState map[string]renderer.RenderResult
-	if err := json.Unmarshal(config, &byState); err != nil {
+	// First pass: keep each top-level value as a raw message so that
+	// non-state metadata (e.g. "id") can coexist with state keys without
+	// triggering type errors. We only resolve the entry we actually need.
+	var byKey map[string]json.RawMessage
+	if err := json.Unmarshal(config, &byKey); err != nil {
 		return nil, fmt.Errorf("parse render config: %w", err)
 	}
 
-	if result, ok := byState[facts.State]; ok {
-		return result, nil
+	raw, ok := byKey[facts.State]
+	if !ok {
+		raw, ok = byKey["default"]
 	}
-	if result, ok := byState["default"]; ok {
-		return result, nil
+	if !ok {
+		return renderer.RenderResult{}, nil
 	}
-	return renderer.RenderResult{}, nil
+
+	var result renderer.RenderResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("parse render config entry %q: %w", facts.State, err)
+	}
+	return result, nil
 }
