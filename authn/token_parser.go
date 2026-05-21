@@ -26,6 +26,7 @@ type tokenClaims struct {
 	Email       *string          `json:"email,omitempty"`
 	PhoneNumber *string          `json:"phone_number,omitempty"`
 	OUID        *string          `json:"ouId,omitempty"`
+	OUHandle    *string          `json:"ouHandle,omitempty"`
 	Roles       []string         `json:"roles,omitempty"`
 }
 
@@ -45,6 +46,7 @@ type UserPrincipal struct {
 	Email       string   `json:"email"`
 	PhoneNumber *string  `json:"phone_number,omitempty"`
 	OUID        string   `json:"ouId"`
+	OUHandle    string   `json:"ouHandle"`
 	Roles       []string `json:"roles"`
 }
 
@@ -221,6 +223,9 @@ func (te *TokenExtractor) userPrincipalFromClaims(claims *tokenClaims) (*UserPri
 	if claims.OUID == nil {
 		return nil, fmt.Errorf("jwt missing ouId claim for user principal")
 	}
+	if claims.OUHandle == nil {
+		return nil, fmt.Errorf("jwt missing ouHandle claim for user principal")
+	}
 
 	// Phone number is optional as not all IdPs may provide it, but if it's present it should not be empty.
 	if claims.PhoneNumber != nil && strings.TrimSpace(*claims.PhoneNumber) == "" {
@@ -232,6 +237,7 @@ func (te *TokenExtractor) userPrincipalFromClaims(claims *tokenClaims) (*UserPri
 		Email:       *claims.Email,
 		PhoneNumber: claims.PhoneNumber,
 		OUID:        *claims.OUID,
+		OUHandle:    *claims.OUHandle,
 		Roles:       claims.Roles,
 	}, nil
 }

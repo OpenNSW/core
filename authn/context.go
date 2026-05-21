@@ -20,7 +20,7 @@ import (
 //	    db *sql.DB
 //	}
 //
-//	func (s *MyUserService) GetOrCreateUser(userID, email, phone, organizationID string) (*string, error) {
+//	func (s *MyUserService) GetOrCreateUser(userID, email, phone, organizationID, ouHandle string) (*string, error) {
 //	    // Your implementation to create or fetch the user idempotently
 //	    persistedID := "generated-id"
 //	    if err := s.db.Exec("INSERT INTO users ...", userID, email, phone, organizationID).Error; err != nil {
@@ -37,6 +37,7 @@ type UserProfileService interface {
 	//   - email: user's email address (required)
 	//   - phone: user's phone number (can be empty)
 	//   - organizationID: organization/tenant identifier (required)
+	//   - ouHandle: organization unit handle from the identity provider (required)
 	//
 	// Implementation notes:
 	//   - Should be idempotent: calling multiple times with same idpUserID should be safe
@@ -45,7 +46,7 @@ type UserProfileService interface {
 	//   - Should not return error if user already exists
 	//   - If err is non-nil, the returned user ID should be nil
 	// Returns user ID of the created or existing user, or an error if the operation fails.
-	GetOrCreateUser(idpUserID, email, phone, organizationID string) (*string, error)
+	GetOrCreateUser(idpUserID, email, phone, organizationID, ouHandle string) (*string, error)
 }
 
 // UserContext represents a user principal's runtime context injected into each request.
@@ -58,6 +59,7 @@ type UserContext struct {
 	Email       string   `json:"email"`
 	PhoneNumber string   `json:"phoneNumber"`
 	OUID        string   `json:"ouId"`
+	OUHandle    string   `json:"ouHandle"`
 	Roles       []string `json:"roles"`
 }
 

@@ -19,10 +19,11 @@ const (
 	testClientID = "TRADER_PORTAL_APP"
 	testKid      = "test-kid"
 
-	testUserID = "TRADER-001"
-	testEmail  = "trader@example.com"
-	testPhone  = "+61400111222"
-	testOUID   = "OU-001"
+	testUserID   = "TRADER-001"
+	testEmail    = "trader@example.com"
+	testPhone    = "+61400111222"
+	testOUID     = "OU-001"
+	testOUHandle = "ou-001"
 )
 
 func newTokenExtractor(t *testing.T) (*TokenExtractor, *rsa.PrivateKey, func()) {
@@ -75,6 +76,7 @@ func newUserToken(t *testing.T, privateKey *rsa.PrivateKey) string {
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
 	claims["ouId"] = testOUID
+	claims["ouHandle"] = testOUHandle
 	claims["roles"] = []string{"exporter"}
 	return signToken(t, privateKey, claims)
 }

@@ -86,6 +86,7 @@ func TestTokenExtractor_ExtractPrincipalFromHeader_MissingClaims(t *testing.T) {
 		claims["email"] = testEmail
 		claims["phone_number"] = testPhone
 		claims["ouId"] = testOUID
+		claims["ouHandle"] = testOUHandle
 		claims["roles"] = []string{"exporter"}
 		return claims
 	}
@@ -151,6 +152,7 @@ func TestUserPrincipalFromClaims(t *testing.T) {
 		Email:            strPtr(testEmail),
 		PhoneNumber:      strPtr(testPhone),
 		OUID:             strPtr(testOUID),
+		OUHandle:         strPtr(testOUHandle),
 		Roles:            []string{"exporter"},
 	}
 
@@ -161,7 +163,7 @@ func TestUserPrincipalFromClaims(t *testing.T) {
 	if principal.UserID != testUserID || principal.Email != testEmail || principal.PhoneNumber == nil || *principal.PhoneNumber != testPhone {
 		t.Fatalf("unexpected principal: %#v", principal)
 	}
-	if principal.OUID != testOUID || len(principal.Roles) != 1 || principal.Roles[0] != "exporter" {
+	if principal.OUID != testOUID || principal.OUHandle != testOUHandle || len(principal.Roles) != 1 || principal.Roles[0] != "exporter" {
 		t.Fatalf("unexpected claims mapping: %#v", principal)
 	}
 
@@ -169,8 +171,9 @@ func TestUserPrincipalFromClaims(t *testing.T) {
 		name   string
 		claims *tokenClaims
 	}{
-		{name: "missing email", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, OUID: strPtr(testOUID)}},
-		{name: "missing ou id", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, Email: strPtr(testEmail)}},
+		{name: "missing email", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, OUID: strPtr(testOUID), OUHandle: strPtr(testOUHandle)}},
+		{name: "missing ou id", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, Email: strPtr(testEmail), OUHandle: strPtr(testOUHandle)}},
+		{name: "missing ou handle", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, Email: strPtr(testEmail), OUID: strPtr(testOUID)}},
 	}
 
 	for _, tt := range missingClaims {
@@ -187,6 +190,7 @@ func TestUserPrincipalFromClaims(t *testing.T) {
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID},
 			Email:            strPtr(testEmail),
 			OUID:             strPtr(testOUID),
+			OUHandle:         strPtr(testOUHandle),
 		}
 		principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims)
 		if err != nil {
@@ -226,6 +230,7 @@ func TestTokenExtractor_JWKSIsCached(t *testing.T) {
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
 	claims["ouId"] = testOUID
+	claims["ouHandle"] = testOUHandle
 	claims["roles"] = []string{"exporter"}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -293,6 +298,7 @@ func TestTokenExtractor_RefreshesJWKSOnUnknownKid(t *testing.T) {
 	oldClaims["email"] = testEmail
 	oldClaims["phone_number"] = testPhone
 	oldClaims["ouId"] = testOUID
+	oldClaims["ouHandle"] = testOUHandle
 	oldClaims["roles"] = []string{"exporter"}
 
 	oldToken := jwt.NewWithClaims(jwt.SigningMethodRS256, oldClaims)
@@ -307,6 +313,7 @@ func TestTokenExtractor_RefreshesJWKSOnUnknownKid(t *testing.T) {
 	newClaims["email"] = testEmail
 	newClaims["phone_number"] = testPhone
 	newClaims["ouId"] = testOUID
+	newClaims["ouHandle"] = testOUHandle
 	newClaims["roles"] = []string{"exporter"}
 
 	newToken := jwt.NewWithClaims(jwt.SigningMethodRS256, newClaims)
@@ -360,6 +367,7 @@ func TestTokenExtractor_UnknownKidAfterRefresh(t *testing.T) {
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
 	claims["ouId"] = testOUID
+	claims["ouHandle"] = testOUHandle
 	claims["roles"] = []string{"exporter"}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -395,6 +403,7 @@ func TestTokenExtractor_JWKSFetchError(t *testing.T) {
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
 	claims["ouId"] = testOUID
+	claims["ouHandle"] = testOUHandle
 	claims["roles"] = []string{"exporter"}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)

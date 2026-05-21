@@ -12,6 +12,7 @@ func TestGetAuthContext_FromRequest(t *testing.T) {
 		IDPUserID: testUserID,
 		Email:     testEmail,
 		OUID:      testOUID,
+		OUHandle:  testOUHandle,
 		Roles:     []string{"exporter"},
 	}
 	authCtx := &AuthContext{User: uc}
@@ -57,6 +58,7 @@ func TestUserContext_Structure(t *testing.T) {
 		Email:       testEmail,
 		PhoneNumber: testPhone,
 		OUID:        testOUID,
+		OUHandle:    testOUHandle,
 		Roles:       []string{"exporter"},
 	}
 
@@ -74,6 +76,9 @@ func TestUserContext_Structure(t *testing.T) {
 	}
 	if uc.OUID != testOUID {
 		t.Errorf("got ou id %s, want %s", uc.OUID, testOUID)
+	}
+	if uc.OUHandle != testOUHandle {
+		t.Errorf("got ou handle %s, want %s", uc.OUHandle, testOUHandle)
 	}
 	if len(uc.Roles) != 1 || uc.Roles[0] != "exporter" {
 		t.Errorf("got roles %v, want [exporter]", uc.Roles)

@@ -20,15 +20,17 @@ type getOrCreateArgs struct {
 	email     string
 	phone     string
 	ouID      string
+	ouHandle  string
 }
 
-func (m *MockUserService) GetOrCreateUser(idpUserId, email, phone, ouID string) (*string, error) {
+func (m *MockUserService) GetOrCreateUser(idpUserId, email, phone, ouID, ouHandle string) (*string, error) {
 	m.getOrCreateCalls++
 	m.lastArgs = getOrCreateArgs{
 		idpUserID: idpUserId,
 		email:     email,
 		phone:     phone,
 		ouID:      ouID,
+		ouHandle:  ouHandle,
 	}
 	if m.getOrCreateErr != nil {
 		return nil, m.getOrCreateErr
@@ -131,6 +133,7 @@ func TestBuildAuthContext_UserPrincipalOnly(t *testing.T) {
 			Email:       testEmail,
 			PhoneNumber: strPtr(testPhone),
 			OUID:        testOUID,
+			OUHandle:    testOUHandle,
 			Roles:       []string{"exporter"},
 		},
 	}
@@ -151,6 +154,9 @@ func TestBuildAuthContext_UserPrincipalOnly(t *testing.T) {
 	}
 	if authCtx.User.OUID != testOUID {
 		t.Fatalf("expected ou id to be set, got %s", authCtx.User.OUID)
+	}
+	if authCtx.User.OUHandle != testOUHandle {
+		t.Fatalf("expected ou handle to be set, got %s", authCtx.User.OUHandle)
 	}
 	if authCtx.Client != nil {
 		t.Fatalf("expected client id to be nil when client principal is absent")
@@ -253,7 +259,7 @@ func TestAuthMiddleware_UserPrincipal_NoUserProfileService(t *testing.T) {
 		if authCtx.User.ID != "" {
 			t.Fatalf("expected persisted user id to be empty, got %s", authCtx.User.ID)
 		}
-		if authCtx.User.Email != testEmail || authCtx.User.PhoneNumber != testPhone || authCtx.User.OUID != testOUID {
+		if authCtx.User.Email != testEmail || authCtx.User.PhoneNumber != testPhone || authCtx.User.OUID != testOUID || authCtx.User.OUHandle != testOUHandle {
 			t.Fatalf("unexpected user details: %+v", authCtx.User)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -356,7 +362,8 @@ func TestAuthMiddleware_UserPrincipal_CreatesUser(t *testing.T) {
 	if mockUserService.lastArgs.idpUserID != testUserID ||
 		mockUserService.lastArgs.email != testEmail ||
 		mockUserService.lastArgs.phone != testPhone ||
-		mockUserService.lastArgs.ouID != testOUID {
+		mockUserService.lastArgs.ouID != testOUID ||
+		mockUserService.lastArgs.ouHandle != testOUHandle {
 		t.Fatalf("unexpected GetOrCreateUser args: %+v", mockUserService.lastArgs)
 	}
 }

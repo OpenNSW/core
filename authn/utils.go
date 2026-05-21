@@ -30,6 +30,7 @@ func buildAuthContext(principal *Principal) *AuthContext {
 				Email:       principal.UserPrincipal.Email,
 				PhoneNumber: derefString(principal.UserPrincipal.PhoneNumber),
 				OUID:        principal.UserPrincipal.OUID,
+				OUHandle:    principal.UserPrincipal.OUHandle,
 				Roles:       principal.UserPrincipal.Roles,
 			},
 		}

@@ -75,6 +75,7 @@ func Middleware(userProfileService UserProfileService, tokenExtractor *TokenExtr
 					user.Email,
 					derefString(user.PhoneNumber),
 					user.OUID,
+					user.OUHandle,
 				)
 				if err != nil {
 					slog.Error("failed to get or create user profile", "idp_user_id", user.UserID, "error", err)
