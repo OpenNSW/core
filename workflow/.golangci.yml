@@ -1,0 +1,37 @@
+# golangci-lint configuration (v2 format).
+# Docs: https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
+run:
+  # Fail the run if it takes too long (large repos may need more).
+  timeout: 5m
+
+linters:
+  # Start from the default set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - revive        # actively-maintained successor to the deprecated golint
+    - gosec         # common security problems
+    - misspell      # misspelled English words in comments/strings
+    - unconvert     # unnecessary type conversions
+    - unparam       # unused function parameters
+    - bodyclose     # ensures HTTP response bodies are closed
+  exclusions:
+    # Don't report issues in generated files.
+    generated: lax
+    rules:
+      # Relax a couple of noisy linters in test files.
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+
+# In golangci-lint v2, gofmt/goimports are "formatters" rather than linters.
+# The CI workflow already runs `gofmt -l` as a separate step, so formatting is
+# enforced there. If you'd prefer golangci-lint to own formatting too (and to
+# auto-fix with `golangci-lint fmt`), uncomment the block below:
+#
+# formatters:
+#   enable:
+#     - gofmt
+#     - goimports
