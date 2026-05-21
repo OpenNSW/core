@@ -1,5 +1,18 @@
 package engine
 
+import "strings"
+
+// parseMappingKey strips a trailing "?" from a mapping key and reports whether
+// the entry should be treated as optional. A trailing "?" marks the entry as
+// optional, meaning the engine will skip the mapping silently when the source
+// key is absent instead of failing the workflow.
+func parseMappingKey(rawKey string) (key string, optional bool) {
+	if strings.HasSuffix(rawKey, "?") {
+		return rawKey[:len(rawKey)-1], true
+	}
+	return rawKey, false
+}
+
 // getNestedKey retrieves a value from a nested map using a dot-separated path.
 // Returns the value and a boolean indicating whether it was found.
 // e.g. getNestedKey(m, "userform.applicant_name") returns (m["userform"]["applicant_name"], true)

@@ -153,6 +153,29 @@ func TestSetNestedKey(t *testing.T) {
 	}
 }
 
+func TestParseMappingKey(t *testing.T) {
+	tests := []struct {
+		raw         string
+		expectedKey string
+		expectedOpt bool
+	}{
+		{"global_user_email", "global_user_email", false},
+		{"global_user_phone?", "global_user_phone", true},
+		{"user.phone?", "user.phone", true},
+		{"user.phone", "user.phone", false},
+		{"?", "", true},
+		{"", "", false},
+	}
+
+	for _, test := range tests {
+		gotKey, gotOpt := parseMappingKey(test.raw)
+		if gotKey != test.expectedKey || gotOpt != test.expectedOpt {
+			t.Errorf("parseMappingKey(%q): got (%q, %v), want (%q, %v)",
+				test.raw, gotKey, gotOpt, test.expectedKey, test.expectedOpt)
+		}
+	}
+}
+
 // helper for deep map equality
 func equalMaps(a, b map[string]any) bool {
 	if len(a) != len(b) {

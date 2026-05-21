@@ -125,6 +125,54 @@ const emptyInputMappingWorkflowJSON = `
 	]
 }`
 
+const optionalInputMappingWorkflowJSON = `
+{
+	"workflow_id": "optional-input-mapping-test",
+	"name": "Optional Input Mapping Test",
+	"version": 1,
+	"edges":[
+		{ "id": "e1", "source_id": "start", "target_id": "task" },
+		{ "id": "e2", "source_id": "task", "target_id": "end" }
+	],
+	"nodes":[
+		{ "id": "start", "type": "START" },
+		{ "id": "task", "type": "TASK", "task_template_id": "TASK_OPTIONAL_INPUTS", "input_mapping": { "global_user_email": "local_email", "global_user_phone?": "local_phone" } },
+		{ "id": "end", "type": "END" }
+	]
+}`
+
+const optionalOutputMappingWorkflowJSON = `
+{
+	"workflow_id": "optional-output-mapping-test",
+	"name": "Optional Output Mapping Test",
+	"version": 1,
+	"edges":[
+		{ "id": "e1", "source_id": "start", "target_id": "task" },
+		{ "id": "e2", "source_id": "task", "target_id": "end" }
+	],
+	"nodes":[
+		{ "id": "start", "type": "START" },
+		{ "id": "task", "type": "TASK", "task_template_id": "TASK_OPTIONAL_OUTPUTS", "output_mapping": { "task_email": "global_user_email", "task_phone?": "global_user_phone" } },
+		{ "id": "end", "type": "END" }
+	]
+}`
+
+const missingRequiredOutputWorkflowJSON = `
+{
+	"workflow_id": "missing-required-output-test",
+	"name": "Missing Required Output Test",
+	"version": 1,
+	"edges":[
+		{ "id": "e1", "source_id": "start", "target_id": "task" },
+		{ "id": "e2", "source_id": "task", "target_id": "end" }
+	],
+	"nodes":[
+		{ "id": "start", "type": "START" },
+		{ "id": "task", "type": "TASK", "task_template_id": "TASK_MISSING_REQUIRED_OUTPUT", "output_mapping": { "task_phone": "global_user_phone" } },
+		{ "id": "end", "type": "END" }
+	]
+}`
+
 const nodeOutputToSubsetInputWorkflowJSON = `
 {
 	"workflow_id": "subset-input-mapping-test",
@@ -369,6 +417,132 @@ func TestNodeOutputFlowsIntoSubsetInputMapping(t *testing.T) {
 	require.Equal(t, "+123456789", instance.WorkflowVariables["global_user_phone"])
 
 	env.AssertExpectations(t)
+}
+
+func TestTaskNodeSkipsOptionalInputWhenMissing(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(optionalInputMappingWorkflowJSON), &def)
+	require.NoError(t, err)
+
+	initialWorkflowVariables := map[string]any{
+		"global_user_email": "user@example.com",
+	}
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
+		if len(inputs) != 1 {
+			return false
+		}
+		value, exists := inputs["local_email"]
+		return exists && value == "user@example.com"
+	})).Return(map[string]any{}, nil).Once()
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+func TestTaskNodeAppliesOptionalInputWhenPresent(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(optionalInputMappingWorkflowJSON), &def)
+	require.NoError(t, err)
+
+	initialWorkflowVariables := map[string]any{
+		"global_user_email": "user@example.com",
+		"global_user_phone": "+123456789",
+	}
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
+		if len(inputs) != 2 {
+			return false
+		}
+		email, emailOk := inputs["local_email"]
+		phone, phoneOk := inputs["local_phone"]
+		return emailOk && email == "user@example.com" && phoneOk && phone == "+123456789"
+	})).Return(map[string]any{}, nil).Once()
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+func TestTaskNodeSkipsOptionalOutputWhenMissing(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(optionalOutputMappingWorkflowJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_OUTPUTS", mock.Anything).
+		Return(map[string]any{"task_email": "user@example.com"}, nil).Once()
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	err = env.GetWorkflowResult(&instance)
+	require.NoError(t, err)
+	require.Equal(t, "user@example.com", instance.WorkflowVariables["global_user_email"])
+	_, phoneExists := instance.WorkflowVariables["global_user_phone"]
+	require.False(t, phoneExists, "global_user_phone should not be set when optional output is missing")
+
+	env.AssertExpectations(t)
+}
+
+func TestTaskNodeFailsWhenRequiredOutputMissing(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(missingRequiredOutputWorkflowJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+		Return(map[string]any{}, nil).Once()
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.Contains(t, env.GetWorkflowError().Error(), "output mapping error")
+	require.Contains(t, env.GetWorkflowError().Error(), "task_phone")
 }
 
 func TestEdgesAreReturnedInWorkflowInstance(t *testing.T) {

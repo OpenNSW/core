@@ -212,9 +212,13 @@ func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[st
 		return inputs, nil
 	}
 
-	for globalKey, localKey := range inputMapping {
+	for rawGlobalKey, localKey := range inputMapping {
+		globalKey, optional := parseMappingKey(rawGlobalKey)
 		val, exists := getNestedKey(g.instance.WorkflowVariables, globalKey)
 		if !exists {
+			if optional {
+				continue
+			}
 			return nil, fmt.Errorf("input mapping error: required global variable '%s' not found in workflow variables for task node", globalKey)
 		}
 		setNestedKey(inputs, localKey, val)
@@ -228,9 +232,13 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 		return nil
 	}
 
-	for taskKey, globalKey := range outputMapping {
+	for rawTaskKey, globalKey := range outputMapping {
+		taskKey, optional := parseMappingKey(rawTaskKey)
 		val, exists := getNestedKey(result, taskKey)
 		if !exists {
+			if optional {
+				continue
+			}
 			return fmt.Errorf("output mapping error: required task variable '%s' not found in task result", taskKey)
 		}
 		setNestedKey(workflowVars, globalKey, val)
