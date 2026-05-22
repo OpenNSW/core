@@ -129,7 +129,7 @@ If you're authoring these by hand, you'll typically:
 
 ## Render config
 
-Render configs are **raw JSON** from the orchestrator's perspective — it never parses them. They live in `TaskRecord.RenderConfig` as `json.RawMessage` and are passed straight to your `Renderer.Render(config, facts)` implementation.
+Render configs are **raw JSON** from the orchestrator's perspective — it never parses them. They live in `TaskRecord.RenderConfig` as `json.RawMessage` and are passed straight to your `Renderer.Render(ctx, config, facts)` implementation.
 
 This means the schema is **whatever your renderer expects**. The demo's `SimpleRenderer` uses a state-keyed shape:
 
@@ -154,7 +154,7 @@ This means the schema is **whatever your renderer expects**. The demo's `SimpleR
 }
 ```
 
-`SimpleRenderer.Render(config, facts)` looks up `config[facts.State]`, falling back to `config["default"]`. Each entry is a `RenderResult` — a `slot → UIComponent` map.
+`SimpleRenderer.Render(ctx, config, facts)` looks up `config[facts.State]`, falling back to `config["default"]`. Each entry is a `RenderResult` — a `slot → UIComponent` map.
 
 `UIComponent`:
 
@@ -175,7 +175,7 @@ The `Type` strings (`"markdown"`, `"jsonforms"`, …) are conventions between yo
 - **Conditional slots.** A `sidebar` slot only when the user is a reviewer.
 - **Schema lookups.** A `jsonforms` payload may reference a separate JSON Schema file, fetched by the renderer at render time.
 
-The interface (`Renderer.Render(json.RawMessage, Facts) (RenderResult, error)`) is deliberately open — write whatever fits your UI.
+The interface (`Renderer.Render(context.Context, json.RawMessage, Facts) (RenderResult, error)`) is deliberately open — write whatever fits your UI.
 
 ### Snapshot semantics
 

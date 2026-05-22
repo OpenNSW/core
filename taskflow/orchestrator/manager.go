@@ -279,7 +279,7 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		return TaskView{}, fmt.Errorf("task record %s not found", taskID)
 	}
 
-	view, err := tm.renderer.Render(record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
+	view, err := tm.renderer.Render(context, record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
 	if err != nil {
 		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
 	}

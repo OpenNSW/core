@@ -192,7 +192,7 @@ If you return an error, the orchestrator logs it and the parent workflow stays p
 
 ```go
 type Renderer interface {
-    Render(config json.RawMessage, facts Facts) (RenderResult, error)
+    Render(ctx context.Context, config json.RawMessage, facts Facts) (RenderResult, error)
 }
 ```
 

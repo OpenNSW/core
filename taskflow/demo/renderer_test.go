@@ -77,7 +77,7 @@ func TestSimpleRenderer_StateKeyedConfig(t *testing.T) {
 	r := SimpleRenderer{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := r.Render(cfg, renderer.Facts{State: tc.state})
+			out, err := r.Render(context.Background(), cfg, renderer.Facts{State: tc.state})
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
@@ -100,7 +100,7 @@ func TestSimpleRenderer_StateKeyedConfig(t *testing.T) {
 }
 
 func TestSimpleRenderer_EmptyConfig(t *testing.T) {
-	out, err := SimpleRenderer{}.Render(nil, renderer.Facts{State: "ANY"})
+	out, err := SimpleRenderer{}.Render(context.Background(), nil, renderer.Facts{State: "ANY"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestSimpleRenderer_EmptyConfig(t *testing.T) {
 
 func TestSimpleRenderer_NoMatchAndNoDefault(t *testing.T) {
 	cfg := json.RawMessage(`{"OTHER": {"primary": {"type": "markdown", "payload": "x"}}}`)
-	out, err := SimpleRenderer{}.Render(cfg, renderer.Facts{State: "NOT_PRESENT"})
+	out, err := SimpleRenderer{}.Render(context.Background(), cfg, renderer.Facts{State: "NOT_PRESENT"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSimpleRenderer_NoMatchAndNoDefault(t *testing.T) {
 }
 
 func TestSimpleRenderer_MalformedConfig(t *testing.T) {
-	_, err := SimpleRenderer{}.Render(json.RawMessage(`{not json`), renderer.Facts{State: "X"})
+	_, err := SimpleRenderer{}.Render(context.Background(), json.RawMessage(`{not json`), renderer.Facts{State: "X"})
 	if err == nil {
 		t.Fatal("expected error for malformed config")
 	}

@@ -57,7 +57,7 @@ func (r *fakeRegistry) GetGenericTemplate(id string) (json.RawMessage, bool) {
 
 type noopRenderer struct{}
 
-func (noopRenderer) Render(_ json.RawMessage, _ renderer.Facts) (renderer.RenderResult, error) {
+func (noopRenderer) Render(_ context.Context, _ json.RawMessage, _ renderer.Facts) (renderer.RenderResult, error) {
 	return renderer.RenderResult{}, nil
 }
 
