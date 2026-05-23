@@ -67,14 +67,16 @@ type SubTaskTemplate struct {
     ID               string          `json:"id"`
     TaskType         string          `json:"task_type"`
     PluginProperties json.RawMessage `json:"plugin_properties"`
+    OutputNamespace  string          `json:"output_namespace,omitempty"`
 }
 ```
 
-| Field               | Required | Purpose                                                                                       |
-|---------------------|----------|-----------------------------------------------------------------------------------------------|
-| `id`                | yes      | Unique within the registry. Matches `payload.TaskTemplateID` from the task workflow node.     |
-| `task_type`         | yes      | **Plugin lookup key.** Must match the string used in `pluginsReg.Register(taskType, plugin)`. |
-| `plugin_properties` | varies   | Free-form JSON passed verbatim to the plugin's `Execute`. Shape is owned by the plugin.       |
+| Field               | Required                | Purpose                                                                                                                                                                                               |
+|---------------------|-------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`                | yes                     | Unique within the registry. Matches `payload.TaskTemplateID` from the task workflow node.                                                                                                             |
+| `task_type`         | yes                     | **Plugin lookup key.** Must match the string used in `pluginsReg.Register(taskType, plugin)`.                                                                                                         |
+| `plugin_properties` | varies                  | Free-form JSON passed verbatim to the plugin's `Execute`. Shape is owned by the plugin.                                                                                                               |
+| `output_namespace`  | for submission subtasks | Top-level slot in `TaskRecord.Data` where `CompleteTaskStep` payloads are written. Required for any subtask that accepts an external submission. Without it, submitted payloads are dropped (logged). |
 
 **Example** (`demo/templates/subtask_demo_generic_user_input.json`):
 
@@ -82,11 +84,14 @@ type SubTaskTemplate struct {
 {
   "id": "demo_generic_user_input",
   "task_type": "USER_INPUT",
+  "output_namespace": "userform",
   "plugin_properties": {}
 }
 ```
 
-Here the plugin takes no configuration. A more typical example:
+The plugin takes no configuration; `output_namespace` declares where submission payloads land — every `CompleteTaskStep` body for this subtask is written verbatim to `record.Data["userform"]`.
+
+A more typical example:
 
 ```json
 {
@@ -98,6 +103,16 @@ Here the plugin takes no configuration. A more typical example:
   }
 }
 ```
+
+(No `output_namespace` here — this subtask runs synchronously inside the workflow and never receives a `CompleteTaskStep` call, so there's nothing to scope.)
+
+### Why `output_namespace` exists
+
+`CompleteTaskStep` is the external entry point for resuming a parked subtask with a payload. Without a scoping rule, callers could write *any* top-level key to `record.Data` — including keys owned by previous subtasks or internal coordinates like `_task_id`. That's a data-integrity hazard.
+
+So writes are confined: the active subtask's `output_namespace` is the *only* top-level key the payload may land in. The frontend submits the inner form object; the orchestrator stamps the slot. A misconfigured template (missing `output_namespace`) results in the payload being dropped with a warning log — the workflow still resumes, so a config mistake doesn't break a running task.
+
+The snapshot is stored on the `TaskRecord` (as `ActiveOutputNamespace`) at `StartSubTask` time, so subsequent `CompleteTaskStep` calls read it directly without re-resolving the registry.
 
 The plugin (`EMAIL` in this example) unmarshals `plugin_properties` into its own typed config — see [`plugin-author-guide.md`](plugin-author-guide.md) for that side.
 
@@ -206,7 +221,8 @@ If you need to push a new config to existing tasks, you'd have to update `TaskRe
         ▼
 [SubTaskTemplate]
         ├── task_type: "USER_INPUT"                       ─► [Plugin registered as "USER_INPUT"]
-        └── plugin_properties: {...}                      ─► passed verbatim to plugin.Execute
+        ├── plugin_properties: {...}                      ─► passed verbatim to plugin.Execute
+        └── output_namespace: "userform"                  ─► CompleteTaskStep payload → record.Data["userform"]
 ```
 
 Two distinct "TaskTemplateID" namespaces — one for tasks, one for subtasks — both resolved through the same registry interface but via different methods (`GetTaskTemplate` vs `GetSubTaskTemplate`). Don't reuse an ID across the two; even though the registry stores them in separate maps, it'll trip up anyone reading the templates.

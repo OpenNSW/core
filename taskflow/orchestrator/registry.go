@@ -19,8 +19,9 @@ type TaskTemplate struct {
 // Task's workflow that delegates to a plugin.
 type SubTaskTemplate struct {
 	ID               string          `json:"id"`
-	TaskType         string          `json:"task_type"`         // plugin routing key (e.g. "USER_INPUT")
-	PluginProperties json.RawMessage `json:"plugin_properties"` // plugin-specific config
+	TaskType         string          `json:"task_type"`                  // plugin routing key (e.g. "USER_INPUT")
+	PluginProperties json.RawMessage `json:"plugin_properties"`          // plugin-specific config
+	OutputNamespace  string          `json:"output_namespace,omitempty"` // top-level slot in TaskRecord.Data where CompleteTaskStep payloads are written. Empty falls back to a flat top-level merge.
 }
 
 // TaskTemplateRegistry is the read-only contract the orchestrator depends on

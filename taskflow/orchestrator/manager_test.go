@@ -186,6 +186,7 @@ func newTestRegistry() *fakeRegistry {
 		ID:               "generic_user_input",
 		TaskType:         "USER_INPUT",
 		PluginProperties: []byte(`{"user_jsonforms_id": "user_form"}`),
+		OutputNamespace:  "userform",
 	}
 	r.subTasks["generic_external_review"] = SubTaskTemplate{
 		ID:               "generic_external_review",
@@ -288,11 +289,11 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		return nil
 	}
 
+	// The caller no longer namespaces the payload — the subtask template's
+	// OutputNamespace ("userform") does that on the server side.
 	userData := map[string]any{
-		"userform": map[string]any{
-			"applicant_name": "Alice",
-			"email":          "alice@example.com",
-		},
+		"applicant_name": "Alice",
+		"email":          "alice@example.com",
 	}
 	if err := tm.CompleteTaskStep(context.Background(), task.TaskID, userData); err != nil {
 		t.Fatalf("CompleteTaskStep failed: %v", err)

@@ -217,7 +217,9 @@ If a required field is missing, fail with a descriptive error including the plug
 
 ### Reading from `Record.Data`
 
-`Record.Data` is a `map[string]any` shaped by all the *previous* subtasks. Common pattern: a user-input subtask wrote `Data["userform"] = {...}`; your subtask reads it back.
+`Record.Data` is a `map[string]any` shaped by all the *previous* subtasks. Each submission-style subtask owns one top-level slot, named by its template's `output_namespace`. A user-input subtask with `output_namespace: "userform"` produces `Data["userform"] = { ...the form payload... }`; your subtask reads it back at the same path.
+
+Note: callers do **not** wrap their submission payload — the orchestrator writes the raw POST body into the declared slot. So `Data["userform"]` is the form object itself, not `{ "userform": {...} }`.
 
 Use dotted-key helpers if you have them (the orchestrator uses `setNestedKey` for writes); for reads, walk the map explicitly to keep failure modes clear.
 
@@ -259,7 +261,8 @@ Temporal retries failed activities. If your plugin dispatches an external action
 - **Don't return `ErrResultPending`** from a plugin. That's the orchestrator's translation layer to Temporal. Use `plugins.ErrSuspended`.
 - **Don't block forever in `Execute`.** If you need to wait, suspend.
 - **Don't mutate `ctx.Inputs`.** It's the snapshot the orchestrator handed you; mutating it has no effect on persisted state. Mutate `ctx.Record.Data` instead.
-- **Don't change `TaskID`, parent coordinates, or `TaskWorkflowID`.** Those are written by `StartTask` / `StartSubTask` and consumed by the resume path. Plugins should treat them as read-only.
+- **Don't change `TaskID`, parent coordinates, `TaskWorkflowID`, or `ActiveOutputNamespace`.** Those are written by `StartTask` / `StartSubTask` and consumed by the resume path. Plugins should treat them as read-only.
+- **Don't write to `Record.Data` under a top-level key you don't own.** Each submission-style subtask owns one slot (its template's `output_namespace`). If your plugin produces internal output, namespace it under your task type's own slot, not under another subtask's.
 
 ---
 

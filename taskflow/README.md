@@ -62,6 +62,7 @@ There are also two internal hooks invoked by the task workflow itself: `StartSub
 - **No parallel subtasks.** A `TaskRecord` stores coordinates for one active subtask. Task workflows must be sequential.
 - **`StartTask` returns `activity.ErrResultPending`** on the happy path. The task workflow runs asynchronously; the parent activity stays suspended until `onTaskCompleted` fires.
 - **Plugins suspend by returning `plugins.ErrSuspended`.** Synchronous plugins return `nil`; the workflow proceeds without parking.
+- **Submissions are scoped.** `CompleteTaskStep` payloads land in a single top-level slot of `Record.Data`, named by the active `SubTaskTemplate.OutputNamespace`. Callers send the raw form object — the server stamps the slot. Missing namespace → payload dropped with a warning, never an open top-level merge.
 
 ---
 

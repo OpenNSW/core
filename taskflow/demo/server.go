@@ -106,8 +106,9 @@ func (s *server) handleTaskInteraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The payload from the UI is a namespaced map matching the JSONForms structure,
-	// e.g. {"userform": {...}} or {"reviewerform": {...}}
+	// The payload is the raw form object. The server stamps it into the
+	// subtask template's declared OutputNamespace inside TaskRecord.Data —
+	// the UI must not wrap it.
 	var payload map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)

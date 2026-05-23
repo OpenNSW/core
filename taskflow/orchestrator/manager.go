@@ -180,6 +180,7 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 	if !ok {
 		return nil, fmt.Errorf("[StartSubTask] unknown task_template_id: %s", payload.TaskTemplateID)
 	}
+	record.ActiveOutputNamespace = subTemplate.OutputNamespace
 
 	// 2. Fetch the plugin from our registry using TaskType
 	plugin, ok := tm.pluginsRegistry.Get(subTemplate.TaskType)
@@ -245,12 +246,23 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 		return fmt.Errorf("task %s already completed", taskID)
 	}
 
-	// Merge submitted data into the stored namespaced Data map
 	if record.Data == nil {
 		record.Data = make(map[string]any)
 	}
-	for k, v := range payload {
-		record.Data[k] = v
+
+	// Writes are confined to the active subtask's declared OutputNamespace,
+	// which was snapshotted onto the record by StartSubTask. An open
+	// top-level merge would let callers overwrite slots owned by other
+	// subtasks (or internal keys like _task_id), so the namespace is
+	// required for any non-empty payload. If it's missing we log loudly and
+	// drop the payload — the workflow still resumes so a misconfigured
+	// template doesn't break a running task.
+	if len(payload) > 0 {
+		if record.ActiveOutputNamespace == "" {
+			log.Printf("[TaskManager] WARNING: task %s active subtask (template=%q) declares no output_namespace; dropping submission payload (keys=%v)", taskID, record.ActiveTaskTemplateID, payloadKeys(payload))
+		} else {
+			record.Data[record.ActiveOutputNamespace] = payload
+		}
 	}
 	tm.db.SaveTask(ctx, record)
 
@@ -315,4 +327,12 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string)
 		})
 	}
 	return resList
+}
+
+func payloadKeys(payload map[string]any) []string {
+	keys := make([]string, 0, len(payload))
+	for k := range payload {
+		keys = append(keys, k)
+	}
+	return keys
 }

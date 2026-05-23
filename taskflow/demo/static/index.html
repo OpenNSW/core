@@ -756,40 +756,38 @@
             const consName = consDetails.split('\n')[0].trim();
 
             submitTask(tid, {
-                userform: {
-                    app_type: appType,
-                    prev_psc: prevPsc,
-                    exporter_name: expName,
-                    exporter_address: expAddr,
-                    consignee_name: consName,
-                    consignee_country: country,
-                    conveyance: conveyance,
-                    point_entry: pointEntry,
-                    place_origin: origin,
-                    export_date: exportDate,
-                    distinguishing_marks: marks,
-                    no_of_packages: parseInt(pkgCount) || 0,
-                    description_of_packages: pkgDesc,
-                    commodity: produceName,
-                    quantity: qty,
-                    quantity_unit: unit,
-                    hs_code: hscode,
-                    additional_declaration: decl,
-                    treatment_target: treatTarget,
-                    treatment_method: treatMethod,
-                    supervision_required: supervision,
-                    forwarding_company: fwdCompany,
-                    wc_name: wcName,
-                    wc_tel: wcTel,
-                    authorized_signature: signDate,
-                    attachment_filename: attachment,
-                    
-                    // Compatibility with other workflows & downstream logic:
-                    applicant_name: expName,
-                    farm_location: expAddr,
-                    crop_type: produceName,
-                    export_destination: country
-                }
+                app_type: appType,
+                prev_psc: prevPsc,
+                exporter_name: expName,
+                exporter_address: expAddr,
+                consignee_name: consName,
+                consignee_country: country,
+                conveyance: conveyance,
+                point_entry: pointEntry,
+                place_origin: origin,
+                export_date: exportDate,
+                distinguishing_marks: marks,
+                no_of_packages: parseInt(pkgCount) || 0,
+                description_of_packages: pkgDesc,
+                commodity: produceName,
+                quantity: qty,
+                quantity_unit: unit,
+                hs_code: hscode,
+                additional_declaration: decl,
+                treatment_target: treatTarget,
+                treatment_method: treatMethod,
+                supervision_required: supervision,
+                forwarding_company: fwdCompany,
+                wc_name: wcName,
+                wc_tel: wcTel,
+                authorized_signature: signDate,
+                attachment_filename: attachment,
+
+                // Compatibility with other workflows & downstream logic:
+                applicant_name: expName,
+                farm_location: expAddr,
+                crop_type: produceName,
+                export_destination: country
             });
         }
 
@@ -1199,12 +1197,10 @@
             const ci = document.getElementById(tid + '_doc_ci').value.trim();
             const co = document.getElementById(tid + '_doc_co').value.trim();
             submitTask(tid, {
-                userform: {
-                    bill_of_lading: bl,
-                    packing_list: pl,
-                    commercial_invoice: ci,
-                    certificate_of_origin: co
-                }
+                bill_of_lading: bl,
+                packing_list: pl,
+                commercial_invoice: ci,
+                certificate_of_origin: co
             });
         }
 
@@ -1224,21 +1220,19 @@
             }
 
             submitTask(tid, {
-                userform: {
-                    exporter_name: expName,
-                    exporter_address: expAddr,
-                    consignee_name: consName,
-                    consignee_country: consCountry,
-                    commodity: commodity,
-                    hs_code: hscode,
-                    quantity: qty,
-                    quantity_unit: unit,
-                    // Compatibility mappings for classic flow:
-                    applicant_name: expName,
-                    farm_location: expAddr,
-                    crop_type: commodity,
-                    export_destination: consCountry
-                }
+                exporter_name: expName,
+                exporter_address: expAddr,
+                consignee_name: consName,
+                consignee_country: consCountry,
+                commodity: commodity,
+                hs_code: hscode,
+                quantity: qty,
+                quantity_unit: unit,
+                // Compatibility mappings for classic flow:
+                applicant_name: expName,
+                farm_location: expAddr,
+                crop_type: commodity,
+                export_destination: consCountry
             });
         }
 
@@ -1716,10 +1710,8 @@
             const outcome = document.querySelector(`input[name="doc_outcome_${tid}"]:checked`)?.value || 'approve';
             const comments = document.getElementById(tid + '_doc_comments')?.value?.trim() || '';
             submitTask(tid, {
-                reviewerform: {
-                    review_outcome: outcome,
-                    rejection_reason: comments
-                },
+                review_outcome: outcome,
+                rejection_reason: comments,
                 doc_review_result: outcome,
                 npqs: {
                     doc_review_result: outcome
@@ -1748,18 +1740,15 @@
             const refNum = 'REF-NPQS-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 
             submitTask(tid, {
-                reviewerform: {
-                    review_outcome: outcome,
-                    reference_number: refNum,
-                    sample_required: sampleReq,
-                    fumigation_required: fumReq,
-                    rejection_reason: comments
-                },
+                review_outcome: outcome,
+                reference_number: refNum,
+                sample_required: sampleReq,
+                fumigation_required: fumReq,
+                rejection_reason: comments,
                 npqs: {
                     sample_required: sampleReq,
                     fumigation_required: fumReq
-                },
-                reference_number: refNum
+                }
             });
         }
 

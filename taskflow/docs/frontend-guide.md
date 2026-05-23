@@ -109,7 +109,7 @@ sequenceDiagram
     Note over FE: Render the view's slots; user fills the form
 
     FE->>API: POST /api/task/submit_application
-    Note right of FE: { "userform": { ...form data... } }
+    Note right of FE: { ...form data... }   ← raw payload, server stamps the slot
     API-->>FE: 200 OK
 
     Note over FE: Re-fetch — state may now be QUEUED_EXTERNALLY, PENDING_PAYMENT, etc.
@@ -136,30 +136,34 @@ For asynchronous transitions driven by external systems (an external reviewer ap
 
 ## Submitting interaction data
 
-The `POST /api/task/{taskID}` body is **whatever the current subtask's plugin expects**, merged top-level into `TaskRecord.Data`.
-
-Conventionally, payloads are *namespaced* by form to keep collisions clean:
+The `POST /api/task/{taskID}` body is **the raw form payload** — what the current subtask's plugin expects, unwrapped. The server places the whole object into a single top-level slot of `TaskRecord.Data` determined by the active `SubTaskTemplate.OutputNamespace`.
 
 ```jsonc
-// User form submission
+// User form submission — no wrapper.
 {
-  "userform": {
-    "applicant_name": "Alice",
-    "email": "alice@example.com",
-    "items": [...]
-  }
+  "applicant_name": "Alice",
+  "email": "alice@example.com",
+  "items": [...]
 }
 
-// Reviewer decision
+// Reviewer decision — no wrapper.
 {
-  "reviewerform": {
-    "decision": "approved",
-    "notes": "Looks good."
-  }
+  "decision": "approved",
+  "notes": "Looks good."
 }
 ```
 
-The orchestrator merges these into `record.Data[key] = value` (top-level only — no deep merge). Subsequent subtasks read what they need.
+If the user-input subtask's template declares `"output_namespace": "userform"`, the orchestrator persists this as `record.Data["userform"] = { ...payload... }`. Subsequent subtasks read it back via the namespaced path. **The frontend doesn't choose the namespace** — the template author does, and it travels with the active subtask snapshot on the record.
+
+> Pre-2026: callers wrapped their payload manually (`{"userform": {...}}`). That's no longer accepted; the FE now sends the inner object directly.
+
+### What happens if the active subtask has no `output_namespace`
+
+The server **logs a warning and drops the payload**, then resumes the workflow as if the body were empty. This is intentional: a misconfigured template shouldn't break a running task, but data must never land in unscoped top-level keys (that would let a caller overwrite slots owned by other subtasks). If you see a submission silently fail to appear in the next render, check that the active subtask's template declares an output namespace.
+
+### Empty bodies
+
+A `POST` with an empty body (or no JSON object) is valid — it acts as a **resume signal** with no data attached. Useful for wait-for-event subtasks where the resume itself is the event.
 
 ### Errors
 
