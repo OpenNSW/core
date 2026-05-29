@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/OpenNSW/nsw/internal/config"
+	"github.com/OpenNSW/nsw/backend/internal/config"
 )
 
 // CORS creates a middleware that handles CORS (Cross-Origin Resource Sharing) requests
