@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"github.com/OpenNSW/nsw/pkg/storage/drivers"
+	"github.com/OpenNSW/nsw/backend/pkg/storage/drivers"
 	"github.com/google/uuid"
 )
 

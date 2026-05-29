@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/OpenNSW/nsw/internal/validation"
+	"github.com/OpenNSW/nsw/backend/internal/validation"
 )
 
 type Config struct {

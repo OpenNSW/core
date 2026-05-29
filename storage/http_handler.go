@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/OpenNSW/nsw/internal/auth"
-	"github.com/OpenNSW/nsw/pkg/storage/drivers"
+	"github.com/OpenNSW/nsw/backend/internal/auth"
+	"github.com/OpenNSW/nsw/backend/pkg/storage/drivers"
 )
 
 // validStorageKey returns true if key matches UUID or UUID plus extension (e.g. .pdf).
