@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 
-	engine "github.com/OpenNSW/go-temporal-workflow"
+	engine "github.com/OpenNSW/core/workflow"
 )
 
 // TaskTemplate describes a Task — the macro unit of work activated by a parent

@@ -1,7 +1,0 @@
-{
-  "id": "demo_generic_user_input",
-  "task_type": "USER_INPUT",
-  "output_namespace": "userform",
-  "plugin_properties": {
-  }
-}

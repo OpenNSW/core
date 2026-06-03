@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/OpenNSW/nsw-task-flow/store"
+	"github.com/OpenNSW/core/taskflow/store"
 )
 
 // ErrSuspended is returned by a plugin when it wants to pause task execution and wait for an asynchronous action.

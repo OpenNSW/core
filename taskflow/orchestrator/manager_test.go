@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
-	engine "github.com/OpenNSW/go-temporal-workflow"
-	"github.com/OpenNSW/nsw-task-flow/plugins"
-	"github.com/OpenNSW/nsw-task-flow/renderer"
-	"github.com/OpenNSW/nsw-task-flow/store"
+	engine "github.com/OpenNSW/core/workflow"
+	"github.com/OpenNSW/core/taskflow/plugins"
+	"github.com/OpenNSW/core/taskflow/renderer"
+	"github.com/OpenNSW/core/taskflow/store"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -106,6 +106,8 @@ func (m *mockTemporalManager) TaskUpdate(ctx context.Context, workflowID string,
 func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) (*engine.WorkflowInstance, error) {
 	return nil, nil
 }
+
+func (m *mockTemporalManager) RegisterDefinitionHandler(_ func(templateID string) (engine.WorkflowDefinition, error)) {}
 
 type safeMockTaskStore struct {
 	mu    sync.RWMutex

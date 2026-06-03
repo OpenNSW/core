@@ -1,6 +1,0 @@
-{
-  "id": "demo_phyto_application_task",
-  "type": "APPLICATION",
-  "workflow_id": "Phyto_Application_Flow_v1",
-  "render_config_id": "phyto_render_config"
-}

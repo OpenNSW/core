@@ -1,8 +1,0 @@
-{
-  "id": "demo_generic_external_review",
-  "task_type": "EXTERNAL_REVIEW",
-  "output_namespace": "reviewerform",
-  "plugin_properties": {
-    "external_url": "http://review-agency/api/review"
-  }
-}
