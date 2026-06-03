@@ -1,0 +1,45 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+)
+
+// TaskRecord is the single DB entry per task instance, as described in the architecture doc.
+// It stores both Parent (macro journey) and Task (active sub-process) coordinates separately,
+// and holds dynamic task execution data as a generic key-value map.
+type TaskRecord struct {
+	TaskID       string          `json:"task_id"`
+	TaskType     string          `json:"task_type"`
+	State        string          `json:"status"` // State drives UI rendering ("PENDING_USER", "QUEUED_EXTERNALLY", "COMPLETED")
+	RenderConfig json.RawMessage `json:"render_config"`
+
+	// Parent coordinates — used to wake the parent workflow when this task finishes
+	ParentWorkflowID string `json:"parent_workflow_id"`
+	ParentRunID      string `json:"parent_run_id"`
+	ParentNodeID     string `json:"parent_node_id"`
+
+	// Active subtask execution coordinates — used to resume/wake the currently active subtask step via the API.
+	// WARNING: Since the store only holds a single set of coordinates, only one subtask can be active at any given time
+	// (strictly sequential execution). Parallel/concurrent subtasks inside a single Task Workflow are not supported.
+	TaskWorkflowID        string `json:"task_workflow_id"`
+	TaskRunID             string `json:"task_run_id"`
+	SubTaskNodeID         string `json:"subtask_node_id"`
+	ActiveTaskTemplateID  string `json:"active_task_template_id,omitempty"`
+	ActiveOutputNamespace string `json:"active_output_namespace,omitempty"` // snapshot of the active SubTaskTemplate.OutputNamespace — read by CompleteTaskStep to scope writes
+
+	// Data holds generic, dynamic task execution state variables.
+	Data map[string]any `json:"data"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// TaskStore is an interface that any persistent or in-memory database used by the TaskManager should implement.
+type TaskStore interface {
+	SaveTask(context context.Context, record TaskRecord)
+	GetTask(context context.Context, taskID string) (TaskRecord, bool)
+	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
+	GetAllTasks(context context.Context, parentWorkflowID string) []TaskRecord
+}
