@@ -7,10 +7,15 @@ import (
 	"log"
 	"time"
 
-	engine "github.com/OpenNSW/core/workflow"
+	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifactadapter/generictemplate"
+	"github.com/OpenNSW/core/artifactadapter/subtasktemplate"
+	"github.com/OpenNSW/core/artifactadapter/tasktemplate"
+	"github.com/OpenNSW/core/artifactadapter/workflowdef"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
+	engine "github.com/OpenNSW/core/workflow"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -65,7 +70,7 @@ type TaskCompletedCallback func(parentWorkflowID string, parentRunID string, par
 type TaskManager struct {
 	db                  store.TaskStore
 	renderer            renderer.Renderer
-	registry            TaskTemplateRegistry
+	registry            *artifact.Registry
 	pluginsRegistry     *plugins.Registry
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
@@ -74,14 +79,14 @@ type TaskManager struct {
 // NewTaskManager creates a TaskManager instance.
 //
 //   - db                  — the persistence/in-memory task store.
-//   - registry            — registry holding definitions of task capabilities.
+//   - registry            — artifact registry holding task templates, subtask templates, workflow definitions, and render configs.
 //   - pluginsRegistry     — registry containing task execution plugin handlers.
 //   - taskWorkflowManager — the TemporalManager used to start and complete Task sub-workflows.
 //   - onTaskCompleted     — callback invoked when a Task workflow finishes;
 //     typically invokes Parent.TaskDone to resume the parent workflow using stored coordinates.
 func NewTaskManager(
 	db store.TaskStore,
-	registry TaskTemplateRegistry,
+	registry *artifact.Registry,
 	pluginsRegistry *plugins.Registry,
 	taskWorkflowManager engine.TemporalManager,
 	onTaskCompleted TaskCompletedCallback,
@@ -101,19 +106,19 @@ func NewTaskManager(
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
 func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, error) {
-	template, ok := tm.registry.GetTaskTemplate(payload.TaskTemplateID)
-	if !ok {
-		return nil, fmt.Errorf("unknown task_template_id: %s", payload.TaskTemplateID)
+	template, err := tasktemplate.Load(context.Background(), tm.registry, payload.TaskTemplateID)
+	if err != nil {
+		return nil, fmt.Errorf("load task template %q: %w", payload.TaskTemplateID, err)
 	}
 
-	wfDef, ok := tm.registry.GetWorkflow(template.WorkflowID)
-	if !ok {
-		return nil, fmt.Errorf("workflow %q referenced by task template %q not registered", template.WorkflowID, template.ID)
+	wfDef, err := workflowdef.Load(context.Background(), tm.registry, template.WorkflowID)
+	if err != nil {
+		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, err)
 	}
 
-	renderConfig, ok := tm.registry.GetGenericTemplate(template.RenderConfigID)
-	if !ok {
-		return nil, fmt.Errorf("render config %q referenced by task template %q not registered", template.RenderConfigID, template.ID)
+	renderConfig, err := generictemplate.Load(context.Background(), tm.registry, template.RenderConfigID)
+	if err != nil {
+		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
 
 	// Use the parent workflow node ID as the TaskID. This makes the ID stable and
@@ -151,7 +156,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 		}
 	}
 
-	err := tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, wfDef, initialData)
+	err = tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, wfDef, initialData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start task workflow: %v", err)
 	}
@@ -176,9 +181,9 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 	}
 
 	// 1. Look up the subtask template to find the associated plugin config
-	subTemplate, ok := tm.registry.GetSubTaskTemplate(payload.TaskTemplateID)
-	if !ok {
-		return nil, fmt.Errorf("[StartSubTask] unknown task_template_id: %s", payload.TaskTemplateID)
+	subTemplate, err := subtasktemplate.Load(context.Background(), tm.registry, payload.TaskTemplateID)
+	if err != nil {
+		return nil, fmt.Errorf("[StartSubTask] load subtask template %q: %w", payload.TaskTemplateID, err)
 	}
 	record.ActiveOutputNamespace = subTemplate.OutputNamespace
 
@@ -195,7 +200,7 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 		Inputs:  payload.Inputs,
 	}
 
-	err := plugin.Execute(pluginCtx, subTemplate.PluginProperties)
+	err = plugin.Execute(pluginCtx, subTemplate.PluginProperties)
 	if errors.Is(err, plugins.ErrSuspended) {
 		tm.db.SaveTask(pluginCtx.Context, record)
 		return nil, activity.ErrResultPending

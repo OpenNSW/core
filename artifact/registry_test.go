@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/testutil"
 )
 
 type fakeEmail struct {
@@ -31,15 +32,6 @@ func (t *fakeEmail) Parse(raw []byte) error {
 	}
 	t.Subject = temp.Subject
 	return nil
-}
-
-type memLoader map[string][]byte // path -> bytes
-
-func (m memLoader) Load(_ context.Context, path string) ([]byte, error) {
-	if b, ok := m[path]; ok {
-		return b, nil
-	}
-	return nil, artifact.ErrNotFound
 }
 
 type customArtifact struct {
@@ -72,7 +64,7 @@ func TestRegistry(t *testing.T) {
 	// Scenario 1: Get[fakeEmail] exact version present
 	t.Run("Get exact version present", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		m := memLoader{
+		m := testutil.MemLoader{
 			"email_v1.json": []byte(`{"subject":"Hello V1"}`),
 		}
 		reg.RegisterLoader("mem", m)
@@ -90,7 +82,7 @@ func TestRegistry(t *testing.T) {
 	// Scenario 2: Latest with one "" version
 	t.Run("Latest with single unversioned", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		m := memLoader{
+		m := testutil.MemLoader{
 			"email_single.json": []byte(`{"subject":"Hello Single"}`),
 		}
 		reg.RegisterLoader("mem", m)
@@ -108,7 +100,7 @@ func TestRegistry(t *testing.T) {
 	// Scenario 3: Latest with versions v1, v2, v10 present
 	t.Run("Latest with v1, v2, v10 numeric sorting", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		m := memLoader{
+		m := testutil.MemLoader{
 			"email_v1.json":  []byte(`{"subject":"Hello V1"}`),
 			"email_v2.json":  []byte(`{"subject":"Hello V2"}`),
 			"email_v10.json": []byte(`{"subject":"Hello V10"}`),
@@ -130,7 +122,7 @@ func TestRegistry(t *testing.T) {
 	// Scenario 4: Get for a version that doesn't exist
 	t.Run("Get non-existent version", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		m := memLoader{
+		m := testutil.MemLoader{
 			"email_v1.json": []byte(`{"subject":"Hello V1"}`),
 		}
 		reg.RegisterLoader("mem", m)
@@ -177,7 +169,7 @@ func TestRegistry(t *testing.T) {
 	// Scenario 7: Wrong-shape bytes (Parse validation fails)
 	t.Run("Wrong shape bytes returns error instead of panic", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		m := memLoader{
+		m := testutil.MemLoader{
 			"email_invalid.json": []byte(`{"not_subject":"Hello"}`),
 		}
 		reg.RegisterLoader("mem", m)
@@ -211,7 +203,7 @@ func TestRegistry(t *testing.T) {
 	// Scenario 9: A second, locally-defined artifact type with a custom Kind fetches fine
 	t.Run("Custom Kind fetches fine (extensibility proof)", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		m := memLoader{
+		m := testutil.MemLoader{
 			"rules.json": []byte(`{"rules":["rule1", "rule2"]}`),
 		}
 		reg.RegisterLoader("mem", m)
@@ -232,7 +224,7 @@ func TestRegistry(t *testing.T) {
 			return a > b
 		}
 		reg := artifact.NewRegistry(artifact.WithVersionComparator(customLess))
-		m := memLoader{
+		m := testutil.MemLoader{
 			"email_v1.json": []byte(`{"subject":"Hello V1"}`),
 			"email_v2.json": []byte(`{"subject":"Hello V2"}`),
 		}
@@ -253,7 +245,7 @@ func TestRegistry(t *testing.T) {
 func TestManifest(t *testing.T) {
 	t.Run("RegisterFromConfig successfully registers", func(t *testing.T) {
 		reg := artifact.NewRegistry()
-		reg.RegisterLoader("mem", memLoader{})
+		reg.RegisterLoader("mem", testutil.MemLoader{})
 
 		cfg := artifact.ManifestConfig{
 			Artifacts: []artifact.ManifestRow{
@@ -349,7 +341,7 @@ func ExampleLatest() {
 	reg := artifact.NewRegistry()
 
 	// Create and register loader
-	m := memLoader{
+	m := testutil.MemLoader{
 		"welcome.json": []byte(`{"subject":"Welcome to OpenNSW!"}`),
 	}
 	reg.RegisterLoader("mem", m)

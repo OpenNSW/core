@@ -6,13 +6,6 @@ package artifact
 // never validates against a known set.
 type Kind string
 
-// Built-in kinds owned by core's own domains. NOT a closed set.
-const (
-	KindEmailTemplate Kind = "email"
-	KindSMSTemplate   Kind = "sms"
-	KindWorkflowDef   Kind = "workflow"
-	KindFormSchema    Kind = "form"
-)
 
 // Artifact is the constraint for everything the registry can return. Kind MUST be
 // a value-receiver method returning a constant (independent of field values),

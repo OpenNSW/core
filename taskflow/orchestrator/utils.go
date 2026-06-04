@@ -2,7 +2,7 @@ package orchestrator
 
 // setNestedKey sets a value in a map using a dot-separated path.
 func setNestedKey(m map[string]any, dotPath string, value any) {
-	if dotPath == "" {
+	if m == nil || dotPath == "" {
 		return
 	}
 	for i := 0; i < len(dotPath); i++ {

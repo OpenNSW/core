@@ -4,7 +4,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"go.temporal.io/sdk/activity"
 )
@@ -46,8 +45,6 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 		TaskTemplateID: taskTemplateID,
 		Inputs:         inputs,
 	}
-
-	slog.Error("ExecuteTaskActivity", "payload", payload)
 
 	// Trigger custom code block. ExecuteTaskActivityHandler can return error ErrResultPending to pause the workflow
 	// or return a nil error with the outputs for the next step to consume (synchronous execution)
