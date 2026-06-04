@@ -223,7 +223,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		Inputs:         map[string]any{"userform.name": "Alice"},
 	}
 
-	if _, err := tm.StartTask(payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
+	if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
 		t.Fatalf("StartTask failed: %v", err)
 	}
 	if !taskWorkflowCalled {
@@ -249,7 +249,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		NodeID:         "task-node",
 		TaskTemplateID: "generic_user_input",
 	}
-	if _, err := tm.StartSubTask(payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
+	if _, err := tm.StartSubTask(context.Background(), payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
 		t.Fatalf("StartSubTask failed: %v", err)
 	}
 
@@ -318,7 +318,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 func TestStartTask_UnknownTemplateID(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartTask(engine.TaskPayload{
+	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
 		WorkflowID:     "parent-wf",
 		TaskTemplateID: "does_not_exist",
 	})
@@ -336,7 +336,7 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), mockTaskWF, noopCallback)
 
-	_, err := tm.StartTask(engine.TaskPayload{
+	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
 		WorkflowID:     "parent-wf",
 		TaskTemplateID: "test_template",
 	})
@@ -352,7 +352,7 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 func TestStartSubTask_UnknownWorkflowID(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartSubTask(engine.TaskPayload{
+	_, err := tm.StartSubTask(context.Background(), engine.TaskPayload{
 		WorkflowID:     "workflow-that-was-never-registered",
 		TaskTemplateID: "generic_user_input",
 	})
@@ -372,7 +372,7 @@ func TestStartSubTask_UnknownTaskTemplateID(t *testing.T) {
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartSubTask(engine.TaskPayload{
+	_, err := tm.StartSubTask(context.Background(), engine.TaskPayload{
 		WorkflowID:     "task-workflow-1",
 		TaskTemplateID: "not_a_real_template",
 	})
@@ -392,7 +392,7 @@ func TestStartSubTask_ExternalReviewPath(t *testing.T) {
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartSubTask(engine.TaskPayload{
+	_, err := tm.StartSubTask(context.Background(), engine.TaskPayload{
 		WorkflowID:     "task-ext-workflow",
 		RunID:          "run-1",
 		NodeID:         "node-ext",

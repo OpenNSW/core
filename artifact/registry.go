@@ -68,6 +68,9 @@ func NewRegistry(opts ...Option) *Registry {
 // RegisterLoader registers a loader under a type name. Panic on duplicate type
 // (a startup wiring bug, not runtime input).
 func (r *Registry) RegisterLoader(loaderType string, l Loader) {
+	if l == nil {
+		panic(fmt.Sprintf("nil loader registered for type: %s", loaderType))
+	}
 	if _, ok := r.loaders[loaderType]; ok {
 		panic(fmt.Sprintf("loader type already registered: %s", loaderType))
 	}

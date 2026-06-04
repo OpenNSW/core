@@ -105,26 +105,26 @@ func NewTaskManager(
 // StartTask is called by the parent workflow engine when it activates a TASK node.
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
-func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, error) {
-	template, err := tasktemplate.Load(context.Background(), tm.registry, payload.TaskTemplateID)
+func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
+	template, err := tasktemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("load task template %q: %w", payload.TaskTemplateID, err)
 	}
 
-	wfDef, err := workflowdef.Load(context.Background(), tm.registry, template.WorkflowID)
+	wfDef, err := workflowdef.Load(ctx, tm.registry, template.WorkflowID)
 	if err != nil {
 		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, err)
 	}
 
-	renderConfig, err := generictemplate.Load(context.Background(), tm.registry, template.RenderConfigID)
+	renderConfig, err := generictemplate.Load(ctx, tm.registry, template.RenderConfigID)
 	if err != nil {
 		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
 
-	// Use the parent workflow node ID as the TaskID. This makes the ID stable and
-	// externally derivable — callers that know which parent-workflow node spawned
-	// a task can address it without a separate lookup.
-	taskID := payload.NodeID
+	// Use a combination of parent workflow instance ID and node ID to ensure the taskID
+	// is globally unique across different parent workflow instances, while remaining stable
+	// and derivable.
+	taskID := payload.WorkflowID + "/" + payload.NodeID
 	taskWorkflowID := "task-wf-" + taskID
 
 	initialData := make(map[string]any)
@@ -145,7 +145,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 		Data:             initialData,
 		CreatedAt:        time.Now(),
 	}
-	tm.db.SaveTask(context.Background(), record)
+	tm.db.SaveTask(ctx, record)
 	log.Printf("[TaskManager] Created Task record %s (template=%s, type=%s)", taskID, payload.TaskTemplateID, template.Type)
 
 	// Verify that there are no parallel execution paths, as TaskRecord only stores coordinates for a single active subtask.
@@ -156,7 +156,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 		}
 	}
 
-	err = tm.taskWorkflowManager.StartWorkflow(context.Background(), taskWorkflowID, wfDef, initialData)
+	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start task workflow: %v", err)
 	}
@@ -166,8 +166,8 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
 
 // StartSubTask is called by the Task's workflow engine when it activates an interaction step.
 // It routes to the correct capability handler dynamically from the plugin registry.
-func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any, error) {
-	record, exists := tm.db.GetTaskByWorkflowID(context.Background(), payload.WorkflowID)
+func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
+	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
 	if !exists {
 		return nil, fmt.Errorf("[StartSubTask] no task record found for workflow %s", payload.WorkflowID)
 	}
@@ -181,7 +181,7 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 	}
 
 	// 1. Look up the subtask template to find the associated plugin config
-	subTemplate, err := subtasktemplate.Load(context.Background(), tm.registry, payload.TaskTemplateID)
+	subTemplate, err := subtasktemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("[StartSubTask] load subtask template %q: %w", payload.TaskTemplateID, err)
 	}
@@ -195,7 +195,7 @@ func (tm *TaskManager) StartSubTask(payload engine.TaskPayload) (map[string]any,
 
 	// 3. Execute the plugin
 	pluginCtx := plugins.PluginContext{
-		Context: context.Background(),
+		Context: ctx,
 		Record:  &record,
 		Inputs:  payload.Inputs,
 	}

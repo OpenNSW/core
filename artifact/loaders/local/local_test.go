@@ -37,4 +37,11 @@ func TestLocalFileLoader(t *testing.T) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
+
+	t.Run("Load file escaping root returns ErrNotFound", func(t *testing.T) {
+		_, err := loader.Load(context.Background(), "../local_test.go")
+		if !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("expected ErrNotFound for traversing path, got %v", err)
+		}
+	})
 }
