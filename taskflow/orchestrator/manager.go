@@ -121,10 +121,9 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
 
-	// Use a combination of parent workflow instance ID and node ID to ensure the taskID
-	// is globally unique across different parent workflow instances, while remaining stable
-	// and derivable.
-	taskID := payload.WorkflowID + "/" + payload.NodeID
+	// Use the parent workflow node ID as the TaskID. It must be globally unique. Callers that know the node ID can address
+	// the task without a lookup.
+	taskID := payload.NodeID
 	taskWorkflowID := "task-wf-" + taskID
 
 	initialData := make(map[string]any)

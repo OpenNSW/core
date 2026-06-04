@@ -30,7 +30,8 @@ type TaskPayload struct {
 	WorkflowID string
 	// RunID is the unique identifier for this specific execution attempt.
 	RunID string
-	// NodeID is the ID of the graph node currently being executed.
+	// NodeID is the ID of the graph node currently being executed. This should be
+	// unique for each node in the workflow.
 	NodeID string
 	// TaskTemplateID identifies the specific type of external work/script the task executor should run.
 	TaskTemplateID string
