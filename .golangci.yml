@@ -1,0 +1,43 @@
+# golangci-lint v2 configuration
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+  go: "1.26"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        - shadow
+        - fieldalignment
+  exclusions:
+    paths:
+      - mocks
+      - vendor
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+
+issues:
+  max-same-issues: 0
+  max-issues-per-linter: 0

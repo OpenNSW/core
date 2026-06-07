@@ -33,7 +33,7 @@ func DefaultHTTPDispatcher(ctx context.Context, url string, taskID string, paylo
 	if err != nil {
 		return fmt.Errorf("http dispatch failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

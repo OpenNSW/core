@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  # STAGE 1: Fast checks.
+  # We group mod-check and lint because they are quick.
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: './go.mod'
+          cache-dependency-path: go.sum
+          cache: true # Uses native caching, removes need for manual cache step
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+
+  # STAGE 2: Heavy Logic.
+  # Depends on quality-gate passing.
+  test-and-security:
+    name: Test & Security
+    needs: quality-gate # This creates the dependency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: './go.mod'
+          cache-dependency-path: go.sum
+          cache: true
+
+      # Combined Build & Test to save a VM spin-up
+      - name: Run Tests (includes build)
+        run: |
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: backend
+        continue-on-error: true
+
+      # Security scans run here.
+      # If tests fail, you might not care about security vulnerabilities yet.
+      - name: Run Gosec
+        uses: securego/gosec@master
+        with:
+          args: -no-fail -fmt sarif -out results.sarif ./...
