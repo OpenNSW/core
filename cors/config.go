@@ -1,0 +1,30 @@
+package cors
+
+import (
+	"fmt"
+
+	"github.com/OpenNSW/core/internal/validation"
+)
+
+type Config struct {
+	AllowedOrigins   []string
+	AllowedMethods   []string
+	AllowedHeaders   []string
+	AllowCredentials bool
+	MaxAge           int
+}
+
+func (c Config) Validate() error {
+	if len(c.AllowedOrigins) == 0 {
+		return fmt.Errorf("CORS_ALLOWED_ORIGINS is required")
+	}
+	for _, origin := range c.AllowedOrigins {
+		if origin == "*" {
+			continue
+		}
+		if err := validation.HTTPURL("CORS_ALLOWED_ORIGINS", origin); err != nil {
+			return err
+		}
+	}
+	return nil
+}
