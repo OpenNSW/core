@@ -6,7 +6,6 @@ package artifact
 // never validates against a known set.
 type Kind string
 
-
 // Artifact is the constraint for everything the registry can return. Kind MUST be
 // a value-receiver method returning a constant (independent of field values),
 // because the registry calls it on a zero value (see kindOf).

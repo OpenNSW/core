@@ -36,9 +36,9 @@ type Loader interface {
 // Registry holds loaders, the manifest (grouped so all versions of an id are
 // enumerable for Latest), and the version comparator used by Latest.
 type Registry struct {
-	loaders  map[string]Loader            // loaderType -> how to fetch
-	manifest map[idKind]map[string]entry  // (id,kind)  -> version -> entry
-	less     func(a, b string) bool       // version "less than" (see version.go)
+	loaders  map[string]Loader           // loaderType -> how to fetch
+	manifest map[idKind]map[string]entry // (id,kind)  -> version -> entry
+	less     func(a, b string) bool      // version "less than" (see version.go)
 }
 
 // Option configures a Registry.

@@ -36,7 +36,7 @@ func (l *S3Loader) Load(ctx context.Context, path string) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("s3 get object %s from bucket %s: %w", path, l.Bucket, err)
 	}
-	defer output.Body.Close()
+	defer func() { _ = output.Body.Close() }()
 
 	data, err := io.ReadAll(output.Body)
 	if err != nil {
