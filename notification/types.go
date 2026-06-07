@@ -26,8 +26,10 @@ type Request struct {
 	HTMLBody string      `json:"html_body,omitempty"`
 }
 
-func (r *Request) Validate() error {
-	if r.Channel != ChannelSMS && r.Channel != ChannelEmail {
+func (r Request) Validate() error {
+	switch r.Channel {
+	case ChannelEmail, ChannelSMS:
+	default:
 		return ErrInvalidChannel
 	}
 
