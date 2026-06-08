@@ -7,13 +7,31 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
-// New creates a new database connection using the provided configuration
+// gormLogLevel maps our LogLevel to GORM's logger.LogLevel.
+func gormLogLevel(l LogLevel) gormlogger.LogLevel {
+	switch l {
+	case LogSilent:
+		return gormlogger.Silent
+	case LogWarn:
+		return gormlogger.Warn
+	case LogInfo:
+		return gormlogger.Info
+	default:
+		// LogError and any unknown value both fall back to Error.
+		return gormlogger.Error
+	}
+}
+
+// New creates a new database connection using the provided configuration.
 func New(cfg Config) (*gorm.DB, error) {
-	// Configure GORM logger
-	gormLogger := logger.Default.LogMode(logger.Error)
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	gormLogger := gormlogger.Default.LogMode(gormLogLevel(cfg.LogLevel))
 
 	// Open database connection
 	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
@@ -26,7 +44,7 @@ func New(cfg Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Get underlying SQL database to configure connection pool
+	// Get underlying SQL database to configure connection pool.
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get underlying database: %w", err)
@@ -58,7 +76,7 @@ func New(cfg Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-// Close closes the database connection
+// Close closes the database connection.
 func Close(db *gorm.DB) error {
 	if db == nil {
 		return nil
@@ -77,7 +95,7 @@ func Close(db *gorm.DB) error {
 	return nil
 }
 
-// HealthCheck performs a health check on the database connection
+// HealthCheck performs a health check on the database connection.
 func HealthCheck(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database is nil")

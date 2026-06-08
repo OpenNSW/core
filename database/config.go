@@ -5,6 +5,20 @@ import (
 	"net/url"
 )
 
+// LogLevel controls how verbose GORM's query logging is.
+type LogLevel int
+
+const (
+	// LogSilent disables all GORM query logging.
+	LogSilent LogLevel = iota
+	// LogError logs only errors (default).
+	LogError
+	// LogWarn logs errors and slow queries.
+	LogWarn
+	// LogInfo logs every SQL query. Useful for development but noisy in production.
+	LogInfo
+)
+
 // Config holds database connection configuration.
 type Config struct {
 	Host                   string
@@ -16,6 +30,10 @@ type Config struct {
 	MaxIdleConns           int
 	MaxOpenConns           int
 	MaxConnLifetimeSeconds int
+
+	// LogLevel controls GORM query logging verbosity.
+	// Defaults to LogError when not set (zero value).
+	LogLevel LogLevel
 }
 
 func (c Config) Validate() error {
