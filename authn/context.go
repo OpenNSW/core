@@ -20,10 +20,10 @@ import (
 //	    db *sql.DB
 //	}
 //
-//	func (s *MyUserService) GetOrCreateUser(ctx context.Context, userID, email, phone, organizationID, ouHandle string) (string, error) {
+//	func (s *MyUserService) GetOrCreateUser(ctx context.Context, idpUserID, email, phone, orgID, ouHandle string) (string, error) {
 //	    // Your implementation to create or fetch the user idempotently
 //	    persistedID := "generated-id"
-//	    if err := s.db.Exec("INSERT INTO users ...", userID, email, phone, organizationID).Error; err != nil {
+//	    if err := s.db.Exec("INSERT INTO users ...", idpUserID, email, phone, orgID).Error; err != nil {
 //	        return "", err
 //	    }
 //	    return persistedID, nil
