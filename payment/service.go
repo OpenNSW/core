@@ -351,7 +351,15 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}
 
 	slog.Info("payment: advancing task step", "taskId", advanceTask, "status", statusStr)
-	if err := s.taskCompleter.CompleteTaskStep(ctx, advanceTask, map[string]any{"payment_status": statusStr}); err != nil {
+	// Carry the settled transaction's facts (not just the status) so completion-
+	// state UIs can render the reference and amount. Without these, a consumer
+	// only sees payment_status at the COMPLETED state.
+	if err := s.taskCompleter.CompleteTaskStep(ctx, advanceTask, map[string]any{
+		"payment_status":   statusStr,
+		"reference_number": gwPayload.ReferenceNumber,
+		"amount":           gwPayload.Amount.String(),
+		"currency":         gwPayload.Currency,
+	}); err != nil {
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
 		slog.Error("payment: failed to advance task step", "taskId", advanceTask, "error", err)

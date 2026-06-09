@@ -367,6 +367,10 @@ func TestProcessWebhook_SuccessAdvancesTask(t *testing.T) {
 	require.Len(t, tc.calls, 1)
 	assert.Equal(t, "task-9", tc.calls[0].taskID)
 	assert.Equal(t, "success", tc.calls[0].payload["payment_status"])
+	// Completion carries the settled transaction's facts for completion-state UIs.
+	assert.Equal(t, "TNSW1", tc.calls[0].payload["reference_number"])
+	assert.Equal(t, "1500", tc.calls[0].payload["amount"])
+	assert.Equal(t, "LKR", tc.calls[0].payload["currency"])
 }
 
 func TestProcessWebhook_AmountMismatch(t *testing.T) {
