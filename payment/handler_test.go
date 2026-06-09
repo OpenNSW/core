@@ -16,6 +16,7 @@ import (
 type mockService struct {
 	validateResp *ValidationResponse
 	validateErr  error
+	webhookResp  *WebhookResponse
 	webhookErr   error
 }
 
@@ -26,8 +27,8 @@ func (m *mockService) CreateCheckoutSession(context.Context, CreateCheckoutReque
 func (m *mockService) ValidateReference(context.Context, string, json.RawMessage) (*ValidationResponse, error) {
 	return m.validateResp, m.validateErr
 }
-func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string][]string) error {
-	return m.webhookErr
+func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string][]string) (*WebhookResponse, error) {
+	return m.webhookResp, m.webhookErr
 }
 func (m *mockService) SetTaskCompleter(TaskCompleter) {}
 
@@ -55,7 +56,10 @@ func TestHandleWebhook_StatusClassification(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			rr := serveWebhook(&mockService{webhookErr: tc.err})
+			rr := serveWebhook(&mockService{
+				webhookResp: &WebhookResponse{HTTPStatus: http.StatusOK, Payload: []byte(`{"message":"Success"}`)},
+				webhookErr:  tc.err,
+			})
 			assert.Equal(t, tc.want, rr.Code)
 		})
 	}

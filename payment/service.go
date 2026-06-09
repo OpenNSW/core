@@ -56,8 +56,9 @@ type PaymentService interface {
 	// ValidateReference is used for real-time validation requests from gateways.
 	ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage) (*ValidationResponse, error)
 
-	// ProcessWebhook handles asynchronous notifications from payment gateways.
-	ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) error
+	// ProcessWebhook handles asynchronous notifications from payment gateways and
+	// returns the gateway-specific acknowledgement to relay back to the gateway.
+	ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) (*WebhookResponse, error)
 
 	// SetTaskCompleter injects the dependency used to advance the workflow when
 	// a payment settles. Wired post-construction to avoid an import cycle with taskv2.
@@ -240,26 +241,26 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 	return gateway.HandleValidateReference(ctx, validationTx, isPayable, rawBody)
 }
 
-func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) error {
+func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) (*WebhookResponse, error) {
 	gateway, err := s.registry.Get(gatewayID)
 	if err != nil {
-		return fmt.Errorf("failed to get gateway %s: %w", gatewayID, err)
+		return nil, fmt.Errorf("failed to get gateway %s: %w", gatewayID, err)
 	}
 
-	gwPayload, err := gateway.ParseWebhook(ctx, body, headers)
+	gwPayload, webhookResp, err := gateway.ParseWebhook(ctx, body, headers)
 	if err != nil {
-		return fmt.Errorf("gateway failed to parse webhook: %w", err)
+		return nil, fmt.Errorf("gateway failed to parse webhook: %w", err)
 	}
 
 	if gwPayload == nil {
-		return fmt.Errorf("gateway returned nil webhook payload")
+		return nil, fmt.Errorf("gateway returned nil webhook payload")
 	}
 
 	// Translate the canonical gateway status into our domain status, rejecting
 	// anything unrecognized (defense-in-depth against a misbehaving gateway).
 	newStatus, err := toDomainStatus(gwPayload.Status)
 	if err != nil {
-		return fmt.Errorf("webhook for %s: %w", gwPayload.ReferenceNumber, err)
+		return nil, fmt.Errorf("webhook for %s: %w", gwPayload.ReferenceNumber, err)
 	}
 
 	// Claim and apply the status transition atomically. A row-level lock makes
@@ -315,12 +316,15 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	// webhookResp is the gateway-specific acknowledgement parsed alongside the
+	// payload above; relay it on every success path.
 
 	// Already terminal / nothing claimed — don't advance again.
 	if !advance {
-		return nil
+		return webhookResp, nil
 	}
 
 	slog.Info("processed webhook successfully", "reference", gwPayload.ReferenceNumber, "status", finalStatus)
@@ -330,7 +334,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	// task signal; any other status leaves the task untouched so a non-terminal or
 	// unrecognized gateway status can't be misread as paid.
 	if s.taskCompleter == nil {
-		return nil
+		return webhookResp, nil
 	}
 
 	var statusStr string
@@ -341,18 +345,18 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		statusStr = "fail"
 	}
 	if statusStr == "" {
-		slog.Warn("paymentsv2: non-terminal webhook status, not advancing task",
+		slog.Warn("payment: non-terminal webhook status, not advancing task",
 			"reference", gwPayload.ReferenceNumber, "taskId", advanceTask, "status", finalStatus)
-		return nil
+		return webhookResp, nil
 	}
 
-	slog.Info("paymentsv2: advancing task step", "taskId", advanceTask, "status", statusStr)
+	slog.Info("payment: advancing task step", "taskId", advanceTask, "status", statusStr)
 	if err := s.taskCompleter.CompleteTaskStep(ctx, advanceTask, map[string]any{"payment_status": statusStr}); err != nil {
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
-		slog.Error("paymentsv2: failed to advance task step", "taskId", advanceTask, "error", err)
-		return fmt.Errorf("failed to advance task step for %s: %w", advanceTask, err)
+		slog.Error("payment: failed to advance task step", "taskId", advanceTask, "error", err)
+		return nil, fmt.Errorf("failed to advance task step for %s: %w", advanceTask, err)
 	}
 
-	return nil
+	return webhookResp, nil
 }

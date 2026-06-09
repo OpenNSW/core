@@ -74,6 +74,14 @@ type ValidationResponse struct {
 	HTTPStatus int
 }
 
+// WebhookResponse is the gateway-specific acknowledgement returned to the
+// gateway after a webhook (payment-completion) notification has been processed.
+// For GovPay+ this carries the UpdateResponse (paymentData receipt).
+type WebhookResponse struct {
+	Payload    json.RawMessage
+	HTTPStatus int
+}
+
 // Factory constructs a configured, ready-to-use gateway from its raw config.
 // One factory per gateway type; the registry calls it once at init so gateways
 // are immutable after construction (no post-init config mutation).
@@ -96,6 +104,8 @@ type PaymentGateway interface {
 	// this gateway, pending, and not expired) the gateway should reflect back.
 	HandleValidateReference(ctx context.Context, tx *ValidationTransaction, isPayable bool, reqData json.RawMessage) (*ValidationResponse, error)
 
-	// ParseWebhook processes raw gateway notifications into domain-neutral payloads.
-	ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*WebhookPayload, error)
+	// ParseWebhook processes raw gateway notifications into a domain-neutral
+	// payload (for the service to act on) together with the gateway-specific
+	// acknowledgement to relay back once the notification has been accepted.
+	ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*WebhookPayload, *WebhookResponse, error)
 }

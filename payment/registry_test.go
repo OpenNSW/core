@@ -43,12 +43,17 @@ func (m *MockGateway) HandleValidateReference(ctx context.Context, tx *Validatio
 	return args.Get(0).(*ValidationResponse), args.Error(1)
 }
 
-func (m *MockGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*WebhookPayload, error) {
+func (m *MockGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*WebhookPayload, *WebhookResponse, error) {
 	args := m.Called(ctx, body, headers)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	var payload *WebhookPayload
+	if args.Get(0) != nil {
+		payload = args.Get(0).(*WebhookPayload)
 	}
-	return args.Get(0).(*WebhookPayload), args.Error(1)
+	var resp *WebhookResponse
+	if args.Get(1) != nil {
+		resp = args.Get(1).(*WebhookResponse)
+	}
+	return payload, resp, args.Error(2)
 }
 
 func TestNewRegistry(t *testing.T) {
