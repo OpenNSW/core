@@ -71,6 +71,7 @@ func Middleware(userProfileService UserProfileService, tokenExtractor *TokenExtr
 			if principal.UserPrincipal != nil && userProfileService != nil {
 				user := principal.UserPrincipal
 				userID, err := userProfileService.GetOrCreateUser(
+					r.Context(),
 					user.UserID,
 					user.Email,
 					derefString(user.PhoneNumber),
@@ -79,9 +80,9 @@ func Middleware(userProfileService UserProfileService, tokenExtractor *TokenExtr
 				)
 				if err != nil {
 					slog.Error("failed to get or create user profile", "idp_user_id", user.UserID, "error", err)
-				} else if userID != nil {
-					authCtx.User.ID = *userID
-					slog.Debug("resolved user profile", "idp_user_id", user.UserID, "user_id", *userID)
+				} else if userID != "" {
+					authCtx.User.ID = userID
+					slog.Debug("resolved user profile", "idp_user_id", user.UserID, "user_id", userID)
 				}
 			}
 

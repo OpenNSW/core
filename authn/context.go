@@ -20,13 +20,13 @@ import (
 //	    db *sql.DB
 //	}
 //
-//	func (s *MyUserService) GetOrCreateUser(userID, email, phone, organizationID, ouHandle string) (*string, error) {
+//	func (s *MyUserService) GetOrCreateUser(ctx context.Context, userID, email, phone, organizationID, ouHandle string) (string, error) {
 //	    // Your implementation to create or fetch the user idempotently
 //	    persistedID := "generated-id"
 //	    if err := s.db.Exec("INSERT INTO users ...", userID, email, phone, organizationID).Error; err != nil {
-//	        return nil, err
+//	        return "", err
 //	    }
-//	    return &persistedID, nil
+//	    return persistedID, nil
 //	}
 //
 //	authManager := auth.NewManager(myUserService, cfg.Auth)  // myUserService can be nil
@@ -44,9 +44,8 @@ type UserProfileService interface {
 	//   - Called during first login after token validation
 	//   - Errors are logged but don't block authentication
 	//   - Should not return error if user already exists
-	//   - If err is non-nil, the returned user ID should be nil
 	// Returns user ID of the created or existing user, or an error if the operation fails.
-	GetOrCreateUser(idpUserID, email, phone, organizationID, ouHandle string) (*string, error)
+	GetOrCreateUser(ctx context.Context, idpUserID, email, phone, orgID, ouHandle string) (string, error)
 }
 
 // UserContext represents a user principal's runtime context injected into each request.

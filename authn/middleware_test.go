@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +10,7 @@ import (
 
 // MockUserService is a mock implementation of UserProfileService for testing.
 type MockUserService struct {
-	getOrCreateID    *string
+	getOrCreateID    string
 	getOrCreateErr   error
 	getOrCreateCalls int
 	lastArgs         getOrCreateArgs
@@ -23,23 +24,22 @@ type getOrCreateArgs struct {
 	ouHandle  string
 }
 
-func (m *MockUserService) GetOrCreateUser(idpUserId, email, phone, ouID, ouHandle string) (*string, error) {
+func (m *MockUserService) GetOrCreateUser(ctx context.Context, idpUserID, email, phone, orgID, ouHandle string) (string, error) {
 	m.getOrCreateCalls++
 	m.lastArgs = getOrCreateArgs{
-		idpUserID: idpUserId,
+		idpUserID: idpUserID,
 		email:     email,
 		phone:     phone,
-		ouID:      ouID,
+		ouID:      orgID,
 		ouHandle:  ouHandle,
 	}
 	if m.getOrCreateErr != nil {
-		return nil, m.getOrCreateErr
+		return "", m.getOrCreateErr
 	}
-	if m.getOrCreateID != nil {
+	if m.getOrCreateID != "" {
 		return m.getOrCreateID, nil
 	}
-	userID := "mock-user-id"
-	return &userID, nil
+	return "mock-user-id", nil
 }
 
 // TestAuthMiddleware_NoToken tests middleware when no auth header provided
@@ -285,8 +285,7 @@ func TestAuthMiddleware_UserPrincipal_GetOrCreateUser(t *testing.T) {
 	defer cleanup()
 
 	signedToken := newUserToken(t, privateKey)
-	existingID := "existing-user-id"
-	mockUserService := &MockUserService{getOrCreateID: &existingID}
+	mockUserService := &MockUserService{getOrCreateID: "existing-user-id"}
 
 	testHandlerCalled := false
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -295,8 +294,8 @@ func TestAuthMiddleware_UserPrincipal_GetOrCreateUser(t *testing.T) {
 		if authCtx == nil || authCtx.User == nil {
 			t.Fatalf("expected auth context with user")
 		}
-		if authCtx.User.ID != existingID {
-			t.Fatalf("expected persisted user id %s, got %s", existingID, authCtx.User.ID)
+		if authCtx.User.ID != "existing-user-id" {
+			t.Fatalf("expected persisted user id existing-user-id, got %s", authCtx.User.ID)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -327,8 +326,7 @@ func TestAuthMiddleware_UserPrincipal_CreatesUser(t *testing.T) {
 	defer cleanup()
 
 	signedToken := newUserToken(t, privateKey)
-	createdID := "created-user-id"
-	mockUserService := &MockUserService{getOrCreateID: &createdID}
+	mockUserService := &MockUserService{getOrCreateID: "created-user-id"}
 
 	testHandlerCalled := false
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -337,8 +335,8 @@ func TestAuthMiddleware_UserPrincipal_CreatesUser(t *testing.T) {
 		if authCtx == nil || authCtx.User == nil {
 			t.Fatalf("expected auth context with user")
 		}
-		if authCtx.User.ID != createdID {
-			t.Fatalf("expected persisted user id %s, got %s", createdID, authCtx.User.ID)
+		if authCtx.User.ID != "created-user-id" {
+			t.Fatalf("expected persisted user id created-user-id, got %s", authCtx.User.ID)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
