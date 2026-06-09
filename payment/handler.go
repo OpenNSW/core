@@ -97,6 +97,12 @@ func (h *HTTPHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if resp == nil {
+		slog.ErrorContext(r.Context(), "webhook response is nil", "gateway", gatewayID)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.HTTPStatus)
 	if _, err := w.Write(resp.Payload); err != nil {
