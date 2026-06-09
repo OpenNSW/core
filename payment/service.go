@@ -270,6 +270,9 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		advance     bool
 		advanceTask string
 		finalStatus PaymentStatus
+		refNum      string
+		amount      string
+		currency    string
 	)
 
 	err = s.repo.RunInTransaction(ctx, func(repo PaymentRepository) error {
@@ -313,6 +316,9 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		advance = true
 		advanceTask = tx.TaskID
 		finalStatus = tx.Status
+		refNum = tx.ReferenceNumber
+		amount = tx.Amount.String()
+		currency = tx.Currency
 		return nil
 	})
 	if err != nil {
@@ -352,13 +358,14 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 	slog.Info("payment: advancing task step", "taskId", advanceTask, "status", statusStr)
 	// Carry the settled transaction's facts (not just the status) so completion-
-	// state UIs can render the reference and amount. Without these, a consumer
-	// only sees payment_status at the COMPLETED state.
+	// state UIs can render the reference and amount. These come from the
+	// authoritative DB transaction (captured under lock), not gwPayload, which
+	// may omit amount/currency on a FAILED notification.
 	if err := s.taskCompleter.CompleteTaskStep(ctx, advanceTask, map[string]any{
 		"payment_status":   statusStr,
-		"reference_number": gwPayload.ReferenceNumber,
-		"amount":           gwPayload.Amount.String(),
-		"currency":         gwPayload.Currency,
+		"reference_number": refNum,
+		"amount":           amount,
+		"currency":         currency,
 	}); err != nil {
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
