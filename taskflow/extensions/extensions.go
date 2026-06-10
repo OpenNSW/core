@@ -9,13 +9,6 @@ import (
 	"github.com/OpenNSW/core/taskflow/store"
 )
 
-type ExecutionPhase string
-
-const (
-	PhasePreResume  ExecutionPhase = "PRE_RESUME"
-	PhasePostResume ExecutionPhase = "POST_RESUME"
-)
-
 // TaskExtension defines the interface for task complete step interceptors. An
 // extension does one job and is unaware of when it runs — the orchestrator owns
 // the lifecycle (which phase to invoke it in, blocking vs async, error

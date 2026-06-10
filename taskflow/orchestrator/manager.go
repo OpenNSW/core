@@ -20,6 +20,7 @@ import (
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
+	"github.com/OpenNSW/core/taskflow/types"
 	engine "github.com/OpenNSW/core/workflow"
 	"go.temporal.io/sdk/activity"
 )
@@ -265,7 +266,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	// 1. Run PRE_RESUME Extensions (Blocking, Read-only)
 	// Extensions receive a deep copy so they can validate/inspect the payload
 	// but cannot mutate the data that gets persisted or sent to the workflow.
-	if err := tm.runExtensions(ctx, &record, extensions.PhasePreResume, deepcopy.Map(payload), true); err != nil {
+	if err := tm.runExtensions(ctx, &record, types.PhasePreResume, deepcopy.Map(payload), true); err != nil {
 		return err
 	}
 
@@ -312,7 +313,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 
 		// Execute in background; errors are logged inside runExtensions, not returned to client.
 		go func() {
-			_ = tm.runExtensions(bgCtx, &copiedRecord, extensions.PhasePostResume, copiedPayload, false)
+			_ = tm.runExtensions(bgCtx, &copiedRecord, types.PhasePostResume, copiedPayload, false)
 		}()
 	}
 
@@ -322,12 +323,12 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 // runExtensions executes the configured extensions matching phase against the
 // record. When stopOnError is true (pre-resume), the first failure aborts and is
 // returned; otherwise (post-resume) failures are logged and execution continues.
-func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskRecord, phase extensions.ExecutionPhase, payload map[string]any, stopOnError bool) error {
+func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskRecord, phase types.ExecutionPhase, payload map[string]any, stopOnError bool) error {
 	if tm.extensionsRegistry == nil {
 		return nil
 	}
 	for _, extCfg := range record.ActiveExtensions {
-		if extCfg.Phase != string(phase) {
+		if extCfg.Phase != phase {
 			continue
 		}
 		ext, registered := tm.extensionsRegistry.Get(extCfg.ID)

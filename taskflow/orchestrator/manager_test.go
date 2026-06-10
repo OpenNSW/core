@@ -618,8 +618,8 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 		TaskRunID:             "run-123",
 		SubTaskNodeID:         "node-123",
 		ActiveExtensions: []types.ExtensionConfig{
-			{ID: "validator", Phase: string(extensions.PhasePreResume)},
-			{ID: "logger", Phase: string(extensions.PhasePostResume)},
+			{ID: "validator", Phase: types.PhasePreResume},
+			{ID: "logger", Phase: types.PhasePostResume},
 		},
 	}
 	db.SaveTask(context.Background(), record)

@@ -14,10 +14,19 @@ type TaskTemplate struct {
 	RenderConfigID string `json:"render_config_id"` // task-level render config
 }
 
+// ExecutionPhase identifies a point in the CompleteTaskStep lifecycle at which
+// an extension may be invoked.
+type ExecutionPhase string
+
+const (
+	PhasePreResume  ExecutionPhase = "PRE_RESUME"
+	PhasePostResume ExecutionPhase = "POST_RESUME"
+)
+
 // ExtensionConfig defines configuration for an extension attached to a subtask step.
 type ExtensionConfig struct {
 	ID         string          `json:"id"`
-	Phase      string          `json:"phase"` // e.g. "PRE_RESUME", "POST_RESUME"
+	Phase      ExecutionPhase  `json:"phase"`
 	Properties json.RawMessage `json:"properties,omitempty"`
 }
 
