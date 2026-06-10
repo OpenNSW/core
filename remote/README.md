@@ -1,74 +1,85 @@
-# Auth Package
+# remote
 
-The `auth` package provides modular authentication strategies for the `remote` client.
+Registry-based outbound HTTP client manager. Services (external agencies, backend APIs) are declared in a JSON config file; the manager resolves endpoints, applies authentication, and executes requests — no per-service boilerplate in your application code.
 
-## Authenticator Interface
-
-All strategies implement the `Authenticator` interface, allowing them to be easily injected into any `remote.Client`.
+## Usage
 
 ```go
-type Authenticator interface {
-    Apply(req *http.Request) error
+import "github.com/OpenNSW/core/remote"
+
+manager := remote.NewManager()
+if err := manager.LoadServices("configs/services.json"); err != nil {
+    log.Fatal(err)
+}
+
+// Call a registered service
+var result MyResponseType
+err := manager.Call(ctx, "npqs-api", remote.Request{
+    Method: http.MethodPost,
+    Path:   "/v1/applications",
+    Body:   myPayload,
+}, &result)
+```
+
+## Services config
+
+`services.json` declares available services with their endpoint, timeout, and authentication:
+
+```json
+{
+  "version": "1",
+  "services": [
+    {
+      "id": "npqs-api",
+      "url": "https://npqs.example.gov/api",
+      "timeout_seconds": 30,
+      "auth": {
+        "type": "oauth2",
+        "options": {
+          "token_url": "https://idp.example.gov/token",
+          "client_id": "my-client",
+          "client_secret": "secret",
+          "scopes": ["npqs:submit"]
+        }
+      }
+    },
+    {
+      "id": "legacy-api",
+      "url": "https://legacy.example.gov",
+      "timeout_seconds": 10,
+      "auth": {
+        "type": "api_key",
+        "options": {
+          "key": "X-API-Key",
+          "value": "my-api-key"
+        }
+      }
+    }
+  ]
 }
 ```
 
-## Supported Strategies
+## Authentication strategies
 
-### API Key Authentication
-Uses a custom header (e.g., `X-API-Key`) with a fixed value.
-```go
-auth.NewAPIKey(auth.APIKeyConfig{
-    Key:   "X-Custom-Key",
-    Value: "my-secret-key",
-})
-```
+See [`remote/auth`](auth/README.md) for the full reference. Supported types:
 
-### Bearer Token Authentication
-Uses the standard `Authorization: Bearer <token>` header.
-```go
-auth.NewBearer(auth.BearerConfig{Token: "my-jwt-token"})
-```
+| `type` | Description |
+|---|---|
+| `api_key` | Static header (e.g. `X-API-Key: value`) |
+| `bearer` | `Authorization: Bearer <token>` |
+| `oauth2` | Client credentials flow with automatic token caching |
 
-### OAuth2 Client Credentials Flow
-Implements the OAuth2 Client Credentials flow with the following features:
-- Automatic token caching.
-- Expiry handling with a 1-minute safety buffer.
-- Synchronized token updates to prevent race conditions.
-- Scope support.
+## Direct client access
 
 ```go
-auth.NewOAuth2(auth.OAuth2Config{
-    TokenURL:     "https://identity.example.com/oauth2/token",
-    ClientID:     "my-client-id",
-    ClientSecret: "my-client-secret",
-    Scopes:       []string{"read", "write"},
-})
+client, err := manager.GetClient("npqs-api")
+
+// Execute a pre-built *http.Request directly
+resp, err := client.Do(req)
 ```
 
-## Strategy Configuration
+## Listing registered services
 
-### APIKeyConfig
-Used when the authentication type is `"api_key"`.
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `key` | `string` | The HTTP header name (e.g., `"X-API-Key"`). |
-| `value` | `string` | The static key value. |
-
-### BearerConfig
-Used when the authentication type is `"bearer"`.
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `token` | `string` | The static bearer token. |
-
-### OAuth2Config
-Used when the authentication type is `"oauth2"`.
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `token_url` | `string` | The OAuth2 token endpoint URL. |
-| `client_id` | `string` | The client identifier. |
-| `client_secret` | `string` | The client secret. |
-| `scopes` | `[]string` | Optional list of requested scopes. |
-
+```go
+ids := manager.ListServices() // []string{"npqs-api", "legacy-api"}
+```
