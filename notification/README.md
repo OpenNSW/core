@@ -8,7 +8,7 @@ A multi-channel notification router with a pluggable provider model. Your applic
 import "github.com/OpenNSW/core/notification"
 
 manager, err := notification.NewManager(
-    notification.Config{ConfigPath: "configs/notification.json"},
+    notification.Config{Path: "configs/notification.json"},
     myEmailProvider,
     mySMSProvider,
 )

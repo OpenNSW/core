@@ -67,7 +67,10 @@ assembler, _ := uiprojector.NewAssembler(templateProvider, uiprojector.DefaultPr
 renderer := zoneview.NewRenderer(assembler)
 
 // 4. Task manager
-tm := orchestrator.New(store, pluginRegistry, temporalClient, renderer, artifactRegistry)
+onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
+    return parentWorkflowManager.TaskDone(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
+}
+tm := orchestrator.NewTaskManager(store, artifactRegistry, pluginRegistry, temporalClient, onTaskCompleted, renderer)
 
 // 5. Register with Temporal worker (MICRO_WORKFLOW_QUEUE)
 worker.RegisterWorkflow(tm.MicroWorkflow)

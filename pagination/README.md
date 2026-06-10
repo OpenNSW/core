@@ -8,14 +8,15 @@ Standard pagination envelope and query parameter parsing. Keeps list endpoints c
 import "github.com/OpenNSW/core/pagination"
 
 func handleList(w http.ResponseWriter, r *http.Request) {
-    offset, limit, err := pagination.ParsePaginationParams(r)
+    rawOffset, rawLimit, err := pagination.ParsePaginationParams(r)
     if err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest)
         return
     }
 
-    items, total := repo.List(ctx, *offset, *limit)
-    page := pagination.NewPageResult(items, total, *offset, *limit)
+    offset, limit := pagination.ResolvePaginationParams(rawOffset, rawLimit)
+    items, total := repo.List(r.Context(), offset, limit)
+    page := pagination.NewPageResult(items, total, offset, limit)
 
     json.NewEncoder(w).Encode(page)
 }

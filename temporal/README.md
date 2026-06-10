@@ -18,7 +18,7 @@ if err != nil {
 defer client.Close()
 ```
 
-The returned `client.Client` is the standard Temporal Go SDK client. Pass it to `workflow.NewTemporalManager` and `taskflow/orchestrator.New`.
+The returned `client.Client` is the standard Temporal Go SDK client. Pass it to `workflow.NewTemporalManager` and `taskflow/orchestrator.NewTaskManager`.
 
 ## Config
 

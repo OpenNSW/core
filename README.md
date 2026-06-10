@@ -126,7 +126,10 @@ func Build(cfg *Config) (*App, error) {
 
     assembler, _ := uiprojector.NewAssembler(templateProvider, uiprojector.DefaultProjectors())
     renderer := zoneview.NewRenderer(assembler)
-    tm := orchestrator.New(taskStore, pluginRegistry, temporalClient, renderer, registry)
+    onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
+        return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
+    }
+    tm := orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, temporalClient, onTaskCompleted, renderer)
 
     microWorker := temporal.NewWorker(temporalClient, "MICRO_WORKFLOW_QUEUE", worker.Options{})
     microWorker.RegisterWorkflow(tm.MicroWorkflow)

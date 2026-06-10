@@ -8,7 +8,7 @@ JWT-based authentication. Validates tokens against a JWKS endpoint, extracts ide
 import "github.com/OpenNSW/core/authn"
 
 manager, err := authn.NewManager(userProfileSvc, authn.Config{
-    JWKSUrl:   "https://idp.example.com/.well-known/jwks.json",
+    JWKSURL:   "https://idp.example.com/.well-known/jwks.json",
     Issuer:    "https://idp.example.com",
     Audience:  "my-api",
     ClientIDs: []string{"my-m2m-client"},
