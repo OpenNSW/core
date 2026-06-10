@@ -27,15 +27,3 @@ func setNestedKey(m map[string]any, dotPath string, value any) {
 	}
 	m[dotPath] = value
 }
-
-// copyMap creates a shallow copy of the given map.
-func copyMap(src map[string]any) map[string]any {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
