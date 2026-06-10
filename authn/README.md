@@ -36,14 +36,14 @@ if authCtx == nil {
 }
 
 // Human user token
-if authCtx.PrincipalType == authn.UserPrincipalType {
+if authCtx.Type() == authn.UserPrincipalType {
     fmt.Println(authCtx.User.Email)
     fmt.Println(authCtx.User.ID)       // internal persisted ID (if UserProfileService set)
     fmt.Println(authCtx.User.OUID)     // organisation unit ID
 }
 
 // Machine-to-machine token
-if authCtx.PrincipalType == authn.ClientPrincipalType {
+if authCtx.Type() == authn.ClientPrincipalType {
     fmt.Println(authCtx.Client.ClientID)
 }
 ```

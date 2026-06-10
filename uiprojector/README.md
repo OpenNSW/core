@@ -71,10 +71,9 @@ mainContent := zones["main"].Content
 - **Storage Agnostic**: Templates can be fetched from S3, local disk, or databases via the `TemplateProvider` interface.
 
 ## Extensibility
-You can register custom projectors by adding them to the map passed to `NewAssembler`:
+You can register custom projectors by appending to the slice passed to `NewAssembler`:
 
 ```go
-projectors := uiprojector.DefaultProjectors()
-projectors["CHARTS"] = &ChartProjector{}
+projectors := append(uiprojector.DefaultProjectors(), &ChartProjector{})
 asm, err := uiprojector.NewAssembler(tp, projectors)
 ```

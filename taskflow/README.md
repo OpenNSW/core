@@ -64,17 +64,31 @@ pluginRegistry.Register("EXTERNAL_REVIEW", NewExternalReviewPlugin(remoteManager
 
 // 3. Renderer
 assembler, _ := uiprojector.NewAssembler(templateProvider, uiprojector.DefaultProjectors())
-renderer := zoneview.NewRenderer(assembler)
+taskRenderer := zoneview.NewTaskRenderer(assembler)
 
-// 4. Task manager
+// 4. Wire the micro-workflow runner and task manager together.
+// tm is forward-declared so the handler closures can reference it before it's assigned.
+var tm *orchestrator.TaskManager
+workflowRunner := workflow.NewTemporalManager(
+    temporalClient,
+    "MICRO_WORKFLOW_QUEUE",
+    func(payload workflow.TaskPayload) (map[string]any, error) {
+        return tm.StartSubTask(context.Background(), payload)
+    },
+    func(workflowID string, vars map[string]any) error {
+        return tm.HandleTaskCompletion(context.Background(), workflowID, vars)
+    },
+)
+
 onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
     return parentWorkflowManager.TaskDone(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
 }
-tm := orchestrator.NewTaskManager(store, artifactRegistry, pluginRegistry, temporalClient, onTaskCompleted, renderer)
+tm = orchestrator.NewTaskManager(store, artifactRegistry, pluginRegistry, workflowRunner, onTaskCompleted, taskRenderer)
 
-// 5. Register with Temporal worker (MICRO_WORKFLOW_QUEUE)
-worker.RegisterWorkflow(tm.MicroWorkflow)
-worker.RegisterActivity(tm.Activities)
+// 5. Start the Temporal worker
+if err := workflowRunner.StartWorker(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## TaskManager API

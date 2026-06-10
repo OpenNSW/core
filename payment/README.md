@@ -48,7 +48,7 @@ func (g *MyGateway) ExtractReferenceNumber(ctx context.Context, reqData json.Raw
     return "REF-123", nil
 }
 
-func (g *MyGateway) HandleValidateReference(ctx context.Context, tx *payment.ValidationTransaction, reqData json.RawMessage) (*payment.ValidationResponse, error) {
+func (g *MyGateway) HandleValidateReference(ctx context.Context, tx *payment.ValidationTransaction, isPayable bool, reqData json.RawMessage) (*payment.ValidationResponse, error) {
     // Format the final response for the gateway
     return &payment.ValidationResponse{...}, nil
 }

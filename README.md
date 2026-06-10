@@ -125,20 +125,26 @@ func Build(cfg *Config) (*App, error) {
     pluginRegistry.Register("MY_PLUGIN",       &MyPlugin{})
 
     assembler, _ := uiprojector.NewAssembler(templateProvider, uiprojector.DefaultProjectors())
-    renderer := zoneview.NewRenderer(assembler)
+    taskRenderer := zoneview.NewTaskRenderer(assembler)
+
+    var tm *orchestrator.TaskManager
+    microRunner := workflow.NewTemporalManager(
+        temporalClient, "MICRO_WORKFLOW_QUEUE",
+        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartSubTask(ctx, p) },
+        func(wfID string, vars map[string]any) error { return tm.HandleTaskCompletion(ctx, wfID, vars) },
+    )
     onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
         return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
     }
-    tm := orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, temporalClient, onTaskCompleted, renderer)
-
-    microWorker := temporal.NewWorker(temporalClient, "MICRO_WORKFLOW_QUEUE", worker.Options{})
-    microWorker.RegisterWorkflow(tm.MicroWorkflow)
-    microWorker.RegisterActivity(tm.Activities)
+    tm = orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, microRunner, onTaskCompleted, taskRenderer)
+    microRunner.StartWorker()
 
     // 6. Macro workflow runner
-    macroWorker := temporal.NewWorker(temporalClient, "INTERPRETER_TASK_QUEUE", worker.Options{})
-    macroWorker.RegisterWorkflow(workflow.GraphInterpreterWorkflow)
-    macroWorker.RegisterActivity(workflowActivities)
+    macroRunner := workflow.NewTemporalManager(
+        temporalClient, "INTERPRETER_TASK_QUEUE",
+        onMacroTaskActivation, onMacroCompletion,
+    )
+    macroRunner.StartWorker()
 
     // 7. Auth
     authnManager, _ := authn.NewManager(userProfileSvc, cfg.Authn)

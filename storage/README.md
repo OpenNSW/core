@@ -9,7 +9,7 @@ import (
     "github.com/OpenNSW/core/storage"
 )
 
-driver, err := storage.NewStorageFromConfig(storage.Config{
+driver, err := storage.NewStorageFromConfig(ctx, storage.Config{
     Type: "s3",
     Options: map[string]string{
         "bucket": "my-uploads",
