@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package authz provides generic, transport-agnostic authorization for HTTP
 // services, driven by the OAuth2 scopes carried on a request's authenticated
 // principal.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package engine implements a Temporal-based graph interpreter workflow engine.
 package engine
 

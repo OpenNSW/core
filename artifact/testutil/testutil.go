@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package testutil provides shared test helpers for packages that work with the artifact registry.
 package testutil
 

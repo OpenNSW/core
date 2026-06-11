@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 package artifact
 
 // Kind identifies an artifact's category. It is an OPEN string: core defines its

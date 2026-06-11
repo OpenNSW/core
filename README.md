@@ -48,40 +48,38 @@ go get github.com/OpenNSW/core
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────┐
-│           User Portal / Frontend         │
-└─────────────────┬───────────────────────┘
-                  │ HTTP
-        ┌─────────▼──────────┐
-        │  Your HTTP Server   │
-        │  authn / authz /    │
-        │  cors middleware     │
-        └────┬──────────┬─────┘
-             │          │
-   ┌─────────▼──┐  ┌────▼──────────────────┐
-   │  Domain     │  │  payment / storage /   │
-   │  Services   │  │  notification / remote │
-   └─────────┬───┘  └────────────────────────┘
-             │
-   ┌─────────▼──────────────┐
-   │   taskflow.TaskManager  │  ← manages human-in-the-loop steps
-   │   (micro workflows)     │
-   └─────────┬───────────────┘
-             │ subtask plugins
-   ┌─────────▼───────────────────────────────┐
-   │  USER_INPUT │ EXTERNAL_REVIEW │ PAYMENT  │
-   │  API_CALL   │ your custom plugins        │
-   └─────────────────────────────────────────┘
-             │ on task completion
-   ┌─────────▼──────────────┐
-   │  workflow (macro DAG)   │  ← JSON-defined, runs on Temporal
-   │  nodes, edges, gateways │
-   └─────────┬───────────────┘
-             │
-   ┌─────────▼──────────────┐
-   │  artifact registry      │  ← workflow defs, form schemas, templates
-   └────────────────────────┘
+```mermaid
+flowchart TD
+    Portal["User Portal / Frontend"]
+
+    subgraph server["Your HTTP Server · authn / authz / cors"]
+        DS["Domain Services"]
+        SR["payment webhooks · storage routes"]
+    end
+
+    subgraph macrowf["workflow — macro DAG (Temporal)"]
+        WF["JSON graph · START · TASK · GATEWAY · SPLIT · END"]
+    end
+
+    subgraph microwf["taskflow.TaskManager (Temporal)"]
+        TM["micro workflows · human-in-the-loop steps"]
+    end
+
+    subgraph pluginset["Subtask Plugins"]
+        P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · API_CALL · custom"]
+    end
+
+    SS["payment · remote · notification · storage"]
+    AR[("artifact registry<br>workflow defs · task templates<br>form schemas · render templates")]
+
+    Portal -->|HTTP| server
+    DS -->|StartWorkflow| macrowf
+    server -->|"GetTaskRenderInfo / CompleteTaskStep"| microwf
+    macrowf -->|TASK node reached| microwf
+    microwf --> pluginset
+    pluginset -->|use| SS
+    macrowf -. loads .-> AR
+    microwf -. loads .-> AR
 ```
 
 The two-tier workflow design is central to single window systems:

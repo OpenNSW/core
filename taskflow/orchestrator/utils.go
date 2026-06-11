@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 package orchestrator
 
 // setNestedKey sets a value in a map using a dot-separated path.
