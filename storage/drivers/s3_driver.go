@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -91,7 +92,11 @@ func (d *S3Driver) presignGet(ctx context.Context, key string) (string, error) {
 }
 
 func (d *S3Driver) GetDownloadURL(ctx context.Context, key string) (string, error) {
-	return d.presignGet(ctx, key)
+	u, err := d.presignGet(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return d.rewriteHost(u)
 }
 
 // presignPut returns a presigned PUT URL for the key and constraints.
@@ -111,5 +116,29 @@ func (d *S3Driver) presignPut(ctx context.Context, key, contentType string, maxS
 }
 
 func (d *S3Driver) GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error) {
-	return d.presignPut(ctx, key, contentType, maxSizeBytes)
+	u, err := d.presignPut(ctx, key, contentType, maxSizeBytes)
+	if err != nil {
+		return "", err
+	}
+	return d.rewriteHost(u)
+}
+
+// rewriteHost replaces the host (and scheme) of rawURL with the host from PublicURL.
+// This lets the SDK sign against the real S3 endpoint while returning a browser-reachable
+// proxy URL.
+func (d *S3Driver) rewriteHost(rawURL string) (string, error) {
+	if d.PublicURL == "" {
+		return rawURL, nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse raw URL: %w", err)
+	}
+	pub, err := url.Parse(d.PublicURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse public URL: %w", err)
+	}
+	u.Scheme = pub.Scheme
+	u.Host = pub.Host
+	return u.String(), nil
 }
