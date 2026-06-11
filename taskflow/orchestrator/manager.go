@@ -153,16 +153,17 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		Data:             initialData,
 		CreatedAt:        time.Now(),
 	}
-	tm.db.SaveTask(ctx, record)
-	log.Printf("[TaskManager] Created Task record %s (template=%s, type=%s)", taskID, payload.TaskTemplateID, template.Type)
-
-	// Verify that there are no parallel execution paths, as TaskRecord only stores coordinates for a single active subtask.
+	// Verify that there are no parallel execution paths before writing anything,
+	// as TaskRecord only stores coordinates for a single active subtask.
 	for _, node := range wfDef.Nodes {
 		if node.Type == engine.NodeTypeGateway &&
 			(node.GatewayType == engine.GatewayTypeParallelSplit || node.GatewayType == "INCLUSIVE_SPLIT") {
 			return nil, fmt.Errorf("parallel subtasks are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType)
 		}
 	}
+
+	tm.db.SaveTask(ctx, record)
+	log.Printf("[TaskManager] Created Task record %s (template=%s, type=%s)", taskID, payload.TaskTemplateID, template.Type)
 
 	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)
 	if err != nil {
@@ -234,14 +235,14 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 
 	log.Printf("[TaskManager] Task workflow %s completed for task %s", workflowID, record.TaskID)
 
-	record.State = "COMPLETED"
-	tm.db.SaveTask(ctx, record)
-
 	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
 	if err != nil {
 		log.Printf("[TaskManager] Failed to execute task completion callback for %s: %v", record.TaskID, err)
 		return err
 	}
+
+	record.State = "COMPLETED"
+	tm.db.SaveTask(ctx, record)
 
 	log.Printf("[TaskManager] Successfully processed completion for task %s", record.TaskID)
 	return nil

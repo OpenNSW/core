@@ -341,15 +341,24 @@ func (te *TokenExtractor) getJWKS(forceRefresh bool) (*jwksResponse, error) {
 		te.cacheMu.RUnlock()
 		return cached, nil
 	}
+	// Snapshot the fetch timestamp so we can detect if another goroutine refreshed
+	// while we were waiting for the write lock.
+	lastFetchSnapshot := te.lastJWKSFetch
 	te.cacheMu.RUnlock()
 
 	te.cacheMu.Lock()
 	defer te.cacheMu.Unlock()
 
-	// Re-check after acquiring write lock in case another goroutine refreshed it.
+	// Re-check after acquiring write lock.
 	now = time.Now()
 	cacheValid = te.cachedJWKS != nil && te.jwksCacheTTL > 0 && now.Sub(te.lastJWKSFetch) < te.jwksCacheTTL
 	if !forceRefresh && cacheValid {
+		return te.cachedJWKS, nil
+	}
+	// For forced refreshes: if another goroutine already fetched while we were
+	// waiting for the lock (lastJWKSFetch moved forward), reuse that result
+	// instead of hammering the IdP again.
+	if forceRefresh && te.cachedJWKS != nil && te.lastJWKSFetch.After(lastFetchSnapshot) {
 		return te.cachedJWKS, nil
 	}
 

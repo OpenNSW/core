@@ -455,7 +455,7 @@ func TestHandleTaskCompletion_UnknownWorkflowID_ReturnsNil(t *testing.T) {
 	}
 }
 
-func TestHandleTaskCompletion_CallbackError_TaskStillMarkedCompleted(t *testing.T) {
+func TestHandleTaskCompletion_CallbackError_TaskNotMarkedCompleted(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.SaveTask(context.Background(), store.TaskRecord{
 		TaskID:         "task-cb-err",
@@ -474,9 +474,12 @@ func TestHandleTaskCompletion_CallbackError_TaskStillMarkedCompleted(t *testing.
 		t.Fatalf("expected callback error to be propagated, got: %v", err)
 	}
 
+	// Task must NOT be marked COMPLETED when the parent-workflow callback fails:
+	// marking it COMPLETED before a successful callback would make the state
+	// unrecoverable (CompleteTaskStep rejects re-delivery once State=COMPLETED).
 	task, _ := db.GetTask(context.Background(), "task-cb-err")
-	if task.State != "COMPLETED" {
-		t.Errorf("expected status COMPLETED even after callback error, got %s", task.State)
+	if task.State == "COMPLETED" {
+		t.Errorf("task must not be marked COMPLETED when callback failed, got %s", task.State)
 	}
 }
 

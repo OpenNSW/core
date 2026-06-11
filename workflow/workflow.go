@@ -344,11 +344,16 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		return nil
 
 	case GatewayTypeExclusiveJoin:
+		consumed := false
 		for _, e := range inEdges {
 			if g.edgeTokens[e.ID] > 0 {
 				g.edgeTokens[e.ID]--
+				consumed = true
 				break
 			}
+		}
+		if !consumed {
+			return nil // Wait for an incoming branch to deposit a token
 		}
 		if len(outEdges) > 0 {
 			nodeInfo.Status = NodeStatusCompleted
