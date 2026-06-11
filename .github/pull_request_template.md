@@ -36,9 +36,9 @@ Provide a brief description of what this PR accomplishes and why these changes a
 
 ## Related Issues
 
-Closes #
-Fixes #
-Related to #
+Closes #<issue_number>
+Fixes #<issue_number>
+Related to #<issue_number>
 
 ## Screenshots/Demo
 
