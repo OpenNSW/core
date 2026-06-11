@@ -355,8 +355,8 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		if !consumed {
 			return fmt.Errorf("exclusive join %s reached with no incoming token — invalid workflow definition", node.ID)
 		}
-		if len(outEdges) == 0 {
-			return fmt.Errorf("exclusive join %s has no outgoing edge — invalid workflow definition", node.ID)
+		if len(outEdges) != 1 {
+			return fmt.Errorf("exclusive join %s must have exactly one outgoing edge, got %d — invalid workflow definition", node.ID, len(outEdges))
 		}
 		nodeInfo.Status = NodeStatusCompleted
 		nodeInfo.UpdatedAt = workflow.Now(ctx)

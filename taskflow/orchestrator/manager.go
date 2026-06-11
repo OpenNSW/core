@@ -234,6 +234,11 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 
 	log.Printf("[TaskManager] Task workflow %s completed for task %s", workflowID, record.TaskID)
 
+	// Idempotency guard: Temporal may retry this activity; skip if already completed.
+	if record.State == "COMPLETED" {
+		return nil
+	}
+
 	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
 	if err != nil {
 		log.Printf("[TaskManager] Failed to execute task completion callback for %s: %v", record.TaskID, err)
