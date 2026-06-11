@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 package engine
 
 // NodeType represents the type of a workflow node (e.g. START, END, TASK, GATEWAY).

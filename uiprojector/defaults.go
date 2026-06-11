@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 package uiprojector
 
 // Built-in projector keys. These are the names returned by each projector's

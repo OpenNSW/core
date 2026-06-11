@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 package orchestrator
 
 import "github.com/OpenNSW/core/taskflow/types"
