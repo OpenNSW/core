@@ -9,6 +9,13 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+if [ -z "${GOPATH:-}" ] && command -v go >/dev/null 2>&1; then
+  GOPATH="$(go env GOPATH)"
+fi
+if [ -n "${GOPATH:-}" ]; then
+  export PATH="$GOPATH/bin:$PATH"
+fi
+
 if [ -t 2 ]; then
   BLD=$'\033[1m'; RST=$'\033[0m'; GRN=$'\033[32m'; RED=$'\033[31m'
 else BLD=""; RST=""; GRN=""; RED=""; fi

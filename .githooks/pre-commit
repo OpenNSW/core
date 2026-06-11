@@ -18,6 +18,16 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Ensure tools installed via `go install` are on PATH without requiring
+# contributors to manually add GOPATH/bin to their shell config.
+# Check $GOPATH first to avoid spawning a subprocess on every hook run.
+if [ -z "${GOPATH:-}" ] && command -v go >/dev/null 2>&1; then
+  GOPATH="$(go env GOPATH)"
+fi
+if [ -n "${GOPATH:-}" ]; then
+  export PATH="$GOPATH/bin:$PATH"
+fi
+
 LICENSE_TMPL=".github/license-header.tmpl"
 GOLANGCI_CONFIG=".golangci.yml"
 GOLANGCI_TIMEOUT="5m"
