@@ -1,0 +1,16 @@
+# gitleaks configuration — https://github.com/gitleaks/gitleaks#configuration
+# Used by the pre-commit hook (`gitleaks git --staged`) and CI (`gitleaks dir`).
+[extend]
+useDefault = true
+
+# Storage object keys in tests (e.g. "<uuid>.pdf") are file identifiers, not
+# credentials, but trip the high-noise `generic-api-key` rule because the variable
+# is named `key`. Scope this allowlist to that one rule and to test files only, so
+# high-signal rules (private keys, cloud tokens, JWTs, ...) still apply everywhere,
+# including in tests.
+[[allowlists]]
+description = "Storage object keys in *_test.go are file identifiers, not secrets"
+targetRules = ["generic-api-key"]
+paths = [
+  '''.*_test\.go$''',
+]
