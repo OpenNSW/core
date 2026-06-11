@@ -156,8 +156,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	// Verify that there are no parallel execution paths before writing anything,
 	// as TaskRecord only stores coordinates for a single active subtask.
 	for _, node := range wfDef.Nodes {
-		if node.Type == engine.NodeTypeGateway &&
-			(node.GatewayType == engine.GatewayTypeParallelSplit || node.GatewayType == "INCLUSIVE_SPLIT") {
+		if node.Type == engine.NodeTypeGateway && node.GatewayType == engine.GatewayTypeParallelSplit {
 			return nil, fmt.Errorf("parallel subtasks are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType)
 		}
 	}

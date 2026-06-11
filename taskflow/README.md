@@ -132,3 +132,20 @@ Register it: `pluginRegistry.Register("MY_PLUGIN", &MyPlugin{remoteManager: rm})
 - **Plugins suspend with `plugins.ErrSuspended`.** Synchronous plugins return `nil`; the workflow advances without waiting.
 - **`StartTask` returns `activity.ErrResultPending`** on the happy path. The parent activity suspends until `onTaskCompleted` fires.
 - **Submission payloads are scoped** to the active subtask's `OutputNamespace` in `TaskRecord.Data`. Callers send a raw object; the server stamps the correct key.
+
+## Task-level workflow constraint: no parallel paths
+
+**Task workflows must be strictly sequential.** A `TaskRecord` stores coordinates for exactly one active subtask at a time (`TaskWorkflowID`, `TaskRunID`, `SubTaskNodeID`). Using a `PARALLEL_SPLIT` gateway inside a task workflow would activate multiple subtask nodes simultaneously, but the record can only point at one — the others would be unreachable via `CompleteTaskStep` and the workflow would hang.
+
+`StartTask` enforces this at launch time: if the workflow definition contains a `PARALLEL_SPLIT` gateway node it returns an error immediately, before creating any DB record.
+
+**Allowed gateway types inside task workflows:**
+
+| Gateway | Allowed | Notes |
+|---|---|---|
+| `EXCLUSIVE_SPLIT` | ✓ | Conditional branching is fine |
+| `EXCLUSIVE_JOIN` | ✓ | Merging sequential branches is fine |
+| `PARALLEL_SPLIT` | ✗ | Rejected at `StartTask` — would create unreachable subtasks |
+| `PARALLEL_JOIN` | ✗ | No parallel split means a parallel join can never be reached either |
+
+If you need parallel work inside a task, model each parallel branch as a separate TASK node in the **parent** (macro) workflow — the parent workflow engine supports `PARALLEL_SPLIT` via child workflow fan-out.
