@@ -140,5 +140,22 @@ func (d *S3Driver) rewriteHost(rawURL string) (string, error) {
 	}
 	u.Scheme = pub.Scheme
 	u.Host = pub.Host
+	if pub.Path != "" {
+		pubPath := pub.Path
+		if pubPath[len(pubPath)-1] == '/' {
+			pubPath = pubPath[:len(pubPath)-1]
+		}
+		u.Path = pubPath + u.Path
+		if u.RawPath != "" {
+			pubRaw := pub.RawPath
+			if pubRaw == "" {
+				pubRaw = pub.EscapedPath()
+			}
+			if pubRaw[len(pubRaw)-1] == '/' {
+				pubRaw = pubRaw[:len(pubRaw)-1]
+			}
+			u.RawPath = pubRaw + u.RawPath
+		}
+	}
 	return u.String(), nil
 }

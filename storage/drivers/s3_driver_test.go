@@ -37,6 +37,20 @@ func TestS3Driver_RewriteHost(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name:      "with public url and path prefix",
+			publicURL: "https://proxy.com/prefix",
+			rawURL:    "https://real-s3.com/bucket/file?sig=123",
+			wantURL:   "https://proxy.com/prefix/bucket/file?sig=123",
+			wantErr:   false,
+		},
+		{
+			name:      "with public url and path prefix and trailing slash",
+			publicURL: "https://proxy.com/prefix/",
+			rawURL:    "https://real-s3.com/bucket/file?sig=123",
+			wantURL:   "https://proxy.com/prefix/bucket/file?sig=123",
+			wantErr:   false,
+		},
+		{
 			name:      "invalid raw URL",
 			publicURL: "https://proxy.com",
 			rawURL:    "://invalid-url",
