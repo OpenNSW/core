@@ -70,7 +70,7 @@ flowchart TD
     end
 
     SS["payment · remote · notification · storage"]
-    AR[("artifact registry\nworkflow defs · task templates\nform schemas · render templates")]
+    AR[("artifact registry<br>workflow defs · task templates<br>form schemas · render templates")]
 
     Portal -->|HTTP| server
     DS -->|StartWorkflow| macrowf
