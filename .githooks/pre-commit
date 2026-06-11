@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# Native git pre-commit hook for github.com/OpenNSW/core
+# Enable once per clone:  git config core.hooksPath .githooks   (or: make setup)
+#
+# Runs against STAGED changes. Auto-fixers (license headers, formatting) modify
+# files and re-stage them so the fixes are part of the commit.
+#
+# Bypass everything:      git commit --no-verify
+# Skip individual checks: SKIP=secrets,lint git commit
+#   tokens: secrets license format lint mod build
+#
+# Partial staging: if you `git add -p` only some hunks of a .go file, the
+# auto-fixers re-stage the WHOLE file. Stage whole .go files (or run the
+# formatters first) to avoid pulling unstaged hunks into the commit.
+
+set -euo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+LICENSE_TMPL=".github/license-header.tmpl"
+GOLANGCI_CONFIG=".golangci.yml"
+GOLANGCI_TIMEOUT="5m"
+
+if [ -t 2 ]; then
+  RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLD=$'\033[1m'; RST=$'\033[0m'
+else RED=""; GRN=""; YLW=""; BLD=""; RST=""; fi
+info() { printf '%s==>%s %s\n' "$BLD" "$RST" "$*" >&2; }
+ok()   { printf '  %sok%s  %s\n' "$GRN" "$RST" "$*" >&2; }
+warn() { printf '%swarn%s %s\n' "$YLW" "$RST" "$*" >&2; }
+die()  { printf '%sFAIL%s %s\n' "$RED" "$RST" "$*" >&2; exit 1; }
+skip() { case ",${SKIP:-}," in *,"$1",*) return 0 ;; *) return 1 ;; esac; }
+
+need_tool() {
+  command -v "$1" >/dev/null 2>&1 || die "required tool '$1' not found.
+       install: $2
+       (or bypass once: git commit --no-verify)"
+}
+
+info "preflight: checking tools"
+need_tool go            "https://go.dev/dl/ (>= 1.26.4)"
+need_tool gitleaks      "brew install gitleaks  |  https://github.com/gitleaks/gitleaks/releases"
+need_tool golangci-lint "https://golangci-lint.run/welcome/install/ (v2.11.2)"
+need_tool addlicense    "go install github.com/google/addlicense@latest"
+
+# 1. Secret scan (hard gate, before any auto-fix).
+if skip secrets; then warn "SKIP=secrets"; else
+  info "gitleaks: scanning staged changes"
+  gitleaks git --staged --redact --no-banner \
+    || die "gitleaks found a potential secret (above). Remove it or add an allow rule."
+  ok "no secrets"
+fi
+
+# Staged Go files: Added/Copied/Modified/Renamed (not Deleted), NUL-safe.
+STAGED_GO=()
+while IFS= read -r -d '' f; do STAGED_GO+=("$f"); done \
+  < <(git diff --cached --name-only -z --diff-filter=ACMR -- '*.go')
+
+if [ "${#STAGED_GO[@]}" -eq 0 ]; then
+  ok "no staged .go files; skipping go checks"; exit 0
+fi
+
+# Unique parent dirs of staged Go files (scoped fmt/lint).
+STAGED_DIRS=()
+while IFS= read -r d; do STAGED_DIRS+=("./$d"); done \
+  < <(printf '%s\0' "${STAGED_GO[@]}" | xargs -0 -n1 dirname | sort -u)
+info "staged go dirs: ${STAGED_DIRS[*]}"
+
+# 2. License headers — add SPDX header where missing, then re-stage.
+if skip license; then warn "SKIP=license"; else
+  info "addlicense: ensuring SPDX headers"
+  addlicense -f "$LICENSE_TMPL" "${STAGED_GO[@]}"
+  git add -- "${STAGED_GO[@]}"
+  ok "headers ensured + re-staged"
+fi
+
+# 3. Format — gofmt + goimports via golangci-lint v2, re-stage.
+if skip format; then warn "SKIP=format"; else
+  info "golangci-lint fmt"
+  golangci-lint fmt -c "$GOLANGCI_CONFIG" "${STAGED_DIRS[@]}"
+  git add -- "${STAGED_GO[@]}"
+  ok "formatted + re-staged"
+fi
+
+# 4. Lint — scoped to changed dirs.
+if skip lint; then warn "SKIP=lint"; else
+  info "golangci-lint run (changed dirs)"
+  golangci-lint run -c "$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" "${STAGED_DIRS[@]}" \
+    || die "lint issues (above). Fix and re-stage."
+  ok "lint clean"
+fi
+
+# 5. go mod tidy check (repo-wide; fail-and-instruct, mirrors CI).
+if skip mod; then warn "SKIP=mod"; else
+  info "go mod tidy check"
+  go mod tidy || die "go mod tidy failed (network? GOPROXY=$(go env GOPROXY)). Skip once: SKIP=mod"
+  git diff --exit-code go.mod go.sum >/dev/null \
+    || die "go.mod/go.sum not tidy — 'go mod tidy' updated them. Review, 'git add go.mod go.sum', recommit."
+  ok "go.mod/go.sum tidy"
+fi
+
+# 6. go build (whole module; catches compile breakage).
+if skip build; then warn "SKIP=build"; else
+  info "go build ./..."
+  go build ./... || die "go build failed (above)."
+  ok "build ok"
+fi
+
+ok "pre-commit passed"
