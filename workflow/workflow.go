@@ -353,14 +353,14 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 			}
 		}
 		if !consumed {
-			return nil // Wait for an incoming branch to deposit a token
+			return fmt.Errorf("exclusive join %s reached with no incoming token — invalid workflow definition", node.ID)
 		}
-		if len(outEdges) > 0 {
-			nodeInfo.Status = NodeStatusCompleted
-			nodeInfo.UpdatedAt = workflow.Now(ctx)
-			return g.transitionTo(ctx, outEdges[0])
+		if len(outEdges) == 0 {
+			return fmt.Errorf("exclusive join %s has no outgoing edge — invalid workflow definition", node.ID)
 		}
-		return nil
+		nodeInfo.Status = NodeStatusCompleted
+		nodeInfo.UpdatedAt = workflow.Now(ctx)
+		return g.transitionTo(ctx, outEdges[0])
 	default:
 		return fmt.Errorf("unknown gateway type: %v", node.GatewayType)
 	}
