@@ -12,6 +12,8 @@ type Option func(*TaskManager)
 // Defaults to slog.Default() when not provided.
 func WithLogger(logger *slog.Logger) Option {
 	return func(tm *TaskManager) {
-		tm.logger = logger
+		if logger != nil {
+			tm.logger = logger
+		}
 	}
 }

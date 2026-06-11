@@ -115,6 +115,9 @@ func NewTaskManager(
 	for _, opt := range opts {
 		opt(tm)
 	}
+	if tm.logger == nil {
+		tm.logger = slog.Default()
+	}
 	return tm
 }
 
