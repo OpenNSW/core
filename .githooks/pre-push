@@ -9,8 +9,11 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-if command -v go >/dev/null 2>&1; then
-  export PATH="$(go env GOPATH)/bin:$PATH"
+if [ -z "${GOPATH:-}" ] && command -v go >/dev/null 2>&1; then
+  GOPATH="$(go env GOPATH)"
+fi
+if [ -n "${GOPATH:-}" ]; then
+  export PATH="$GOPATH/bin:$PATH"
 fi
 
 if [ -t 2 ]; then
