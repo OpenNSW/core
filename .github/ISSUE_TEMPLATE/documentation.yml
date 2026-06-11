@@ -1,0 +1,30 @@
+name: "📝 Documentation Request"
+description: "Propose improvements, corrections, or new documentation for the OpenNSW/core SDK"
+labels: ["Type/Docs"]
+body:
+  - type: textarea
+    id: documentation-area
+    attributes:
+      label: "Affected Documentation / Link"
+      description: "Where is the documentation you want to update? (e.g., README.md, a specific package doc, file link)"
+      placeholder: "Provide links or paths to the documentation in question."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-changes
+    attributes:
+      label: "Proposed Changes"
+      description: "Describe the changes, additions, or corrections you would like to make."
+      placeholder: "Explain what needs to be updated or added."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: "Context or Reason"
+      description: "Why is this documentation update necessary? (e.g., outdated information, typos, confusing steps)"
+      placeholder: "Provide context for the proposed changes."
+    validations:
+      required: false
