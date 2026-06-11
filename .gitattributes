@@ -1,0 +1,6 @@
+# Force LF line endings so the bash hook shebang survives Windows checkouts.
+* text=auto eol=lf
+*.go            text eol=lf
+*.sh            text eol=lf
+*.tmpl          text eol=lf
+lefthook.yml    text eol=lf
