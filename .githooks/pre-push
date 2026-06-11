@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Native git pre-push hook for github.com/OpenNSW/core
+# Runs the test suite before every push.
+#
+# Bypass: git push --no-verify
+
+set -euo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if [ -t 2 ]; then
+  BLD=$'\033[1m'; RST=$'\033[0m'; GRN=$'\033[32m'; RED=$'\033[31m'
+else BLD=""; RST=""; GRN=""; RED=""; fi
+info() { printf '%s==>%s %s\n' "$BLD" "$RST" "$*" >&2; }
+ok()   { printf '  %sok%s  %s\n' "$GRN" "$RST" "$*" >&2; }
+die()  { printf '%sFAIL%s %s\n' "$RED" "$RST" "$*" >&2; exit 1; }
+
+info "go test -race ./..."
+go test -race ./... || die "tests failed. Fix before pushing (or bypass: git push --no-verify)."
+ok "all tests passed"

@@ -162,6 +162,17 @@ func Build(cfg *Config) (*App, error) {
 }
 ```
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup,
+hooks, the Apache-2.0 license-header policy, and commit conventions.
+
+After cloning, install tools and enable git hooks in one step:
+
+```sh
+make setup
+```
+
 ## License
 
 See [LICENSE](LICENSE).

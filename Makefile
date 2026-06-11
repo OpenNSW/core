@@ -13,15 +13,14 @@ help: ## Show this help
 setup: tools hooks ## Install dev tools and enable git hooks
 
 .PHONY: tools
-tools: ## Install golangci-lint, addlicense, and pin lefthook
-	go get -tool github.com/evilmartians/lefthook
+tools: ## Install golangci-lint and addlicense
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	go install github.com/google/addlicense@latest
 
 .PHONY: hooks
-hooks: ## Install git hooks via lefthook
-	go tool lefthook install
-	@echo "  ok  lefthook hooks installed (.git/hooks/pre-commit + pre-push)"
+hooks: ## Enable native git hooks (once per clone)
+	git config core.hooksPath .githooks
+	@echo "  ok  hooks enabled (.githooks/pre-commit + pre-push)"
 
 .PHONY: fmt
 fmt: ## Format code (gofmt + goimports via golangci-lint)
