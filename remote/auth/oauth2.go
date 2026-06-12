@@ -18,7 +18,7 @@ import (
 type OAuth2Config struct {
 	TokenURL     string   `json:"token_url"`
 	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
+	ClientSecret Secret   `json:"client_secret"`
 	Scopes       []string `json:"scopes,omitempty"`
 }
 
@@ -80,10 +80,15 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 		a.httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
 
+	secret, err := a.cfg.ClientSecret.Resolve(ctx)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("client secret resolution failed: %w", err)
+	}
+
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
 	data.Set("client_id", a.cfg.ClientID)
-	data.Set("client_secret", a.cfg.ClientSecret)
+	data.Set("client_secret", secret)
 	if len(a.cfg.Scopes) > 0 {
 		data.Set("scope", strings.Join(a.cfg.Scopes, " "))
 	}

@@ -54,7 +54,7 @@ func TestOAuth2_getToken_Caching(t *testing.T) {
 	auth := NewOAuth2(OAuth2Config{
 		TokenURL:     ts.URL,
 		ClientID:     "client-1",
-		ClientSecret: "secret-1",
+		ClientSecret: NewSecret("secret-1"),
 	})
 
 	// First call
@@ -177,4 +177,28 @@ func TestOAuth2_ContextCancel(t *testing.T) {
 
 	_, err := auth.getToken(ctx)
 	assert.Error(t, err)
+}
+
+func TestOAuth2_ClientSecret_Resolution(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		assert.NoError(t, err)
+		assert.Equal(t, "env-client-secret", r.Form.Get("client_secret"))
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "resolved-secret-token", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	t.Setenv("OAUTH_CLIENT_SECRET", "env-client-secret")
+
+	auth := NewOAuth2(OAuth2Config{
+		TokenURL:     ts.URL,
+		ClientID:     "my-client-id",
+		ClientSecret: NewSecret("env:OAUTH_CLIENT_SECRET"),
+	})
+
+	token, err := auth.getToken(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, "resolved-secret-token", token)
 }

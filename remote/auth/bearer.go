@@ -3,10 +3,13 @@
 
 package auth
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 type BearerConfig struct {
-	Token string `json:"token"`
+	Token Secret `json:"token"`
 }
 
 type Bearer struct {
@@ -18,6 +21,10 @@ func NewBearer(cfg BearerConfig) *Bearer {
 }
 
 func (a *Bearer) Apply(req *http.Request) error {
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	token, err := a.cfg.Token.Resolve(req.Context())
+	if err != nil {
+		return fmt.Errorf("remote/auth: bearer token resolution failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	return nil
 }
