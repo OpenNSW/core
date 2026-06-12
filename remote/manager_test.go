@@ -214,3 +214,44 @@ func TestManager_Call_Integration(t *testing.T) {
 	err := manager.Call(context.Background(), "test", Request{Method: "GET", Path: "/"}, nil)
 	assert.NoError(t, err)
 }
+
+func TestManager_LoadServices_EagerValidation(t *testing.T) {
+	manager := NewManager()
+
+	t.Run("missing env var fails load", func(t *testing.T) {
+		os.Unsetenv("MISSING_ENV_VAR_ABC_123")
+		config := `{"version":"1.0","services":[{"id":"s1","url":"http://s1","auth":{"type":"bearer","options":{"token":"env:MISSING_ENV_VAR_ABC_123"}}}]}`
+		tmpFile, _ := os.CreateTemp("", "conf-*.json")
+		defer os.Remove(tmpFile.Name())
+		_, _ = tmpFile.WriteString(config)
+		_ = tmpFile.Close()
+
+		err := manager.LoadServices(tmpFile.Name())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid auth configuration")
+	})
+
+	t.Run("existing env var succeeds load", func(t *testing.T) {
+		t.Setenv("EXISTING_ENV_VAR_ABC_123", "my-secret-val")
+		config := `{"version":"1.0","services":[{"id":"s1","url":"http://s1","auth":{"type":"bearer","options":{"token":"env:EXISTING_ENV_VAR_ABC_123"}}}]}`
+		tmpFile, _ := os.CreateTemp("", "conf-*.json")
+		defer os.Remove(tmpFile.Name())
+		_, _ = tmpFile.WriteString(config)
+		_ = tmpFile.Close()
+
+		err := manager.LoadServices(tmpFile.Name())
+		assert.NoError(t, err)
+	})
+
+	t.Run("object format env var succeeds load", func(t *testing.T) {
+		t.Setenv("EXISTING_ENV_VAR_ABC_124", "my-secret-val-2")
+		config := `{"version":"1.0","services":[{"id":"s1","url":"http://s1","auth":{"type":"bearer","options":{"token":{"env":"EXISTING_ENV_VAR_ABC_124"}}}}]}`
+		tmpFile, _ := os.CreateTemp("", "conf-*.json")
+		defer os.Remove(tmpFile.Name())
+		_, _ = tmpFile.WriteString(config)
+		_ = tmpFile.Close()
+
+		err := manager.LoadServices(tmpFile.Name())
+		assert.NoError(t, err)
+	})
+}

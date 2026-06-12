@@ -57,6 +57,19 @@ func (m *Manager) LoadServices(filePath string) error {
 		return fmt.Errorf("remote: failed to unmarshal services registry: %w", err)
 	}
 
+	// Eagerly validate auth configuration before acquiring the lock.
+	// createAuthenticator is stateless (JSON unmarshal + Secret.Validate),
+	// so running it outside the lock avoids blocking concurrent readers
+	// (Call, GetClient, ListServices) during potential disk I/O from
+	// file-based secret validation.
+	for _, cfg := range registry.Services {
+		if cfg.Auth != nil {
+			if _, err := m.createAuthenticator(cfg.Auth); err != nil {
+				return fmt.Errorf("remote: invalid auth configuration for service %q: %w", cfg.ID, err)
+			}
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -190,6 +203,9 @@ func (m *Manager) createAuthenticator(cfg *AuthConfig) (auth.Authenticator, erro
 		if err := json.Unmarshal(cfg.Options, &apiCfg); err != nil {
 			return nil, fmt.Errorf("invalid api_key options: %w", err)
 		}
+		if err := apiCfg.Value.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid api_key secret value: %w", err)
+		}
 		return auth.NewAPIKey(apiCfg), nil
 
 	case "bearer":
@@ -197,12 +213,20 @@ func (m *Manager) createAuthenticator(cfg *AuthConfig) (auth.Authenticator, erro
 		if err := json.Unmarshal(cfg.Options, &bearerCfg); err != nil {
 			return nil, fmt.Errorf("invalid bearer options: %w", err)
 		}
+		if err := bearerCfg.Token.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid bearer token: %w", err)
+		}
 		return auth.NewBearer(bearerCfg), nil
 
 	case "oauth2":
 		var oauthCfg auth.OAuth2Config
 		if err := json.Unmarshal(cfg.Options, &oauthCfg); err != nil {
 			return nil, fmt.Errorf("invalid oauth2 options: %w", err)
+		}
+		if !oauthCfg.ClientSecret.IsZero() {
+			if err := oauthCfg.ClientSecret.Validate(); err != nil {
+				return nil, fmt.Errorf("invalid oauth2 client secret: %w", err)
+			}
 		}
 		return auth.NewOAuth2(oauthCfg), nil
 

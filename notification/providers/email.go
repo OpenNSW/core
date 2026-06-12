@@ -53,7 +53,11 @@ func (e *EmailProvider) Configure(raw json.RawMessage) error {
 	if cfg.Token == "" {
 		return errors.New("token is required")
 	}
-	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(remoteauth.NewBearer(remoteauth.BearerConfig{Token: cfg.Token})))
+	secret := remoteauth.NewSecret(cfg.Token)
+	if err := secret.Validate(); err != nil {
+		return fmt.Errorf("invalid token: %w", err)
+	}
+	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(remoteauth.NewBearer(remoteauth.BearerConfig{Token: secret})))
 	return nil
 }
 

@@ -3,11 +3,14 @@
 
 package auth
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 type APIKeyConfig struct {
 	Key   string `json:"key"`
-	Value string `json:"value"`
+	Value Secret `json:"value"`
 }
 
 type APIKey struct {
@@ -19,6 +22,10 @@ func NewAPIKey(cfg APIKeyConfig) *APIKey {
 }
 
 func (a *APIKey) Apply(req *http.Request) error {
-	req.Header.Set(a.cfg.Key, a.cfg.Value)
+	val, err := a.cfg.Value.Resolve(req.Context())
+	if err != nil {
+		return fmt.Errorf("remote/auth: apikey resolution failed: %w", err)
+	}
+	req.Header.Set(a.cfg.Key, val)
 	return nil
 }
