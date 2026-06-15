@@ -268,14 +268,16 @@ func (tm *TaskManager) waitForActiveSubtask(ctx context.Context, taskID string) 
 		if record.ActiveTaskTemplateID != "" || record.State == "COMPLETED" {
 			return record, nil
 		}
+		if i == maxAttempts-1 {
+			return record, nil
+		}
 		select {
 		case <-ctx.Done():
 			return store.TaskRecord{}, ctx.Err()
 		case <-time.After(delay):
 		}
 	}
-	record, _ := tm.db.GetTask(ctx, taskID)
-	return record, nil
+	return store.TaskRecord{}, nil
 }
 
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
