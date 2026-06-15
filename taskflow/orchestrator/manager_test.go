@@ -12,6 +12,7 @@ import (
 
 	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/testutil"
+	"github.com/OpenNSW/core/internal/maputil"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
@@ -515,7 +516,7 @@ func TestHandleTaskCompletion_CallbackError_TaskNotMarkedCompleted(t *testing.T)
 
 func TestSetNestedKey_SingleLevel(t *testing.T) {
 	m := map[string]any{}
-	setNestedKey(m, "name", "Alice")
+	maputil.SetNestedKey(m, "name", "Alice")
 	if m["name"] != "Alice" {
 		t.Errorf("expected 'Alice', got %v", m["name"])
 	}
@@ -523,7 +524,7 @@ func TestSetNestedKey_SingleLevel(t *testing.T) {
 
 func TestSetNestedKey_TwoLevels(t *testing.T) {
 	m := map[string]any{}
-	setNestedKey(m, "user.email", "alice@example.com")
+	maputil.SetNestedKey(m, "user.email", "alice@example.com")
 
 	sub, ok := m["user"].(map[string]any)
 	if !ok {
@@ -536,7 +537,7 @@ func TestSetNestedKey_TwoLevels(t *testing.T) {
 
 func TestSetNestedKey_ThreeLevels(t *testing.T) {
 	m := map[string]any{}
-	setNestedKey(m, "a.b.c", 42)
+	maputil.SetNestedKey(m, "a.b.c", 42)
 
 	a, ok := m["a"].(map[string]any)
 	if !ok {
@@ -553,7 +554,7 @@ func TestSetNestedKey_ThreeLevels(t *testing.T) {
 
 func TestSetNestedKey_EmptyPath_IsNoop(t *testing.T) {
 	m := map[string]any{"existing": "value"}
-	setNestedKey(m, "", "should_not_appear")
+	maputil.SetNestedKey(m, "", "should_not_appear")
 	if len(m) != 1 {
 		t.Errorf("expected map to be unchanged, got %v", m)
 	}
@@ -561,7 +562,7 @@ func TestSetNestedKey_EmptyPath_IsNoop(t *testing.T) {
 
 func TestSetNestedKey_OverwritesNonMapIntermediate(t *testing.T) {
 	m := map[string]any{"user": "not-a-map"}
-	setNestedKey(m, "user.email", "alice@example.com")
+	maputil.SetNestedKey(m, "user.email", "alice@example.com")
 
 	sub, ok := m["user"].(map[string]any)
 	if !ok {
@@ -576,7 +577,7 @@ func TestSetNestedKey_MergesIntoExistingMap(t *testing.T) {
 	m := map[string]any{
 		"user": map[string]any{"name": "Bob"},
 	}
-	setNestedKey(m, "user.email", "bob@example.com")
+	maputil.SetNestedKey(m, "user.email", "bob@example.com")
 
 	sub := m["user"].(map[string]any)
 	if sub["name"] != "Bob" {

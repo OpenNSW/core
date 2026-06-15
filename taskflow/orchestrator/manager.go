@@ -16,6 +16,7 @@ import (
 	"github.com/OpenNSW/core/artifactadapter/tasktemplate"
 	"github.com/OpenNSW/core/artifactadapter/workflowdef"
 	"github.com/OpenNSW/core/internal/deepcopy"
+	"github.com/OpenNSW/core/internal/maputil"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
@@ -137,7 +138,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 
 	initialData := make(map[string]any)
 	for k, v := range payload.Inputs {
-		setNestedKey(initialData, k, v)
+		maputil.SetNestedKey(initialData, k, v)
 	}
 	initialData["_task_id"] = taskID
 
@@ -185,7 +186,7 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 	record.ActiveTaskTemplateID = payload.TaskTemplateID
 
 	for k, v := range payload.Inputs {
-		setNestedKey(record.Data, k, v)
+		maputil.SetNestedKey(record.Data, k, v)
 	}
 
 	subTemplate, err := subtasktemplate.Load(ctx, tm.registry, payload.TaskTemplateID)

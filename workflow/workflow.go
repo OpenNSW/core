@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/OpenNSW/core/internal/maputil"
 )
 
 // graphInterpreter holds the state for a single workflow execution.
@@ -219,14 +221,14 @@ func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[st
 
 	for rawGlobalKey, localKey := range inputMapping {
 		globalKey, optional := parseMappingKey(rawGlobalKey)
-		val, exists := getNestedKey(g.instance.WorkflowVariables, globalKey)
+		val, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, globalKey)
 		if !exists {
 			if optional {
 				continue
 			}
 			return nil, fmt.Errorf("input mapping error: required global variable '%s' not found in workflow variables for task node", globalKey)
 		}
-		setNestedKey(inputs, localKey, val)
+		maputil.SetNestedKey(inputs, localKey, val)
 	}
 
 	return inputs, nil
@@ -239,14 +241,14 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 
 	for rawTaskKey, globalKey := range outputMapping {
 		taskKey, optional := parseMappingKey(rawTaskKey)
-		val, exists := getNestedKey(result, taskKey)
+		val, exists := maputil.GetNestedKey(result, taskKey)
 		if !exists {
 			if optional {
 				continue
 			}
 			return fmt.Errorf("output mapping error: required task variable '%s' not found in task result", taskKey)
 		}
-		setNestedKey(workflowVars, globalKey, val)
+		maputil.SetNestedKey(workflowVars, globalKey, val)
 	}
 	return nil
 }

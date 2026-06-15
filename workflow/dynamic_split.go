@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/OpenNSW/core/internal/maputil"
 )
 
 type activeBranch struct {
@@ -26,7 +28,7 @@ func (g *graphInterpreter) handleSplitTaskNode(ctx workflow.Context, nodeInfo *N
 	}
 
 	// 1. Resolve Items collection from global workflow context
-	itemsRaw, exists := getNestedKey(g.instance.WorkflowVariables, config.ItemsVariable)
+	itemsRaw, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, config.ItemsVariable)
 	if !exists {
 		return fmt.Errorf("items variable '%s' not found in workflow variables", config.ItemsVariable)
 	}
@@ -265,7 +267,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 
 	// 6. Commit variable mutation changes back to the primary context map layer
 	if config.ResultsVariable != "" {
-		setNestedKey(g.instance.WorkflowVariables, config.ResultsVariable, aggregatedResults)
+		maputil.SetNestedKey(g.instance.WorkflowVariables, config.ResultsVariable, aggregatedResults)
 	}
 
 	if len(failedBranchesErrors) > 0 && config.FailureMode == FailureModeCollectAll {
