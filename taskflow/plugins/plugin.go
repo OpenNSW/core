@@ -19,9 +19,10 @@ var ErrSuspended = errors.New("activity result pending")
 // PluginContext provides the database record, input arguments, and context
 // to a plugin during execution.
 type PluginContext struct {
-	Context context.Context
-	Record  *store.TaskRecord
-	Inputs  map[string]any
+	Context         context.Context
+	Record          *store.TaskRecord
+	Inputs          map[string]any
+	OutputNamespace string
 }
 
 // TaskPlugin is the interface that all interaction and system action handlers must implement.

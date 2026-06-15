@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/internal/deepcopy"
-	"github.com/OpenNSW/core/taskflow/types"
 )
 
 // TaskRecord is the single DB entry per task instance, as described in the architecture doc.
@@ -33,8 +32,6 @@ type TaskRecord struct {
 	TaskRunID             string                  `json:"task_run_id"`
 	SubTaskNodeID         string                  `json:"subtask_node_id"`
 	ActiveTaskTemplateID  string                  `json:"active_task_template_id,omitempty"`
-	ActiveOutputNamespace string                  `json:"active_output_namespace,omitempty"` // snapshot of the active SubTaskTemplate.OutputNamespace — read by CompleteTaskStep to scope writes
-	ActiveExtensions      []types.ExtensionConfig `json:"active_extensions,omitempty"`
 
 	// Data holds generic, dynamic task execution state variables.
 	Data map[string]any `json:"data"`
@@ -51,14 +48,6 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	cp := r // value copy duplicates all scalar fields
 	cp.RenderConfig = copyBytes(r.RenderConfig)
 	cp.Data = deepcopy.Map(r.Data)
-	if r.ActiveExtensions != nil {
-		exts := make([]types.ExtensionConfig, len(r.ActiveExtensions))
-		for i, e := range r.ActiveExtensions {
-			e.Properties = copyBytes(e.Properties)
-			exts[i] = e
-		}
-		cp.ActiveExtensions = exts
-	}
 	return cp
 }
 

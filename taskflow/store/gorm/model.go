@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/taskflow/types"
 )
 
 // TaskRecordModel is the GORM-compatible model for store.TaskRecord.
@@ -27,8 +26,6 @@ type TaskRecordModel struct {
 	TaskRunID             string          `gorm:"column:task_run_id;type:text"`
 	SubTaskNodeID         string          `gorm:"column:subtask_node_id;type:text"`
 	ActiveTaskTemplateID  string          `gorm:"column:active_task_template_id;type:text"`
-	ActiveOutputNamespace string          `gorm:"column:active_output_namespace;type:text;not null;default:''"`
-	ActiveExtensions      json.RawMessage `gorm:"column:active_extensions;type:jsonb;serializer:json"`
 	Data                  json.RawMessage `gorm:"column:data;type:jsonb;serializer:json"`
 	CreatedAt             time.Time       `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime"`
 	UpdatedAt             time.Time       `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime"`
@@ -48,14 +45,6 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		}
 	}
 
-	var activeExtensions []types.ExtensionConfig
-	if len(m.ActiveExtensions) > 0 {
-		if err := json.Unmarshal(m.ActiveExtensions, &activeExtensions); err != nil {
-			slog.Error("taskflow gorm store: ToDomain unmarshal of ActiveExtensions failed",
-				"taskId", m.TaskID, "error", err)
-		}
-	}
-
 	return store.TaskRecord{
 		TaskID:                m.TaskID,
 		TaskType:              m.TaskType,
@@ -68,8 +57,6 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		TaskRunID:             m.TaskRunID,
 		SubTaskNodeID:         m.SubTaskNodeID,
 		ActiveTaskTemplateID:  m.ActiveTaskTemplateID,
-		ActiveOutputNamespace: m.ActiveOutputNamespace,
-		ActiveExtensions:      activeExtensions,
 		Data:                  data,
 		CreatedAt:             m.CreatedAt,
 		UpdatedAt:             m.UpdatedAt,
@@ -82,10 +69,6 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 	if err != nil {
 		slog.Error("taskflow gorm store: FromDomain failed to marshal Data", "taskId", r.TaskID, "error", err)
 	}
-	activeExtensionsBytes, err := json.Marshal(r.ActiveExtensions)
-	if err != nil {
-		slog.Error("taskflow gorm store: FromDomain failed to marshal ActiveExtensions", "taskId", r.TaskID, "error", err)
-	}
 	// root_workflow_id is the top-level consignment ID — the first segment of
 	// parent_workflow_id before any "--" separator introduced by SPLIT_TASK
 	// child workflow IDs (format: "{root}--{nodeID}--{branchID}").
@@ -94,20 +77,18 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		rootWorkflowID = r.ParentWorkflowID[:idx]
 	}
 	return TaskRecordModel{
-		TaskID:                r.TaskID,
-		TaskType:              r.TaskType,
-		State:                 r.State,
-		RenderConfig:          r.RenderConfig,
-		ParentWorkflowID:      r.ParentWorkflowID,
-		RootWorkflowID:        rootWorkflowID,
-		ParentRunID:           r.ParentRunID,
-		ParentNodeID:          r.ParentNodeID,
-		TaskWorkflowID:        r.TaskWorkflowID,
-		TaskRunID:             r.TaskRunID,
-		SubTaskNodeID:         r.SubTaskNodeID,
-		ActiveTaskTemplateID:  r.ActiveTaskTemplateID,
-		ActiveOutputNamespace: r.ActiveOutputNamespace,
-		ActiveExtensions:      activeExtensionsBytes,
-		Data:                  dataBytes,
+		TaskID:               r.TaskID,
+		TaskType:             r.TaskType,
+		State:                r.State,
+		RenderConfig:         r.RenderConfig,
+		ParentWorkflowID:     r.ParentWorkflowID,
+		RootWorkflowID:       rootWorkflowID,
+		ParentRunID:          r.ParentRunID,
+		ParentNodeID:         r.ParentNodeID,
+		TaskWorkflowID:       r.TaskWorkflowID,
+		TaskRunID:            r.TaskRunID,
+		SubTaskNodeID:        r.SubTaskNodeID,
+		ActiveTaskTemplateID: r.ActiveTaskTemplateID,
+		Data:                 dataBytes,
 	}
 }
