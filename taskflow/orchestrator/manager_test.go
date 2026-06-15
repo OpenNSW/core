@@ -12,11 +12,11 @@ import (
 
 	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/testutil"
+	"github.com/OpenNSW/core/artifactadapter/types"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/taskflow/types"
 	engine "github.com/OpenNSW/core/workflow"
 	"go.temporal.io/sdk/activity"
 )

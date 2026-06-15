@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenNSW/core/artifactadapter/types"
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/taskflow/types"
 )
 
 // TaskRecordModel is the GORM-compatible model for store.TaskRecord.

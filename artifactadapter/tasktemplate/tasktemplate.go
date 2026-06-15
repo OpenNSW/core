@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/OpenNSW/core/artifact"
-	"github.com/OpenNSW/core/taskflow/types"
+	"github.com/OpenNSW/core/artifactadapter/types"
 )
 
 // Kind is owned here.
