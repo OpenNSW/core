@@ -452,6 +452,22 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 	}
 }
 
+func TestCompleteTaskStep_NoActiveSubTask(t *testing.T) {
+	db := newSafeMockTaskStore()
+	db.SaveTask(context.Background(), store.TaskRecord{
+		TaskID: "task-starting",
+		State:  "STARTING",
+		Data:   map[string]any{},
+	})
+
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	err := tm.CompleteTaskStep(context.Background(), "task-starting", map[string]any{"x": 1})
+	if err == nil {
+		t.Fatal("expected error for task with no active subtask step, got nil")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // HandleTaskCompletion — edge cases
 // ---------------------------------------------------------------------------

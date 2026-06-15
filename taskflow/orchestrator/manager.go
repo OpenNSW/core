@@ -251,16 +251,47 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	return nil
 }
 
+// waitForActiveSubtask polls the store for a short period to see if the task moves
+// out of the STARTING state and registers an active subtask. This handles the race
+// condition where an external callback or webhook completes a step immediately after
+// task creation, before the Temporal worker has executed the first StartSubTask activity.
+func (tm *TaskManager) waitForActiveSubtask(ctx context.Context, taskID string) (store.TaskRecord, error) {
+	const (
+		maxAttempts = 5
+		delay       = 200 * time.Millisecond
+	)
+	for i := 0; i < maxAttempts; i++ {
+		record, exists := tm.db.GetTask(ctx, taskID)
+		if !exists {
+			return store.TaskRecord{}, fmt.Errorf("task %s not found", taskID)
+		}
+		if record.ActiveTaskTemplateID != "" || record.State == "COMPLETED" {
+			return record, nil
+		}
+		select {
+		case <-ctx.Done():
+			return store.TaskRecord{}, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	record, _ := tm.db.GetTask(ctx, taskID)
+	return record, nil
+}
+
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
 // data and resume the active step in the corresponding Task workflow.
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
-	record, exists := tm.db.GetTask(ctx, taskID)
-	if !exists {
-		return fmt.Errorf("task %s not found", taskID)
+	record, err := tm.waitForActiveSubtask(ctx, taskID)
+	if err != nil {
+		return err
 	}
 
 	if record.State == "COMPLETED" {
 		return fmt.Errorf("task %s already completed", taskID)
+	}
+
+	if record.ActiveTaskTemplateID == "" {
+		return fmt.Errorf("task %s has no active subtask step to complete", taskID)
 	}
 
 	subTemplate, err := subtasktemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
