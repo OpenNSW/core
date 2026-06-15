@@ -218,9 +218,12 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 		OutputNamespace: subTemplate.OutputNamespace,
 	}
 
+	tm.logger.InfoContext(ctx, "starting subtask", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "task_type", subTemplate.TaskType, "template", payload.TaskTemplateID)
+
 	err = plugin.Execute(pluginCtx, subTemplate.PluginProperties)
 	if errors.Is(err, plugins.ErrSuspended) {
 		tm.db.SaveTask(pluginCtx.Context, record)
+		tm.logger.InfoContext(ctx, "subtask suspended, awaiting async completion", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "task_type", subTemplate.TaskType)
 		return nil, activity.ErrResultPending
 	}
 	if err != nil {
@@ -230,6 +233,7 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 	tm.db.SaveTask(pluginCtx.Context, record)
 
 	// Otherwise, this step completed synchronously. Return its modified payload immediately to transition directly.
+	tm.logger.InfoContext(ctx, "subtask completed synchronously", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "task_type", subTemplate.TaskType)
 	return record.Data, nil
 }
 
@@ -250,9 +254,6 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	}
 
 	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
-
-	tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "err", err)
-
 	if err != nil {
 		tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "error", err)
 		return err
