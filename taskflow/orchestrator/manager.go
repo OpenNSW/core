@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/OpenNSW/core/artifact"
@@ -81,6 +81,7 @@ type TaskManager struct {
 	extensionsRegistry  *extensions.Registry
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
+	logger              *slog.Logger
 }
 
 // NewTaskManager creates a TaskManager instance.
@@ -99,8 +100,9 @@ func NewTaskManager(
 	taskWorkflowManager engine.TemporalManager,
 	onTaskCompleted TaskCompletedCallback,
 	renderer renderer.Renderer,
+	opts ...Option,
 ) *TaskManager {
-	return &TaskManager{
+	tm := &TaskManager{
 		db:                  db,
 		registry:            registry,
 		pluginsRegistry:     pluginsRegistry,
@@ -108,7 +110,15 @@ func NewTaskManager(
 		onTaskCompleted:     onTaskCompleted,
 		taskWorkflowManager: taskWorkflowManager,
 		renderer:            renderer,
+		logger:              slog.Default(),
 	}
+	for _, opt := range opts {
+		opt(tm)
+	}
+	if tm.logger == nil {
+		tm.logger = slog.Default()
+	}
+	return tm
 }
 
 // StartTask is called by the parent workflow engine when it activates a TASK node.
@@ -162,13 +172,13 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	}
 
 	tm.db.SaveTask(ctx, record)
-	log.Printf("[TaskManager] Created Task record %s (template=%s, type=%s)", taskID, payload.TaskTemplateID, template.Type)
+	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type)
 
 	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start task workflow: %v", err)
 	}
-	log.Printf("[TaskManager] Started task workflow %s for task %s", taskWorkflowID, taskID)
+	tm.logger.InfoContext(ctx, "task workflow started", "task_workflow_id", taskWorkflowID, "task_id", taskID)
 	return nil, activity.ErrResultPending
 }
 
@@ -231,7 +241,7 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 		return nil
 	}
 
-	log.Printf("[TaskManager] Task workflow %s completed for task %s", workflowID, record.TaskID)
+	tm.logger.InfoContext(ctx, "task workflow completed", "task_workflow_id", workflowID, "task_id", record.TaskID)
 
 	// Idempotency guard: Temporal may retry this activity; skip if already completed.
 	if record.State == "COMPLETED" {
@@ -239,15 +249,18 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	}
 
 	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
+
+	tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "err", err)
+
 	if err != nil {
-		log.Printf("[TaskManager] Failed to execute task completion callback for %s: %v", record.TaskID, err)
+		tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "error", err)
 		return err
 	}
 
+	tm.logger.InfoContext(ctx, "task completion processed", "task_id", record.TaskID)
 	record.State = "COMPLETED"
 	tm.db.SaveTask(ctx, record)
 
-	log.Printf("[TaskManager] Successfully processed completion for task %s", record.TaskID)
 	return nil
 }
 
@@ -323,15 +336,14 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	// template doesn't break a running task.
 	if len(payload) > 0 {
 		if subTemplate.OutputNamespace == "" {
-			log.Printf("[TaskManager] WARNING: task %s active subtask (template=%q) declares no output_namespace; dropping submission payload (keys=%v)", taskID, record.ActiveTaskTemplateID, payloadKeys(payload))
+			tm.logger.WarnContext(ctx, "dropping submission payload: active subtask declares no output_namespace", "task_id", taskID, "template", record.ActiveTaskTemplateID, "dropped_keys", payloadKeys(payload))
 		} else {
 			record.Data[subTemplate.OutputNamespace] = payload
 		}
 	}
 	tm.db.SaveTask(ctx, record)
 
-	log.Printf("[TaskManager] Waking active activity %s in workflow %s (task %s)",
-		record.SubTaskNodeID, record.TaskWorkflowID, taskID)
+	tm.logger.InfoContext(ctx, "waking active activity", "activity_id", record.SubTaskNodeID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
 
 	err = tm.taskWorkflowManager.TaskDone(
 		ctx,
@@ -382,7 +394,7 @@ func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskReco
 			if stopOnError {
 				return err
 			}
-			log.Printf("[TaskManager] ERROR: %v", err)
+			tm.logger.ErrorContext(ctx, "extension not registered", "phase", phase, "extension_id", extCfg.ID)
 			continue
 		}
 		if err := ext.Execute(ctx, record, payload, extCfg.Properties); err != nil {
@@ -390,7 +402,7 @@ func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskReco
 			if stopOnError {
 				return err
 			}
-			log.Printf("[TaskManager] ERROR: %v", err)
+			tm.logger.ErrorContext(ctx, "extension execution failed", "phase", phase, "extension_id", extCfg.ID, "error", err)
 		}
 	}
 	return nil
