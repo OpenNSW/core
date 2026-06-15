@@ -51,11 +51,12 @@ func SetNestedKey(m map[string]any, dotPath string, value any) {
 			key := dotPath[:i]
 			rest := dotPath[i+1:]
 			sub, ok := m[key]
+			var subMap map[string]any
 			if !ok || sub == nil {
-				sub = make(map[string]any)
-			}
-			subMap, ok := sub.(map[string]any)
-			if !ok {
+				subMap = make(map[string]any)
+			} else if existingMap, ok := sub.(map[string]any); ok {
+				subMap = deepcopy.Map(existingMap)
+			} else {
 				subMap = make(map[string]any)
 			}
 			SetNestedKey(subMap, rest, value)
@@ -70,7 +71,9 @@ func SetNestedKey(m map[string]any, dotPath string, value any) {
 	if existingVal, exists := m[dotPath]; exists {
 		if existingMap, ok := existingVal.(map[string]any); ok {
 			if incomingMap, ok := value.(map[string]any); ok {
-				mergeMaps(existingMap, incomingMap)
+				newMap := deepcopy.Map(existingMap)
+				mergeMaps(newMap, incomingMap)
+				m[dotPath] = newMap
 				return
 			}
 		}

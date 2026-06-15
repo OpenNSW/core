@@ -184,3 +184,25 @@ func TestSetNestedKey_DeepCopiesValues(t *testing.T) {
 		t.Error("mutation of sourceMap slice element affected the destination map")
 	}
 }
+
+func TestSetNestedKey_MutationSafety(t *testing.T) {
+	sharedMap := map[string]any{"city": "Colombo"}
+	m1 := map[string]any{"address": sharedMap}
+	m2 := map[string]any{"address": sharedMap}
+
+	SetNestedKey(m1, "address.street", "Main St")
+
+	// Verify that sharedMap was not mutated in-place
+	if _, exists := sharedMap["street"]; exists {
+		t.Error("sharedMap was mutated in-place")
+	}
+	// Verify m2 was not mutated
+	if _, exists := m2["address"].(map[string]any)["street"]; exists {
+		t.Error("m2 was mutated via shared nested map reference")
+	}
+	// Verify m1 has the updated value
+	addr1 := m1["address"].(map[string]any)
+	if addr1["street"] != "Main St" || addr1["city"] != "Colombo" {
+		t.Errorf("m1 was not updated correctly: %v", m1)
+	}
+}
