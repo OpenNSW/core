@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/internal/deepcopy"
-	"github.com/OpenNSW/core/taskflow/types"
 )
 
 // TaskRecord is the single DB entry per task instance, as described in the architecture doc.
@@ -29,12 +28,10 @@ type TaskRecord struct {
 	// Active subtask execution coordinates — used to resume/wake the currently active subtask step via the API.
 	// WARNING: Since the store only holds a single set of coordinates, only one subtask can be active at any given time
 	// (strictly sequential execution). Parallel/concurrent subtasks inside a single Task Workflow are not supported.
-	TaskWorkflowID        string                  `json:"task_workflow_id"`
-	TaskRunID             string                  `json:"task_run_id"`
-	SubTaskNodeID         string                  `json:"subtask_node_id"`
-	ActiveTaskTemplateID  string                  `json:"active_task_template_id,omitempty"`
-	ActiveOutputNamespace string                  `json:"active_output_namespace,omitempty"` // snapshot of the active SubTaskTemplate.OutputNamespace — read by CompleteTaskStep to scope writes
-	ActiveExtensions      []types.ExtensionConfig `json:"active_extensions,omitempty"`
+	TaskWorkflowID       string `json:"task_workflow_id"`
+	TaskRunID            string `json:"task_run_id"`
+	SubTaskNodeID        string `json:"subtask_node_id"`
+	ActiveTaskTemplateID string `json:"active_task_template_id,omitempty"`
 
 	// Data holds generic, dynamic task execution state variables.
 	Data map[string]any `json:"data"`
@@ -51,14 +48,6 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	cp := r // value copy duplicates all scalar fields
 	cp.RenderConfig = copyBytes(r.RenderConfig)
 	cp.Data = deepcopy.Map(r.Data)
-	if r.ActiveExtensions != nil {
-		exts := make([]types.ExtensionConfig, len(r.ActiveExtensions))
-		for i, e := range r.ActiveExtensions {
-			e.Properties = copyBytes(e.Properties)
-			exts[i] = e
-		}
-		cp.ActiveExtensions = exts
-	}
 	return cp
 }
 

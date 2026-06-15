@@ -16,7 +16,6 @@ import (
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/taskflow/types"
 	engine "github.com/OpenNSW/core/workflow"
 	"go.temporal.io/sdk/activity"
 )
@@ -174,6 +173,16 @@ func newTestRegistry() *artifact.Registry {
 			"output_namespace": "userform",
 			"plugin_properties": {}
 		}`),
+		"subtask_generic_user_input_with_extensions.json": []byte(`{
+			"id": "generic_user_input_with_extensions",
+			"task_type": "USER_INPUT",
+			"output_namespace": "form",
+			"plugin_properties": {},
+			"extensions": [
+				{"id": "validator", "phase": "PRE_RESUME"},
+				{"id": "logger", "phase": "POST_RESUME"}
+			]
+		}`),
 		"subtask_generic_external_review.json": []byte(`{
 			"id": "generic_external_review",
 			"task_type": "EXTERNAL_REVIEW",
@@ -188,6 +197,7 @@ func newTestRegistry() *artifact.Registry {
 	reg.RegisterArtifact("test_workflow_v1", "workflow", "", "mem", "wf_test_workflow_v1.json")
 	reg.RegisterArtifact("test_render_config", "generic_template", "", "mem", "generic_render_config.json")
 	reg.RegisterArtifact("generic_user_input", "subtask_template", "", "mem", "subtask_generic_user_input.json")
+	reg.RegisterArtifact("generic_user_input_with_extensions", "subtask_template", "", "mem", "subtask_generic_user_input_with_extensions.json")
 	reg.RegisterArtifact("generic_external_review", "subtask_template", "", "mem", "subtask_generic_external_review.json")
 	return reg
 }
@@ -442,6 +452,22 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 	}
 }
 
+func TestCompleteTaskStep_NoActiveSubTask(t *testing.T) {
+	db := newSafeMockTaskStore()
+	db.SaveTask(context.Background(), store.TaskRecord{
+		TaskID: "task-starting",
+		State:  "STARTING",
+		Data:   map[string]any{},
+	})
+
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	err := tm.CompleteTaskStep(context.Background(), "task-starting", map[string]any{"x": 1})
+	if err == nil {
+		t.Fatal("expected error for task with no active subtask step, got nil")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // HandleTaskCompletion — edge cases
 // ---------------------------------------------------------------------------
@@ -610,20 +636,15 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 
 	tm := NewTaskManager(db, registry, newTestPluginsRegistry(), extReg, &mockTemporalManager{}, noopCallback, noopRenderer{})
 
-	// Setup a task record with active subtask and extensions configuration
+	// Setup a task record with active subtask configuration
 	record := store.TaskRecord{
-		TaskID:                "test-task-ext",
-		TaskType:              "TEST",
-		State:                 "PENDING_USER",
-		ActiveTaskTemplateID:  "generic_user_input",
-		ActiveOutputNamespace: "form",
-		TaskWorkflowID:        "wf-123",
-		TaskRunID:             "run-123",
-		SubTaskNodeID:         "node-123",
-		ActiveExtensions: []types.ExtensionConfig{
-			{ID: "validator", Phase: types.PhasePreResume},
-			{ID: "logger", Phase: types.PhasePostResume},
-		},
+		TaskID:               "test-task-ext",
+		TaskType:             "TEST",
+		State:                "PENDING_USER",
+		ActiveTaskTemplateID: "generic_user_input_with_extensions",
+		TaskWorkflowID:       "wf-123",
+		TaskRunID:            "run-123",
+		SubTaskNodeID:        "node-123",
 	}
 	db.SaveTask(context.Background(), record)
 

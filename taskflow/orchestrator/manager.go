@@ -192,8 +192,6 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 	if err != nil {
 		return nil, fmt.Errorf("[StartSubTask] load subtask template %q: %w", payload.TaskTemplateID, err)
 	}
-	record.ActiveOutputNamespace = subTemplate.OutputNamespace
-	record.ActiveExtensions = subTemplate.Extensions
 
 	// 2. Fetch the plugin from our registry using TaskType
 	plugin, ok := tm.pluginsRegistry.Get(subTemplate.TaskType)
@@ -203,9 +201,10 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 
 	// 3. Execute the plugin
 	pluginCtx := plugins.PluginContext{
-		Context: ctx,
-		Record:  &record,
-		Inputs:  payload.Inputs,
+		Context:         ctx,
+		Record:          &record,
+		Inputs:          payload.Inputs,
+		OutputNamespace: subTemplate.OutputNamespace,
 	}
 
 	err = plugin.Execute(pluginCtx, subTemplate.PluginProperties)
@@ -252,16 +251,54 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	return nil
 }
 
+// waitForActiveSubtask polls the store for a short period to see if the task moves
+// out of the STARTING state and registers an active subtask. This handles the race
+// condition where an external callback or webhook completes a step immediately after
+// task creation, before the Temporal worker has executed the first StartSubTask activity.
+func (tm *TaskManager) waitForActiveSubtask(ctx context.Context, taskID string) (store.TaskRecord, error) {
+	const (
+		maxAttempts = 5
+		delay       = 200 * time.Millisecond
+	)
+	for i := 0; i < maxAttempts; i++ {
+		record, exists := tm.db.GetTask(ctx, taskID)
+		if !exists {
+			return store.TaskRecord{}, fmt.Errorf("task %s not found", taskID)
+		}
+		if record.ActiveTaskTemplateID != "" || record.State == "COMPLETED" {
+			return record, nil
+		}
+		if i == maxAttempts-1 {
+			return record, nil
+		}
+		select {
+		case <-ctx.Done():
+			return store.TaskRecord{}, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return store.TaskRecord{}, nil
+}
+
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
 // data and resume the active step in the corresponding Task workflow.
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
-	record, exists := tm.db.GetTask(ctx, taskID)
-	if !exists {
-		return fmt.Errorf("task %s not found", taskID)
+	record, err := tm.waitForActiveSubtask(ctx, taskID)
+	if err != nil {
+		return err
 	}
 
 	if record.State == "COMPLETED" {
 		return fmt.Errorf("task %s already completed", taskID)
+	}
+
+	if record.ActiveTaskTemplateID == "" {
+		return fmt.Errorf("task %s has no active subtask step to complete", taskID)
+	}
+
+	subTemplate, err := subtasktemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
+	if err != nil {
+		return fmt.Errorf("failed to load active subtask template %q: %w", record.ActiveTaskTemplateID, err)
 	}
 
 	if record.Data == nil {
@@ -273,22 +310,22 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	// validate/inspect them but cannot mutate the data that gets persisted or
 	// sent to the workflow.
 	preResumeRecord := record.DeepCopy()
-	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, deepcopy.Map(payload), true); err != nil {
+	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, subTemplate.Extensions, deepcopy.Map(payload), true); err != nil {
 		return err
 	}
 
 	// Writes are confined to the active subtask's declared OutputNamespace,
-	// which was snapshotted onto the record by StartSubTask. An open
+	// which was loaded from the registry. An open
 	// top-level merge would let callers overwrite slots owned by other
 	// subtasks (or internal keys like _task_id), so the namespace is
 	// required for any non-empty payload. If it's missing we log loudly and
 	// drop the payload — the workflow still resumes so a misconfigured
 	// template doesn't break a running task.
 	if len(payload) > 0 {
-		if record.ActiveOutputNamespace == "" {
+		if subTemplate.OutputNamespace == "" {
 			log.Printf("[TaskManager] WARNING: task %s active subtask (template=%q) declares no output_namespace; dropping submission payload (keys=%v)", taskID, record.ActiveTaskTemplateID, payloadKeys(payload))
 		} else {
-			record.Data[record.ActiveOutputNamespace] = payload
+			record.Data[subTemplate.OutputNamespace] = payload
 		}
 	}
 	tm.db.SaveTask(ctx, record)
@@ -296,7 +333,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	log.Printf("[TaskManager] Waking active activity %s in workflow %s (task %s)",
 		record.SubTaskNodeID, record.TaskWorkflowID, taskID)
 
-	err := tm.taskWorkflowManager.TaskDone(
+	err = tm.taskWorkflowManager.TaskDone(
 		ctx,
 		record.TaskWorkflowID,
 		record.TaskRunID,
@@ -308,7 +345,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	}
 
 	// 2. Run POST_RESUME Extensions (Non-Blocking, Immutable, Async)
-	if tm.extensionsRegistry != nil && len(record.ActiveExtensions) > 0 {
+	if tm.extensionsRegistry != nil && len(subTemplate.Extensions) > 0 {
 		// Deep copy the payload and record so extensions cannot mutate the data
 		// that was persisted/sent to the workflow (the read-only contract). As a
 		// bonus this keeps the async goroutine from sharing nested maps/slices
@@ -321,7 +358,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 
 		// Execute in background; errors are logged inside runExtensions, not returned to client.
 		go func() {
-			_ = tm.runExtensions(bgCtx, &copiedRecord, types.PhasePostResume, copiedPayload, false)
+			_ = tm.runExtensions(bgCtx, &copiedRecord, types.PhasePostResume, subTemplate.Extensions, copiedPayload, false)
 		}()
 	}
 
@@ -331,11 +368,11 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 // runExtensions executes the configured extensions matching phase against the
 // record. When stopOnError is true (pre-resume), the first failure aborts and is
 // returned; otherwise (post-resume) failures are logged and execution continues.
-func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskRecord, phase types.ExecutionPhase, payload map[string]any, stopOnError bool) error {
+func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskRecord, phase types.ExecutionPhase, extensions []types.ExtensionConfig, payload map[string]any, stopOnError bool) error {
 	if tm.extensionsRegistry == nil {
 		return nil
 	}
-	for _, extCfg := range record.ActiveExtensions {
+	for _, extCfg := range extensions {
 		if extCfg.Phase != phase {
 			continue
 		}

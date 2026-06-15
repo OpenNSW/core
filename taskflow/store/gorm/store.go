@@ -42,8 +42,6 @@ func (s *TaskStore) SaveTask(ctx context.Context, record store.TaskRecord) {
 			"task_run_id",
 			"subtask_node_id",
 			"active_task_template_id",
-			"active_output_namespace",
-			"active_extensions",
 			"data",
 			"updated_at",
 		}),
