@@ -250,6 +250,9 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	}
 
 	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
+
+	tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "err", err)
+
 	if err != nil {
 		tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "error", err)
 		return err
