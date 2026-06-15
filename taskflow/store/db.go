@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/OpenNSW/core/artifactadapter/types"
 	"github.com/OpenNSW/core/internal/deepcopy"
-	"github.com/OpenNSW/core/taskflow/types"
 )
 
 // TaskRecord is the single DB entry per task instance, as described in the architecture doc.
