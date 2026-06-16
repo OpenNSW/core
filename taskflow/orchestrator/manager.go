@@ -14,6 +14,7 @@ import (
 	"github.com/OpenNSW/core/artifactadapter/generictemplate"
 	"github.com/OpenNSW/core/artifactadapter/subtasktemplate"
 	"github.com/OpenNSW/core/artifactadapter/tasktemplate"
+	"github.com/OpenNSW/core/artifactadapter/types"
 	"github.com/OpenNSW/core/artifactadapter/workflowdef"
 	"github.com/OpenNSW/core/internal/deepcopy"
 	"github.com/OpenNSW/core/internal/maputil"
@@ -21,7 +22,6 @@ import (
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/taskflow/types"
 	engine "github.com/OpenNSW/core/workflow"
 	"go.temporal.io/sdk/activity"
 )
