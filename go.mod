@@ -3,6 +3,7 @@ module github.com/OpenNSW/core
 go 1.26.4
 
 require (
+	github.com/OpenNSW/core/remote v0.1.0
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
