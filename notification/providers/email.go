@@ -12,7 +12,7 @@ import (
 
 	"github.com/OpenNSW/core/notification"
 	"github.com/OpenNSW/core/remote"
-	remoteauth "github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/remote/auth"
 )
 
 type emailConfig struct {
@@ -53,7 +53,9 @@ func (e *EmailProvider) Configure(raw json.RawMessage) error {
 	if cfg.Token == "" {
 		return errors.New("token is required")
 	}
-	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(remoteauth.NewBearer(cfg.Token)))
+	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(auth.NewBearer(auth.BearerConfig{
+		Token: cfg.Token,
+	})))
 	return nil
 }
 
