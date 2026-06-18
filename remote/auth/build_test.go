@@ -5,7 +5,6 @@ package auth
 
 import (
 	"encoding/json"
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,22 +78,6 @@ func TestBuild(t *testing.T) {
 			assert.NotNil(t, authn)
 		})
 	}
-}
-
-func TestBuild_ResolvesSecretReference(t *testing.T) {
-	t.Setenv("BUILD_TOKEN", "resolved")
-	authn, err := Build("bearer", json.RawMessage(`{"token":"env:BUILD_TOKEN"}`))
-	require.NoError(t, err)
-
-	req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
-	require.NoError(t, authn.Apply(req))
-	assert.Equal(t, "Bearer resolved", req.Header.Get("Authorization"))
-}
-
-func TestBuild_FailsLoudOnUnsetEnv(t *testing.T) {
-	_, err := Build("bearer", json.RawMessage(`{"token":"env:DEFINITELY_UNSET"}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is not set or is empty")
 }
 
 func TestBuild_MissingOptions(t *testing.T) {

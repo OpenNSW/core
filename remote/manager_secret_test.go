@@ -29,7 +29,7 @@ func writeServices(t *testing.T, url, tokenRef string) string {
 	return path
 }
 
-func TestManager_LoadServices_ResolvesEnvSecretAtStartup(t *testing.T) {
+func TestManager_LoadServices_ResolvesFileSecretAtStartup(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -38,8 +38,11 @@ func TestManager_LoadServices_ResolvesEnvSecretAtStartup(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("SVC_TOKEN", "resolved-token")
-	path := writeServices(t, server.URL, "env:SVC_TOKEN")
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "token")
+	require.NoError(t, os.WriteFile(secretPath, []byte("resolved-token"), 0o600))
+
+	path := writeServices(t, server.URL, "file:"+secretPath)
 
 	manager := NewManager()
 	require.NoError(t, manager.LoadServices(path))
@@ -49,13 +52,13 @@ func TestManager_LoadServices_ResolvesEnvSecretAtStartup(t *testing.T) {
 	assert.Equal(t, "Bearer resolved-token", gotAuth)
 }
 
-func TestManager_LoadServices_FailsLoudOnUnsetEnv(t *testing.T) {
-	path := writeServices(t, "http://local", "env:DEFINITELY_UNSET_TOKEN")
+func TestManager_LoadServices_FailsLoudOnMissingFile(t *testing.T) {
+	path := writeServices(t, "http://local", "file:/definitely/does/not/exist/token")
 
 	manager := NewManager()
 	err := manager.LoadServices(path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to configure auth for service")
+	assert.Contains(t, err.Error(), "failed to read secret file")
 }
 
 func TestManager_LoadServices_LiteralTokenStillWorks(t *testing.T) {
@@ -75,7 +78,7 @@ func TestManager_LoadServices_FailedReloadKeepsPreviousState(t *testing.T) {
 
 	// A second load that fails (unresolvable reference) must leave the manager's
 	// existing state untouched, not corrupted/half-applied.
-	bad := writeServices(t, "http://other", "env:DEFINITELY_UNSET_TOKEN")
+	bad := writeServices(t, "http://other", "file:/definitely/does/not/exist/token")
 	err := manager.LoadServices(bad)
 	require.Error(t, err)
 

@@ -4,26 +4,20 @@
 package auth
 
 import (
-	"fmt"
 	"net/http"
 )
 
 type BearerConfig struct {
-	Token SecretRef `json:"token"`
+	Token string `json:"token"`
 }
 
 type Bearer struct {
 	token string
 }
 
-// build resolves the configured token (failing loud on an unresolvable reference)
-// and constructs the authenticator.
+// build constructs the authenticator.
 func (c BearerConfig) build() (Authenticator, error) {
-	token, err := c.Token.Resolve()
-	if err != nil {
-		return nil, fmt.Errorf("bearer token: %w", err)
-	}
-	return NewBearer(token), nil
+	return NewBearer(c.Token), nil
 }
 
 // NewBearer builds a bearer-token authenticator from an already-resolved token.

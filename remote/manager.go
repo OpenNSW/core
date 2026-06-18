@@ -67,6 +67,34 @@ func (m *Manager) LoadServices(filePath string) error {
 	for _, cfg := range registry.Services {
 		// Normalize URL by removing trailing slash for consistent matching
 		cfg.URL = strings.TrimSuffix(cfg.URL, "/")
+
+		if cfg.Auth != nil && len(cfg.Auth.Options) > 0 {
+			var opts map[string]any
+			if err := json.Unmarshal(cfg.Auth.Options, &opts); err != nil {
+				return fmt.Errorf("remote: invalid auth options for service %q: %w", cfg.ID, err)
+			}
+
+			resolvedAny := false
+			for _, key := range []string{"token", "client_secret", "value"} {
+				if val, ok := opts[key].(string); ok {
+					resolvedStr, err := resolveValue(val)
+					if err != nil {
+						return fmt.Errorf("remote: failed to resolve auth secret for service %q: %w", cfg.ID, err)
+					}
+					opts[key] = resolvedStr
+					resolvedAny = true
+				}
+			}
+
+			if resolvedAny {
+				newOpts, err := json.Marshal(opts)
+				if err != nil {
+					return fmt.Errorf("remote: failed to re-marshal auth options for service %q: %w", cfg.ID, err)
+				}
+				cfg.Auth.Options = newOpts
+			}
+		}
+
 		configs[cfg.ID] = cfg
 
 		// Build authenticators eagerly so secret references resolve once, now,
@@ -208,4 +236,24 @@ func (m *Manager) ListServices() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// resolveValue checks if a string has a known scheme and resolves it.
+func resolveValue(val string) (string, error) {
+	if strings.HasPrefix(val, "file:") {
+		path := strings.TrimPrefix(val, "file:")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
+		}
+		trimmed := strings.TrimSpace(string(content))
+		if trimmed == "" {
+			return "", fmt.Errorf("secret file %s is empty", path)
+		}
+		return trimmed, nil
+	}
+	if strings.HasPrefix(val, "literal:") {
+		return strings.TrimPrefix(val, "literal:"), nil
+	}
+	return val, nil
 }

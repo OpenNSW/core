@@ -17,21 +17,16 @@ import (
 )
 
 type OAuth2Config struct {
-	TokenURL              string    `json:"token_url"`
-	ClientID              string    `json:"client_id"`
-	ClientSecret          SecretRef `json:"client_secret"`
-	Scopes                []string  `json:"scopes,omitempty"`
-	InsecureSkipTLSVerify bool      `json:"insecure_skip_tls_verify,omitempty"`
+	TokenURL              string   `json:"token_url"`
+	ClientID              string   `json:"client_id"`
+	ClientSecret          string   `json:"client_secret"`
+	Scopes                []string `json:"scopes,omitempty"`
+	InsecureSkipTLSVerify bool     `json:"insecure_skip_tls_verify,omitempty"`
 }
 
-// build resolves the configured client secret (failing loud on an unresolvable
-// reference) and constructs the authenticator.
+// build constructs the authenticator.
 func (c OAuth2Config) build() (Authenticator, error) {
-	clientSecret, err := c.ClientSecret.Resolve()
-	if err != nil {
-		return nil, fmt.Errorf("oauth2 client_secret: %w", err)
-	}
-	auth := NewOAuth2(c.TokenURL, c.ClientID, clientSecret, c.Scopes)
+	auth := NewOAuth2(c.TokenURL, c.ClientID, c.ClientSecret, c.Scopes)
 	auth.SetInsecureSkipTLSVerify(c.InsecureSkipTLSVerify)
 	return auth, nil
 }

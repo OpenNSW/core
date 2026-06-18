@@ -4,23 +4,17 @@
 package auth
 
 import (
-	"fmt"
 	"net/http"
 )
 
 type APIKeyConfig struct {
-	Key   string    `json:"key"`
-	Value SecretRef `json:"value"`
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
-// build resolves the configured value (failing loud on an unresolvable reference)
-// and constructs the authenticator.
+// build constructs the authenticator.
 func (c APIKeyConfig) build() (Authenticator, error) {
-	value, err := c.Value.Resolve()
-	if err != nil {
-		return nil, fmt.Errorf("api_key value: %w", err)
-	}
-	return NewAPIKey(c.Key, value), nil
+	return NewAPIKey(c.Key, c.Value), nil
 }
 
 type APIKey struct {
