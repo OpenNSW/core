@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,10 +17,11 @@ import (
 )
 
 type OAuth2Config struct {
-	TokenURL     string    `json:"token_url"`
-	ClientID     string    `json:"client_id"`
-	ClientSecret SecretRef `json:"client_secret"`
-	Scopes       []string  `json:"scopes,omitempty"`
+	TokenURL              string    `json:"token_url"`
+	ClientID              string    `json:"client_id"`
+	ClientSecret          SecretRef `json:"client_secret"`
+	Scopes                []string  `json:"scopes,omitempty"`
+	InsecureSkipTLSVerify bool      `json:"insecure_skip_tls_verify,omitempty"`
 }
 
 // build resolves the configured client secret (failing loud on an unresolvable
@@ -29,14 +31,17 @@ func (c OAuth2Config) build() (Authenticator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oauth2 client_secret: %w", err)
 	}
-	return NewOAuth2(c.TokenURL, c.ClientID, clientSecret, c.Scopes), nil
+	auth := NewOAuth2(c.TokenURL, c.ClientID, clientSecret, c.Scopes)
+	auth.SetInsecureSkipTLSVerify(c.InsecureSkipTLSVerify)
+	return auth, nil
 }
 
 type OAuth2 struct {
-	tokenURL     string
-	clientID     string
-	clientSecret string
-	scopes       []string
+	tokenURL              string
+	clientID              string
+	clientSecret          string
+	scopes                []string
+	insecureSkipTLSVerify bool
 
 	// Internal client for fetching tokens
 	httpClient *http.Client
@@ -55,6 +60,23 @@ func NewOAuth2(tokenURL, clientID, clientSecret string, scopes []string) *OAuth2
 		clientSecret: clientSecret,
 		scopes:       scopes,
 	}
+}
+
+// SetInsecureSkipTLSVerify controls whether the OAuth2 token request client skips
+// certificate verification. This is intended for local development with self-signed
+// identity-provider certificates only.
+func (a *OAuth2) SetInsecureSkipTLSVerify(skip bool) {
+	a.insecureSkipTLSVerify = skip
+	if a.httpClient == nil {
+		return
+	}
+	if skip {
+		a.httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		return
+	}
+	a.httpClient.Transport = nil
 }
 
 type oauth2TokenResponse struct {
@@ -99,11 +121,14 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 	if a.httpClient == nil {
 		a.httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
+	if a.insecureSkipTLSVerify && a.httpClient.Transport == nil {
+		a.httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
 
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
-	data.Set("client_id", a.clientID)
-	data.Set("client_secret", a.clientSecret)
 	if len(a.scopes) > 0 {
 		data.Set("scope", strings.Join(a.scopes, " "))
 	}
@@ -114,6 +139,11 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Authenticate with client_secret_basic (RFC 6749 §2.3.1): credentials go in
+	// the Authorization header, form-url-encoded then base64. This is the OAuth2
+	// recommended method and is required by some providers; credentials in the
+	// body (client_secret_post) are not universally accepted.
+	req.SetBasicAuth(url.QueryEscape(a.clientID), url.QueryEscape(a.clientSecret))
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {

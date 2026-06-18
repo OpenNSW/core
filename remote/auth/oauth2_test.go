@@ -139,6 +139,35 @@ func TestOAuth2_Errors(t *testing.T) {
 	})
 }
 
+func TestOAuth2_InsecureSkipTLSVerify(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "tls-token", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth := NewOAuth2(ts.URL, "", "", nil)
+	auth.SetInsecureSkipTLSVerify(true)
+
+	token, err := auth.getToken(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "tls-token", token)
+}
+
+func TestOAuth2_InsecureSkipTLSVerify_OffByDefault(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "tls-token", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth := NewOAuth2(ts.URL, "", "", nil)
+	_, err := auth.getToken(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token request failed")
+	assert.NotContains(t, err.Error(), "tls-token")
+}
+
 func TestOAuth2_Scopes(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
@@ -155,6 +184,28 @@ func TestOAuth2_Scopes(t *testing.T) {
 	token, err := auth.getToken(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, "token-with-scopes", token)
+}
+
+func TestOAuth2_UsesBasicAuth(t *testing.T) {
+	var gotUser, gotPass, gotBodySecret string
+	var basicOK bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, basicOK = r.BasicAuth()
+		_ = r.ParseForm()
+		gotBodySecret = r.Form.Get("client_secret")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "t", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth := NewOAuth2(ts.URL, "my-client", "my-secret", nil)
+	_, err := auth.getToken(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, basicOK, "client credentials must be sent in the Authorization header")
+	assert.Equal(t, "my-client", gotUser)
+	assert.Equal(t, "my-secret", gotPass)
+	assert.Empty(t, gotBodySecret, "client_secret must not be sent in the request body")
 }
 
 func TestOAuth2_ContextCancel(t *testing.T) {

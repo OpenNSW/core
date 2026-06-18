@@ -118,4 +118,5 @@ Used when the authentication type is `"oauth2"`.
 | `client_id`     | `string`   | The client identifier.                                                                      |
 | `client_secret` | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)). |
 | `scopes`        | `[]string` | Optional list of requested scopes.                                                          |
+| `insecure_skip_tls_verify` | `bool` | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`. |
 

@@ -33,9 +33,10 @@ func TestBuild(t *testing.T) {
 			name:     "oauth2 success",
 			authType: "oauth2",
 			options: map[string]any{
-				"token_url":     "http://auth",
-				"client_id":     "id",
-				"client_secret": "secret",
+				"token_url":                "http://auth",
+				"client_id":                "id",
+				"client_secret":            "secret",
+				"insecure_skip_tls_verify": true,
 			},
 		},
 		{
