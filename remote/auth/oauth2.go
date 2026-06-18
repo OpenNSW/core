@@ -66,6 +66,8 @@ func NewOAuth2(tokenURL, clientID, clientSecret string, scopes []string) *OAuth2
 // certificate verification. This is intended for local development with self-signed
 // identity-provider certificates only.
 func (a *OAuth2) SetInsecureSkipTLSVerify(skip bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.insecureSkipTLSVerify = skip
 	if a.httpClient == nil {
 		return
