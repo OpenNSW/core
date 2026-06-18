@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/OpenNSW/core/artifact"
@@ -340,7 +341,10 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 		if subTemplate.OutputNamespace == "" {
 			tm.logger.WarnContext(ctx, "dropping submission payload: active subtask declares no output_namespace", "task_id", taskID, "template", record.ActiveTaskTemplateID, "dropped_keys", payloadKeys(payload))
 		} else {
-			record.Data[subTemplate.OutputNamespace] = payload
+			// System variables (keys prefixed with "__") are runtime-internal
+			// and must not be persisted to the output namespace; they are still
+			// passed back to the workflow below.
+			record.Data[subTemplate.OutputNamespace] = withoutSystemVars(payload)
 		}
 	}
 	tm.db.SaveTask(ctx, record)
@@ -454,6 +458,20 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string)
 		})
 	}
 	return resList
+}
+
+// withoutSystemVars returns a copy of payload with system variables removed.
+// System variables are keys prefixed with "__" (double underscore); they are
+// runtime-internal and should not be written to a subtask's output namespace.
+func withoutSystemVars(payload map[string]any) map[string]any {
+	out := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if strings.HasPrefix(k, "__") {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func payloadKeys(payload map[string]any) []string {
