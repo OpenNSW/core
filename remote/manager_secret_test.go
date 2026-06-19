@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -87,4 +88,38 @@ func TestManager_LoadServices_FailedReloadKeepsPreviousState(t *testing.T) {
 	client, err := manager.GetClient("svc")
 	require.NoError(t, err)
 	assert.NotNil(t, client.authenticator)
+}
+
+func TestManager_LoadServices_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := writeServices(t, "http://local", "file:"+dir)
+
+	manager := NewManager()
+	err := manager.LoadServices(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a regular file")
+}
+
+func TestManager_LoadServices_RejectsOversizedFile(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "big")
+	require.NoError(t, os.WriteFile(secretPath, []byte(strings.Repeat("x", 4097)), 0o600))
+	path := writeServices(t, "http://local", "file:"+secretPath)
+
+	manager := NewManager()
+	err := manager.LoadServices(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestManager_LoadServices_RejectsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "empty")
+	require.NoError(t, os.WriteFile(secretPath, []byte("   \n"), 0o600))
+	path := writeServices(t, "http://local", "file:"+secretPath)
+
+	manager := NewManager()
+	err := manager.LoadServices(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file is empty")
 }

@@ -5,6 +5,8 @@ package auth
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,5 +87,87 @@ func TestBuild_MissingOptions(t *testing.T) {
 		_, err := Build("bearer", opts)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing options")
+	}
+}
+
+func TestBuild_ResolvesFileSecretRef(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "token")
+	require.NoError(t, os.WriteFile(secretPath, []byte("resolved-from-file"), 0o600))
+
+	tests := []struct {
+		name     string
+		authType string
+		options  any
+	}{
+		{
+			name:     "bearer with file: token",
+			authType: "bearer",
+			options:  map[string]string{"token": "file:" + secretPath},
+		},
+		{
+			name:     "api_key with file: value",
+			authType: "api_key",
+			options:  map[string]string{"key": "X-API", "value": "file:" + secretPath},
+		},
+		{
+			name:     "oauth2 with file: client_secret",
+			authType: "oauth2",
+			options: map[string]any{
+				"token_url":     "http://auth",
+				"client_id":     "id",
+				"client_secret": "file:" + secretPath,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			optsJSON, err := json.Marshal(tt.options)
+			require.NoError(t, err)
+
+			authn, err := Build(tt.authType, optsJSON)
+			require.NoError(t, err)
+			assert.NotNil(t, authn)
+		})
+	}
+}
+
+func TestBuild_FailsOnUnresolvableFileRef(t *testing.T) {
+	tests := []struct {
+		name     string
+		authType string
+		options  any
+	}{
+		{
+			name:     "bearer with missing file",
+			authType: "bearer",
+			options:  map[string]string{"token": "file:/no/such/file"},
+		},
+		{
+			name:     "api_key with missing file",
+			authType: "api_key",
+			options:  map[string]string{"key": "X-API", "value": "file:/no/such/file"},
+		},
+		{
+			name:     "oauth2 with missing file",
+			authType: "oauth2",
+			options: map[string]any{
+				"token_url":     "http://auth",
+				"client_id":     "id",
+				"client_secret": "file:/no/such/file",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			optsJSON, err := json.Marshal(tt.options)
+			require.NoError(t, err)
+
+			_, err = Build(tt.authType, optsJSON)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to read secret file")
+		})
 	}
 }
