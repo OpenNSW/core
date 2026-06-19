@@ -10,6 +10,7 @@ Before you begin, ensure you have the following installed:
 -   [Docker](https://www.docker.com/products/docker-desktop/) and Docker Compose
 -   [Make](https://www.gnu.org/software/make/)
 -   [Git](https://git-scm.com/downloads)
+-   [Gitleaks](https://github.com/gitleaks/gitleaks) (required for pre-commit secret scanning)
 
 ## Initial Setup
 
@@ -55,8 +56,7 @@ git checkout -b fix/issue-number
 go test -race ./...
 
 # Run tests for a specific package (e.g. workflow)
-cd workflow
-go test -race ./...
+go test -race ./workflow/...
 ```
 
 **Build Validation:**
@@ -65,8 +65,7 @@ go test -race ./...
 make build
 
 # Build a specific package (e.g. workflow)
-cd workflow
-go build ./...
+go build ./workflow/...
 ```
 
 ## Code Style and Standards
