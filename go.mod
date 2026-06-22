@@ -3,16 +3,16 @@ module github.com/OpenNSW/core
 go 1.26.4
 
 require (
-	github.com/OpenNSW/core/remote v0.1.0
+	github.com/OpenNSW/core/remote v0.2.0
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.3
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
-	go.temporal.io/sdk v1.44.1
+	go.temporal.io/sdk v1.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.1
 )
