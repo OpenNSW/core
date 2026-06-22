@@ -7,7 +7,7 @@ A powerful, JSON-DSL-driven graph interpreter engine built on top of the Go [Tem
 - **DSL-Driven DAG Execution**: Runs workflows represented by structured nodes and conditional edges.
 - **Multiple Node Types**:
   - **`START` / `END`**: Standard execution entry and exit points.
-  - **`TASK`**: Executes application activities. Supports synchronous/asynchronous work execution.
+  - **`TASK`**: Executes application activities. Supports synchronous/asynchronous work execution, and specialized system tasks (`sys:emit_signal`, `sys:wait_for_signal`).
   - **`GATEWAY`**: Controls logical branching and joining (`EXCLUSIVE_SPLIT`, `PARALLEL_SPLIT`, `EXCLUSIVE_JOIN`, `PARALLEL_JOIN`).
   - **`SPLIT_TASK`**: Spawns multiple parallel child workflows dynamically (dynamic fan-out). Supports:
     - `SAME_TEMPLATE`: Homogeneous splits running the same template across payloads.
@@ -24,8 +24,8 @@ A powerful, JSON-DSL-driven graph interpreter engine built on top of the Go [Tem
 graph TD
     Start([Start Node]) --> Task1[Task Node]
     Task1 --> Gate1{Gateway: Split}
-    Gate1 -->|Condition A| TaskA[Task A]
-    Gate1 -->|Condition B| TaskB[Task B]
+    Gate1 -->|Condition A| TaskA[sys:wait_for_signal]
+    Gate1 -->|Condition B| TaskB[sys:emit_signal]
     TaskA --> Gate2{Gateway: Join}
     TaskB --> Gate2
     Gate2 --> Split1[Split Task Node]
@@ -64,6 +64,20 @@ type SplitTaskConfig struct {
 	IterationKey    string      `json:"iteration_key,omitempty"`    // Sub-context namespace key (defaults to "_iter")
 }
 ```
+
+---
+
+## System Task Templates
+
+### 1. `sys:emit_signal`
+Emits an asynchronous signal from a child workflow to the parent brokerage system.
+* **Requirements**: Must provide the `signal_name` and `payload` via `InputMapping`.
+* **Execution**: Passes messages through the parent broker using the `"child_broadcast_signal"` channel. Safe for standalone execution (gracefully ignores signaling if no parent workflow ID is registered).
+
+### 2. `sys:wait_for_signal`
+Blocks workflow execution until a signal matching the specified channel name is received.
+* **Requirements**: Must map the target `signal_name` in `InputMapping`.
+* **Execution**: Dynamically subscribes to the named channel on Temporal and processes the payload back into the workflow variables dictionary using its `OutputMapping`.
 
 ---
 

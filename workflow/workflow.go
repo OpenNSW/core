@@ -261,19 +261,66 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 
 	var result map[string]any
 
-	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ActivityID:          nodeInfo.ID,
-		StartToCloseTimeout: 24 * time.Hour * 365,
-	})
+	switch node.TaskTemplateID {
+	case SysTaskWaitForSignal:
+		signalName, _ := inputs[InputSignalName].(string)
+		if signalName == "" {
+			return fmt.Errorf("wait_for_signal task requires a non-empty signal_name input")
+		}
+		signalChan := workflow.GetSignalChannel(ctx, signalName)
+		var signalData map[string]any
+		// Block execution until a matching signal event is posted to the channel
+		signalChan.Receive(ctx, &signalData)
 
-	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs).Get(ctx, &result)
-	if err != nil {
-		return err
-	}
+		// Hydrate incoming broadcast state keys back into local execution variables using standard OutputMapping
+		err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, signalData)
+		if err != nil {
+			return err
+		}
 
-	err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, result)
-	if err != nil {
-		return err
+	case SysTaskEmitSignal:
+		signalName, _ := inputs[InputSignalName].(string)
+		if signalName == "" {
+			return fmt.Errorf("emit_signal task requires a non-empty signal_name input")
+		}
+		payload, _ := inputs[InputPayload].(map[string]any)
+
+		parentWorkflowID, _ := g.instance.WorkflowVariables[VarParentWorkflowID].(string)
+
+		if parentWorkflowID != "" {
+			branchID, _ := g.instance.WorkflowVariables[VarBranchID].(string)
+			if branchID == "" {
+				workflow.GetLogger(ctx).Warn("emit_signal: _branch_id not set; signal will be unfiltered")
+			}
+			msg := BroadcastMessage{
+				SenderBranchID: branchID,
+				SignalName:     signalName,
+				Payload:        payload,
+			}
+			// Non-blocking fire-and-forget external signal delivery up to parent instance
+			future := workflow.SignalExternalWorkflow(ctx, parentWorkflowID, "", ChildBroadcastSignalName, msg)
+			workflow.Go(ctx, func(ctx workflow.Context) {
+				if err := future.Get(ctx, nil); err != nil {
+					workflow.GetLogger(ctx).Error("emit_signal: failed to send signal to parent", "error", err)
+				}
+			})
+		}
+
+	default:
+		nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			ActivityID:          nodeInfo.ID,
+			StartToCloseTimeout: 24 * time.Hour * 365,
+		})
+
+		err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs).Get(ctx, &result)
+		if err != nil {
+			return err
+		}
+
+		err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, result)
+		if err != nil {
+			return err
+		}
 	}
 
 	nodeInfo.Status = NodeStatusCompleted

@@ -367,3 +367,154 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	s.Equal("branch-2-1", branch2Result["branch_id"])
 	s.Contains(branch2Result["error"], "task failed intentionally")
 }
+
+func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
+	env := s.NewTestWorkflowEnvironment()
+
+	// Register activities
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
+
+	// 1. Define the internal Phyto Workflow Graph Structure (Publish Side)
+	phytoDef := WorkflowDefinition{
+		ID: "oga_phyto_workflow",
+		Nodes: []Node{
+			{ID: "p_start", Type: NodeTypeStart},
+			{
+				ID:             "p_inspect",
+				Type:           NodeTypeTask,
+				TaskTemplateID: "run_phyto_inspection",
+				OutputMapping:  map[string]string{"inspection_status": "phyto_status"},
+			},
+			{
+				ID:             "p_emit",
+				Type:           NodeTypeTask,
+				TaskTemplateID: SysTaskEmitSignal,
+				InputMapping: map[string]string{
+					"custom_iter.input.signal_to_emit": InputSignalName,
+					"phyto_status":                     "payload.phyto_status",
+				},
+			},
+			{ID: "p_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "pe1", SourceID: "p_start", TargetID: "p_inspect"},
+			{ID: "pe2", SourceID: "p_inspect", TargetID: "p_emit"},
+			{ID: "pe3", SourceID: "p_emit", TargetID: "p_end"},
+		},
+	}
+
+	// 2. Define the internal Health Workflow Graph Structure (Subscribe Side)
+	healthDef := WorkflowDefinition{
+		ID: "oga_health_workflow",
+		Nodes: []Node{
+			{ID: "h_start", Type: NodeTypeStart},
+			{
+				ID:             "h_wait",
+				Type:           NodeTypeTask,
+				TaskTemplateID: SysTaskWaitForSignal,
+				InputMapping:   map[string]string{"custom_iter.input.signal_to_wait": InputSignalName},
+				OutputMapping:  map[string]string{"phyto_status": "phyto_status"},
+			},
+			{
+				ID:             "h_verify_phyto",
+				Type:           NodeTypeTask,
+				TaskTemplateID: "verify_cross_border_docs",
+			},
+			{ID: "h_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "he1", SourceID: "h_start", TargetID: "h_wait"},
+			{ID: "he2", SourceID: "h_wait", TargetID: "h_verify_phyto"},
+			{ID: "he3", SourceID: "h_verify_phyto", TargetID: "h_end"},
+		},
+	}
+
+	// 3. Define the Primary Master Consignment Workflow Definition
+	masterDef := WorkflowDefinition{
+		ID: "master_consignment_workflow",
+		Nodes: []Node{
+			{ID: "m_start", Type: NodeTypeStart},
+			{
+				ID:   "m_fanout_oga",
+				Type: NodeTypeSplitTask,
+				SplitTask: &SplitTaskConfig{
+					Mode:            SplitModeDifferentTemplates,
+					ItemsVariable:   "active_oga_requirements",
+					ResultsVariable: "consolidated_oga_results",
+					FailureMode:     FailureModeFailFast,
+					IterationKey:    "custom_iter",
+				},
+			},
+			{ID: "m_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "me1", SourceID: "m_start", TargetID: "m_fanout_oga"},
+			{ID: "me2", SourceID: "m_fanout_oga", TargetID: "m_end"},
+		},
+	}
+
+	// 4. Mock Definition Hydration Activity Provider
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_phyto_workflow").Return(phytoDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
+
+	// Mock Task Activity Processing Handlers
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything).Return(map[string]any{
+		"inspection_status": "APPROVED_CLEAN",
+	}, nil)
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything).Return(map[string]any{
+		"health_clearance": "PASSED_SECURE",
+	}, nil)
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Register nested sub-workflow runtime interpreter engine
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+
+	// 5. Establish initial runtime variables simulating dynamic lookup results
+	initialVars := map[string]any{
+		"active_oga_requirements": []map[string]any{
+			{
+				"template_id": "oga_phyto_workflow",
+				"branch_id":   "oga-phyto",
+				"payload": map[string]any{
+					"container_id":   "CONT-4412",
+					"signal_to_emit": "PHYTO_APPROVAL_EMITTED",
+				},
+			},
+			{
+				"template_id": "oga_health_workflow",
+				"branch_id":   "oga-health",
+				"payload": map[string]any{
+					"container_id":   "CONT-4412",
+					"signal_to_wait": "PHYTO_APPROVAL_EMITTED",
+				},
+			},
+		},
+	}
+
+	// Execute Test Execution
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)
+
+	// 6. Architectural Invariants Validation Checks
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	var resultState WorkflowInstance
+	err := env.GetWorkflowResult(&resultState)
+	s.NoError(err)
+
+	// Assert overall execution status
+	s.Equal(StatusCompleted, resultState.Status)
+
+	// Validate that phyto_status was propagated via cross-branch signal into the health branch result
+	results, ok := resultState.WorkflowVariables["consolidated_oga_results"].([]any)
+	s.True(ok, "consolidated_oga_results should be []any")
+	s.Len(results, 2)
+	healthResult, ok := results[1].(map[string]any)
+	s.True(ok, "health branch result should be map[string]any")
+	s.Equal("APPROVED_CLEAN", healthResult["phyto_status"])
+}

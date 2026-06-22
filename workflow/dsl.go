@@ -42,17 +42,50 @@ type SplitTaskItem struct {
 
 // Core structural execution constants
 const (
+	// DefaultIterationKey is the default variable name injected into a child workflow's
+	// state containing iteration details (e.g., _iter.index, _iter.branch_id, _iter.input).
 	DefaultIterationKey = "_iter"
+	// ChildBroadcastSignalName is the name of the Temporal signal used to route cross-branch
+	// signals from a child workflow back up to the parent for brokerage to other sibling branches.
+	ChildBroadcastSignalName = "child_broadcast_signal"
 
 	// Keys injected into the child's workspace variables
-	VarSplitNodeID      = "_split_node_id"
+	// VarSplitNodeID identifies the ID of the SplitTask node in the parent workflow.
+	VarSplitNodeID = "_split_node_id"
+	// VarParentWorkflowID contains the workflow ID of the parent/orchestrator workflow.
 	VarParentWorkflowID = "_parent_workflow_id"
+	// VarBranchID contains the unique branch ID assigned to the specific child workflow branch.
+	VarBranchID = "_branch_id"
 
-	// Iteration context sub-keys
-	IterIndexKey    = "index"
+	// Iteration context sub-keys (e.g., used to access _iter.index, _iter.branch_id, _iter.input)
+	// IterIndexKey is the sub-key for the 0-based index of this branch within the items array.
+	IterIndexKey = "index"
+	// IterBranchIDKey is the sub-key for the unique branch identifier.
 	IterBranchIDKey = "branch_id"
-	IterInputKey    = "input"
+	// IterInputKey is the sub-key pointing to the input payload mapped to this branch.
+	IterInputKey = "input"
+
+	// System task template IDs
+	// SysTaskWaitForSignal is the template ID for the built-in system task that suspends
+	// the workflow until a specific signal is received.
+	SysTaskWaitForSignal = "sys:wait_for_signal"
+	// SysTaskEmitSignal is the template ID for the built-in system task that publishes/emits
+	// a signal to be routed to other branches.
+	SysTaskEmitSignal = "sys:emit_signal"
+
+	// Input keys for system tasks
+	// InputSignalName is the parameter key used to specify the target signal name in signal tasks.
+	InputSignalName = "signal_name"
+	// InputPayload is the parameter key used to specify the data payload in emit signal tasks.
+	InputPayload = "payload"
 )
+
+// BroadcastMessage defines a unified Message Wrapper for parent brokerage.
+type BroadcastMessage struct {
+	SenderBranchID string         `json:"sender_branch_id"`
+	SignalName     string         `json:"signal_name"`
+	Payload        map[string]any `json:"payload"`
+}
 
 // SplitTaskConfig defines dynamic fan-out execution configuration.
 type SplitTaskConfig struct {

@@ -6,6 +6,7 @@ package engine
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -183,6 +184,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
 			VarSplitNodeID:      node.ID,
+			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{
 				IterIndexKey:    p.Index,
 				IterBranchIDKey: p.BranchID,
@@ -195,6 +197,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 			WorkflowID: deterministicChildID,
 		})
 
+		// Recursively spin up core interpreter executing target hydrated sub-graph schema
 		future := workflow.ExecuteChildWorkflow(childCtx, "GraphInterpreterWorkflow", branchGraphDef, childVars)
 		activeBranches[deterministicChildID] = &activeBranch{
 			Future:   future,
@@ -203,18 +206,20 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		}
 	}
 
-	// Wait for all child workflows to start to ensure execution environments are initialized
-	for targetChildID, info := range activeBranches {
+	// Wait for all child workflows to start to ensure their execution environments (and signal handlers) are initialized.
+	// Iterate prepared (insertion order) rather than the map to guarantee deterministic replay.
+	for _, p := range prepared {
+		childID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		var childExec workflow.Execution
-		if err := info.Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
-			return nil, fmt.Errorf("failed to start child workflow %s: %w", targetChildID, err)
+		if err := activeBranches[childID].Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
+			return nil, fmt.Errorf("failed to start child workflow %s: %w", childID, err)
 		}
 	}
 
 	return activeBranches, nil
 }
 
-// monitorChildWorkflows tracks and waits for spawned child workflows and collects outputs/errors.
+// monitorChildWorkflows tracks and waits for spawned child workflows, handles cross-branch signaling, and collects outputs/errors.
 func (g *graphInterpreter) monitorChildWorkflows(
 	ctx workflow.Context,
 	activeBranches map[string]*activeBranch,
@@ -222,7 +227,29 @@ func (g *graphInterpreter) monitorChildWorkflows(
 	config *SplitTaskConfig,
 	nodeInfo *NodeInfo,
 ) error {
+	// 3. Initialize the Interactive Event Multiplexor Selector
+	broadcastChan := workflow.GetSignalChannel(ctx, ChildBroadcastSignalName)
 	selector := workflow.NewSelector(ctx)
+
+	// Handler Type A: Listen for Upstream Child Broadcast signals and multicast them out
+	selector.AddReceive(broadcastChan, func(c workflow.ReceiveChannel, _ bool) {
+		var msg BroadcastMessage
+		c.Receive(ctx, &msg)
+
+		// Broadcast packet down into active sibling tracking channels (omitting source generator).
+		// Sort child IDs before iterating so SignalExternalWorkflow commands are scheduled in
+		// deterministic order on both the original run and replay.
+		childIDs := make([]string, 0, len(activeBranches))
+		for childID := range activeBranches {
+			childIDs = append(childIDs, childID)
+		}
+		sort.Strings(childIDs)
+		for _, targetChildID := range childIDs {
+			if activeBranches[targetChildID].BranchID != msg.SenderBranchID {
+				_ = workflow.SignalExternalWorkflow(ctx, targetChildID, "", msg.SignalName, msg.Payload)
+			}
+		}
+	})
 
 	completedCount := 0
 	totalBranches := len(activeBranches)
@@ -261,6 +288,14 @@ func (g *graphInterpreter) monitorChildWorkflows(
 
 		if executionError != nil && config.FailureMode == FailureModeFailFast {
 			nodeInfo.Status = NodeStatusFailed
+			remaining := make([]string, 0, len(activeBranches))
+			for childID := range activeBranches {
+				remaining = append(remaining, childID)
+			}
+			sort.Strings(remaining)
+			for _, childID := range remaining {
+				_ = workflow.RequestCancelExternalWorkflow(ctx, childID, "")
+			}
 			return executionError
 		}
 	}
