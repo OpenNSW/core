@@ -16,8 +16,8 @@ import (
 )
 
 type emailConfig struct {
-	BaseURL string `json:"baseURL"`
-	Token   string `json:"token"`
+	BaseURL string         `json:"baseURL"`
+	Token   auth.SecretRef `json:"token"`
 }
 
 type emailRequest struct {
@@ -50,12 +50,14 @@ func (e *EmailProvider) Configure(raw json.RawMessage) error {
 	if err := validateBaseURL(cfg.BaseURL); err != nil {
 		return err
 	}
-	if cfg.Token == "" {
+	token, err := cfg.Token.Resolve()
+	if err != nil {
+		return fmt.Errorf("resolve email token: %w", err)
+	}
+	if token == "" {
 		return errors.New("token is required")
 	}
-	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(auth.NewBearer(auth.BearerConfig{
-		Token: cfg.Token,
-	})))
+	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(auth.NewBearer(token)))
 	return nil
 }
 
