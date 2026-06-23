@@ -37,5 +37,12 @@ func ShouldRender(section SectionBlueprint, facts Facts) bool {
 		}
 	}
 
+	// Claim-based visibility: the caller pre-resolves AuthZ into Facts.Claims
+	// before calling Assemble. The library only checks key presence and truth;
+	// it makes no policy decisions of its own.
+	if rules.RequireClaim != "" && !facts.Claims[rules.RequireClaim] {
+		return false
+	}
+
 	return true
 }
