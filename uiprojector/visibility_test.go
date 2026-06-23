@@ -121,6 +121,95 @@ func TestShouldRender(t *testing.T) {
 			},
 			want: false,
 		},
+		// RequireClaim cases
+		{
+			name: "claim present and true renders",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{RequireClaim: "can_approve"},
+			},
+			facts: uiprojector.Facts{
+				Claims: map[string]bool{"can_approve": true},
+			},
+			want: true,
+		},
+		{
+			name: "claim present but false hides",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{RequireClaim: "can_approve"},
+			},
+			facts: uiprojector.Facts{
+				Claims: map[string]bool{"can_approve": false},
+			},
+			want: false,
+		},
+		{
+			name: "claim absent from map hides",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{RequireClaim: "can_approve"},
+			},
+			facts: uiprojector.Facts{
+				Claims: map[string]bool{"is_owner": true},
+			},
+			want: false,
+		},
+		{
+			name: "nil Claims map hides when claim required",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{RequireClaim: "can_approve"},
+			},
+			facts: uiprojector.Facts{},
+			want:  false,
+		},
+		{
+			name: "empty RequireClaim is a no-op",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{RequireClaim: ""},
+			},
+			facts: uiprojector.Facts{},
+			want:  true,
+		},
+		{
+			name: "state passes and claim true renders",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{
+					States:       []string{"PENDING_REVIEW"},
+					RequireClaim: "can_approve",
+				},
+			},
+			facts: uiprojector.Facts{
+				State:  "PENDING_REVIEW",
+				Claims: map[string]bool{"can_approve": true},
+			},
+			want: true,
+		},
+		{
+			name: "state passes but claim false hides",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{
+					States:       []string{"PENDING_REVIEW"},
+					RequireClaim: "can_approve",
+				},
+			},
+			facts: uiprojector.Facts{
+				State:  "PENDING_REVIEW",
+				Claims: map[string]bool{"can_approve": false},
+			},
+			want: false,
+		},
+		{
+			name: "claim true but state fails hides",
+			section: uiprojector.SectionBlueprint{
+				VisibleWhen: &uiprojector.VisibleWhen{
+					States:       []string{"PENDING_REVIEW"},
+					RequireClaim: "can_approve",
+				},
+			},
+			facts: uiprojector.Facts{
+				State:  "DRAFT",
+				Claims: map[string]bool{"can_approve": true},
+			},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -24,12 +24,14 @@ type SectionBlueprint struct {
 type VisibleWhen struct {
 	States         []string `json:"states,omitempty"`         // Required Facts.State values
 	RequireDataKey string   `json:"requireDataKey,omitempty"` // Section only visible if this key exists in data
+	RequireClaim   string   `json:"requireClaim,omitempty"`   // Section only visible if this claim is true in Facts.Claims. Compose AND/OR logic in the caller.
 }
 
 // Facts represents the current state of a business entity to be rendered.
 type Facts struct {
-	State string         `json:"state"` // Logical status (e.g., "PENDING", "COMPLETED")
-	Data  map[string]any `json:"data"`  // The snapshot/registry of business data
+	State  string          `json:"state"`            // Logical status (e.g., "PENDING", "COMPLETED")
+	Data   map[string]any  `json:"data"`             // The snapshot/registry of business data
+	Claims map[string]bool `json:"claims,omitempty"` // Pre-resolved AuthZ claims populated by the caller before Assemble
 }
 
 // SectionType identifies the projector used for a section.
