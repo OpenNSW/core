@@ -7,7 +7,7 @@ This guide will help you set up your local development environment for contribut
 Before you begin, ensure you have the following installed:
 
 -   [Go](https://go.dev/dl/) (1.26 or later)
--   [Docker](https://www.docker.com/products/docker-desktop/) and Docker Compose
+-   [Docker Daemon](https://docs.docker.com/get-docker/) and Docker Compose
 -   [Make](https://www.gnu.org/software/make/)
 -   [Git](https://git-scm.com/downloads)
 -   [Gitleaks](https://github.com/gitleaks/gitleaks) (required for pre-commit secret scanning)
