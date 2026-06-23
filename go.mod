@@ -18,7 +18,6 @@ require (
 )
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
@@ -48,7 +47,6 @@ require (
 	github.com/nexus-rpc/sdk-go v0.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
-	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/objx v0.5.2 // indirect
 	go.temporal.io/api v1.62.12 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
