@@ -23,6 +23,10 @@ type graphInterpreter struct {
 	nodes    map[string]*Node
 	outEdges map[string][]Edge
 	inEdges  map[string][]Edge
+
+	// pendingAdminResolutions holds a Settable for each node currently parked in
+	// NodeStatusAwaitingAdmin, keyed by node template ID. See admin_recovery.go.
+	pendingAdminResolutions map[string]workflow.Settable
 }
 
 // GraphInterpreterWorkflow is the entry point for the Temporal workflow that interprets a graph definition.
@@ -85,9 +89,10 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 
 	// Initialize our interpreter struct
 	interp := &graphInterpreter{
-		def:        def,
-		instance:   instance,
-		edgeTokens: make(map[string]int),
+		def:                     def,
+		instance:                instance,
+		edgeTokens:              make(map[string]int),
+		pendingAdminResolutions: make(map[string]workflow.Settable),
 	}
 	interp.buildIndexes()
 
@@ -105,6 +110,8 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 			// TODO: implement event handling
 		}
 	})
+
+	interp.startAdminResolutionDispatcher(ctx)
 
 	ao := workflow.ActivityOptions{StartToCloseTimeout: 24 * time.Hour * 365}
 	ctx = workflow.WithActivityOptions(ctx, ao)
@@ -154,11 +161,34 @@ func (g *graphInterpreter) transitionTo(ctx workflow.Context, edge Edge) error {
 	return g.executeNode(ctx, edge.TargetID)
 }
 
+// dispatchNodeHandler delegates to the handler for node's type. It is used both for normal
+// execution and to re-run a parked node's handler from scratch on AdminActionRetry.
+func (g *graphInterpreter) dispatchNodeHandler(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
+	switch node.Type {
+	case NodeTypeStart:
+		return g.handleStartNode(ctx, nodeInfo, outEdges)
+	case NodeTypeTask:
+		return g.handleTaskNode(ctx, nodeInfo, node, outEdges)
+	case NodeTypeGateway:
+		return g.handleGatewayNode(ctx, nodeInfo, node, outEdges)
+	case NodeTypeSplitTask:
+		return g.handleSplitTaskNode(ctx, nodeInfo, node, outEdges)
+	case NodeTypeEnd:
+		return g.handleEndNode(ctx, nodeInfo)
+	default:
+		return fmt.Errorf("unknown node type: %v", node.Type)
+	}
+}
+
 func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) error {
 	nodeInfo := g.instance.NodeInfo[nodeID]
 	node, exists := g.nodes[nodeID]
 
 	if !exists || nodeInfo == nil {
+		// Unreachable in practice: every edge's source/target is validated against
+		// NodeInfo before execution begins (see GraphInterpreterWorkflow). There is no
+		// NodeInfo to park on here, so this stays a hard failure rather than going
+		// through the admin escape hatch.
 		return fmt.Errorf("node %s not found", nodeID)
 	}
 
@@ -167,29 +197,18 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
 
 	outEdges := g.outEdges[node.ID]
-	var err error
 
-	// Delegate to specific handlers based on node type
-	switch node.Type {
-	case NodeTypeStart:
-		err = g.handleStartNode(ctx, nodeInfo, outEdges)
-	case NodeTypeTask:
-		err = g.handleTaskNode(ctx, nodeInfo, node, outEdges)
-	case NodeTypeGateway:
-		err = g.handleGatewayNode(ctx, nodeInfo, node, outEdges)
-	case NodeTypeSplitTask:
-		err = g.handleSplitTaskNode(ctx, nodeInfo, node, outEdges)
-	case NodeTypeEnd:
-		err = g.handleEndNode(ctx, nodeInfo)
-	default:
-		err = fmt.Errorf("unknown node type: %v", node.Type)
+	err := g.dispatchNodeHandler(ctx, nodeInfo, node, outEdges)
+	if err == nil {
+		return nil
 	}
-
-	if err != nil {
-		nodeInfo.Status = NodeStatusFailed
+	if isTerminalAdminError(err) {
+		// This error already went through parkNodeForAdmin for a downstream node (it
+		// transitioned here, or further, before being deliberately aborted) — propagate
+		// as-is rather than treating it as a fresh failure of this node.
 		return err
 	}
-	return nil
+	return g.parkNodeForAdmin(ctx, nodeInfo, node, outEdges, err)
 }
 
 // handleStartNode transitions to the single outgoing edge and marks itself Completed.
@@ -270,11 +289,16 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 	if err != nil {
 		return err
 	}
+	// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
+	// fails) can see the Activity already ran and what it returned, rather than blindly
+	// retrying and re-invoking it.
+	nodeInfo.CachedTaskResult = result
 
 	err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, result)
 	if err != nil {
 		return err
 	}
+	nodeInfo.CachedTaskResult = nil
 
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)

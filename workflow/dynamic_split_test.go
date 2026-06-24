@@ -6,10 +6,12 @@ package engine
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -329,6 +331,33 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 			},
 		},
 	}
+
+	// The child "fail_task" activity error now parks each child's c_task node for admin
+	// intervention instead of failing the child workflow outright, and the parent's
+	// m_fanout node parks too once the aggregate failure reaches it. Abort each in turn to
+	// reproduce today's "multiple branches failed" end-state.
+	const parentWorkflowID = "master-collect-all-test"
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
+
+	// The default Activity retry policy retries "fail_task" ~10 times (~10s of simulated
+	// time, per Temporal's test environment defaults) before giving up and returning the
+	// error to the child workflow, so the abort signals must be scheduled well past that.
+	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
+		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, "m_fanout", branchID)
+		env.RegisterDelayedCallback(func() {
+			err := env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
+				NodeID: "c_task",
+				Action: AdminActionAbort,
+			})
+			s.NoError(err)
+		}, 15*time.Second)
+	}
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "m_fanout",
+			Action: AdminActionAbort,
+		})
+	}, 16*time.Second)
 
 	// Execute Test Execution
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)

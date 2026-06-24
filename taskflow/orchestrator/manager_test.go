@@ -75,6 +75,10 @@ func (m *mockTemporalManager) TaskUpdate(ctx context.Context, workflowID string,
 	return nil
 }
 
+func (m *mockTemporalManager) ResolveAdminIntervention(ctx context.Context, workflowID string, runID string, resolution engine.AdminResolutionSignal) error {
+	return nil
+}
+
 func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) (*engine.WorkflowInstance, error) {
 	return nil, nil
 }
