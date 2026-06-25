@@ -142,13 +142,19 @@ type Manager interface {
 	// It does not advance the graph's execution state.
 	TaskUpdate(ctx context.Context, workflowID, runID string, update UpdateEvent) error
 
-	// ResolveAdminIntervention sends an admin's resolution decision to a node that is
-	// currently parked in NodeStatusAwaitingAdmin, identified by workflowID/runID/nodeID.
-	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
-
 	// GetStatus retrieves a running workflow's in-memory state (the WorkflowInstance), including
 	// current variables, and audit trails.
 	GetStatus(ctx context.Context, workflowID string) (*WorkflowInstance, error)
+}
+
+// AdminInterventionResolver is implemented by managers that support resolving a node parked
+// in NodeStatusAwaitingAdmin. It is kept separate from Manager so that existing Manager
+// implementations (e.g. test doubles) aren't forced to implement it. Callers that want this
+// capability can type-assert: if r, ok := mgr.(AdminInterventionResolver); ok { ... }.
+type AdminInterventionResolver interface {
+	// ResolveAdminIntervention sends an admin's resolution decision to a node that is
+	// currently parked in NodeStatusAwaitingAdmin, identified by workflowID/runID/nodeID.
+	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
 }
 
 // TemporalManager extends the Manager interface with worker control methods.
