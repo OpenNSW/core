@@ -153,6 +153,14 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	}
 	initialData["_task_id"] = taskID
 
+	// root_workflow_id is the top-level consignment ID — the first segment of
+	// parent_workflow_id before any "--" separator introduced by SPLIT_TASK
+	// child workflow IDs (format: "{root}--{nodeID}--{branchID}").
+	rootWorkflowID := payload.WorkflowID
+	if idx := strings.Index(payload.WorkflowID, "--"); idx != -1 {
+		rootWorkflowID = payload.WorkflowID[:idx]
+	}
+
 	record := store.TaskRecord{
 		TaskID:           taskID,
 		TaskType:         template.Type,
@@ -161,6 +169,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		ParentWorkflowID: payload.WorkflowID,
 		ParentRunID:      payload.RunID,
 		ParentNodeID:     payload.NodeID,
+		RootWorkflowID:   rootWorkflowID,
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
 		CreatedAt:        time.Now(),

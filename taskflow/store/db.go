@@ -25,6 +25,8 @@ type TaskRecord struct {
 	ParentRunID      string `json:"parent_run_id"`
 	ParentNodeID     string `json:"parent_node_id"`
 
+	RootWorkflowID string `json:"root_workflow_id"` // top-level consignment ID
+
 	// Active subtask execution coordinates — used to resume/wake the currently active subtask step via the API.
 	// WARNING: Since the store only holds a single set of coordinates, only one subtask can be active at any given time
 	// (strictly sequential execution). Parallel/concurrent subtasks inside a single Task Workflow are not supported.

@@ -6,7 +6,6 @@ package gorm
 import (
 	"encoding/json"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
@@ -53,6 +52,7 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		ParentWorkflowID:     m.ParentWorkflowID,
 		ParentRunID:          m.ParentRunID,
 		ParentNodeID:         m.ParentNodeID,
+		RootWorkflowID:       m.RootWorkflowID,
 		TaskWorkflowID:       m.TaskWorkflowID,
 		TaskRunID:            m.TaskRunID,
 		SubTaskNodeID:        m.SubTaskNodeID,
@@ -69,20 +69,14 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 	if err != nil {
 		slog.Error("taskflow gorm store: FromDomain failed to marshal Data", "taskId", r.TaskID, "error", err)
 	}
-	// root_workflow_id is the top-level consignment ID — the first segment of
-	// parent_workflow_id before any "--" separator introduced by SPLIT_TASK
-	// child workflow IDs (format: "{root}--{nodeID}--{branchID}").
-	rootWorkflowID := r.ParentWorkflowID
-	if idx := strings.Index(r.ParentWorkflowID, "--"); idx != -1 {
-		rootWorkflowID = r.ParentWorkflowID[:idx]
-	}
+
 	return TaskRecordModel{
 		TaskID:               r.TaskID,
 		TaskType:             r.TaskType,
 		State:                r.State,
 		RenderConfig:         r.RenderConfig,
 		ParentWorkflowID:     r.ParentWorkflowID,
-		RootWorkflowID:       rootWorkflowID,
+		RootWorkflowID:       r.RootWorkflowID,
 		ParentRunID:          r.ParentRunID,
 		ParentNodeID:         r.ParentNodeID,
 		TaskWorkflowID:       r.TaskWorkflowID,
