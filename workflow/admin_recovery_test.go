@@ -114,13 +114,24 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
+	// Confirm the parked LastError explicitly warns that the Activity already ran, before
+	// resolving it.
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Contains(t, instance.NodeInfo["task"].LastError, "already completed successfully")
+		require.Contains(t, instance.NodeInfo["task"].LastError, "use OVERRIDE instead of RETRY")
+	}, time.Millisecond)
+
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:    "task",
 			Action:    AdminActionOverride,
 			Overrides: map[string]any{"global_user_phone": "555-1234"},
 		})
-	}, time.Millisecond)
+	}, 2*time.Millisecond)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
 
@@ -135,6 +146,63 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 
 	// .Once() above already enforces this, but AssertExpectations makes the intent explicit:
 	// the Activity that already ran must not be invoked a second time by the override.
+	env.AssertExpectations(t)
+}
+
+// TestAdminRetryRefreshesCachedTaskResultWithoutStaleData parks on an output mapping error
+// (Activity already ran), then resolves with Retry without fixing the underlying problem —
+// the Activity runs a second time and the same output mapping error parks the node again.
+// CachedTaskResult and the "already ran" warning must reflect this latest attempt, not linger
+// from the first one.
+func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingRequiredOutputWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+		Return(map[string]any{"attempt": "first"}, nil).Once()
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+		Return(map[string]any{"attempt": "second"}, nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	// Retry without fixing anything — the Activity runs again, output mapping fails again.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionRetry,
+		})
+	}, time.Millisecond)
+
+	// Confirm the re-park reflects this latest attempt, not a stale leftover from the first.
+	// (100ms gives the second Activity invocation time to actually complete in the test
+	// environment before we query — same timing characteristic seen elsewhere in this suite.)
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["task"].Status)
+		require.Equal(t, "second", instance.NodeInfo["task"].CachedTaskResult["attempt"])
+		require.Contains(t, instance.NodeInfo["task"].LastError, "already completed successfully")
+	}, 100*time.Millisecond)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:    "task",
+			Action:    AdminActionOverride,
+			Overrides: map[string]any{"global_user_phone": "555-1234"},
+		})
+	}, 200*time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
 	env.AssertExpectations(t)
 }
 

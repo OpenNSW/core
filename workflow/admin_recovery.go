@@ -100,6 +100,17 @@ func (g *graphInterpreter) awaitAdminResolution(ctx workflow.Context, nodeID str
 	return sig, err
 }
 
+// parkedErrorMessage builds the LastError text shown for a parked node. If the node's
+// Activity already completed successfully (cachedTaskResult is populated), it appends an
+// explicit warning so an admin doesn't blindly Retry and re-invoke it — Override is the
+// safe choice in that case.
+func parkedErrorMessage(cause error, cachedTaskResult map[string]any) string {
+	if cachedTaskResult != nil {
+		return fmt.Sprintf("%s (WARNING: the Activity already completed successfully — use OVERRIDE instead of RETRY to avoid re-running it)", cause.Error())
+	}
+	return cause.Error()
+}
+
 // parkNodeForAdmin is invoked by executeNode whenever a node handler returns an error.
 // Instead of failing the workflow, it marks the node NodeStatusAwaitingAdmin and blocks
 // (only this node's execution path — sibling parallel branches are unaffected) until an
@@ -107,10 +118,10 @@ func (g *graphInterpreter) awaitAdminResolution(ctx workflow.Context, nodeID str
 func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge, cause error) error {
 	for {
 		nodeInfo.Status = NodeStatusAwaitingAdmin
-		nodeInfo.LastError = cause.Error()
+		nodeInfo.LastError = parkedErrorMessage(cause, nodeInfo.CachedTaskResult)
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		g.instance.AuditTrail = append(g.instance.AuditTrail,
-			fmt.Sprintf("node %s parked for admin intervention: %s", node.ID, cause.Error()))
+			fmt.Sprintf("node %s parked for admin intervention: %s", node.ID, nodeInfo.LastError))
 
 		sig, err := g.awaitAdminResolution(ctx, node.ID)
 		if err != nil {
@@ -150,6 +161,10 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			}
 			nodeInfo.Status = NodeStatusRunning
 			nodeInfo.LastError = ""
+			// Clear any cached Activity result from the previous attempt before re-dispatching:
+			// if this retry fails again before reaching the Activity (e.g. input mapping fails),
+			// the stale result must not linger and falsely suggest the Activity ran this time.
+			nodeInfo.CachedTaskResult = nil
 			nodeInfo.UpdatedAt = workflow.Now(ctx)
 			retryErr := g.dispatchNodeHandler(ctx, nodeInfo, node, outEdges)
 			if retryErr == nil {
