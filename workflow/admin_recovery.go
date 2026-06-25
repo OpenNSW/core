@@ -69,7 +69,11 @@ type AdminResolutionSignal struct {
 
 // startAdminResolutionDispatcher registers the AdminResolutionSignal channel and routes
 // incoming signals to whichever node is currently parked awaiting that NodeID, via
-// g.pendingAdminResolutions. Signals for an unknown or already-resolved NodeID are dropped.
+// g.pendingAdminResolutions. Signals for an unknown or already-resolved NodeID are dropped —
+// this includes a signal sent for a node that hasn't parked yet (e.g. sent too early, before
+// the admin confirmed AWAITING_ADMIN via GetStatus). This is intentional: the engine does not
+// buffer premature signals, to keep the resolution path simple. Callers/tools are expected to
+// confirm a node is actually parked before resolving it.
 func (g *graphInterpreter) startAdminResolutionDispatcher(ctx workflow.Context) {
 	signalChan := workflow.GetSignalChannel(ctx, AdminResolutionSignalName)
 	workflow.Go(ctx, func(ctx workflow.Context) {
@@ -121,24 +125,32 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			nodeInfo.Status = NodeStatusFailed
 			return &terminalAdminError{err: cause}
 
-		case AdminActionSkip, AdminActionOverride:
-			for k, v := range sig.Overrides {
-				maputil.SetNestedKey(g.instance.WorkflowVariables, k, v)
+		case AdminActionSkip:
+			// GATEWAY nodes route to one of several outEdges based on conditions (or fan
+			// out to all of them for a parallel split) — blindly completing into
+			// outEdges[0] would ignore that routing entirely, silently taking the wrong
+			// branch or breaking a downstream parallel join. Steer the admin to Retry
+			// instead, which re-runs the gateway's real (side-effect-free) routing logic.
+			if node.Type == NodeTypeGateway {
+				workflow.GetLogger(ctx).Warn("Skip is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "nodeID", node.ID)
+				continue
 			}
-			nodeInfo.Status = NodeStatusCompleted
-			nodeInfo.LastError = ""
-			nodeInfo.CachedTaskResult = nil
-			nodeInfo.UpdatedAt = workflow.Now(ctx)
-			if len(outEdges) > 0 {
-				return g.transitionTo(ctx, outEdges[0])
+			return g.completeParkedNode(ctx, nodeInfo, outEdges, nil)
+
+		case AdminActionOverride:
+			if node.Type == NodeTypeGateway {
+				workflow.GetLogger(ctx).Warn("Override is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "nodeID", node.ID)
+				continue
 			}
-			return nil
+			return g.completeParkedNode(ctx, nodeInfo, outEdges, sig.Overrides)
 
 		case AdminActionRetry:
 			for k, v := range sig.Overrides {
 				maputil.SetNestedKey(g.instance.WorkflowVariables, k, v)
 			}
+			nodeInfo.Status = NodeStatusRunning
 			nodeInfo.LastError = ""
+			nodeInfo.UpdatedAt = workflow.Now(ctx)
 			retryErr := g.dispatchNodeHandler(ctx, nodeInfo, node, outEdges)
 			if retryErr == nil {
 				return nil
@@ -157,4 +169,21 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			continue
 		}
 	}
+}
+
+// completeParkedNode marks a parked node Completed and transitions onward via its first
+// outgoing edge, optionally merging overrides into WorkflowVariables first. overrides is nil
+// for AdminActionSkip (no variables touched) and sig.Overrides for AdminActionOverride.
+func (g *graphInterpreter) completeParkedNode(ctx workflow.Context, nodeInfo *NodeInfo, outEdges []Edge, overrides map[string]any) error {
+	for k, v := range overrides {
+		maputil.SetNestedKey(g.instance.WorkflowVariables, k, v)
+	}
+	nodeInfo.Status = NodeStatusCompleted
+	nodeInfo.LastError = ""
+	nodeInfo.CachedTaskResult = nil
+	nodeInfo.UpdatedAt = workflow.Now(ctx)
+	if len(outEdges) > 0 {
+		return g.transitionTo(ctx, outEdges[0])
+	}
+	return nil
 }

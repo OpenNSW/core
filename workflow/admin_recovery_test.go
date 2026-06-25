@@ -219,6 +219,91 @@ func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
 	require.Contains(t, env.GetWorkflowError().Error(), "input mapping error")
 }
 
+const gatewayParkWorkflowJSON = `
+{
+  "id": "gateway-park-test",
+  "name": "Gateway Park Test",
+  "version": 1,
+  "edges": [
+    { "id": "e1", "source_id": "start", "target_id": "gateway" },
+    { "id": "e2", "source_id": "gateway", "target_id": "task_pass", "condition": "decision == \"pass\"" },
+    { "id": "e3", "source_id": "task_pass", "target_id": "end" }
+  ],
+  "nodes": [
+    { "id": "start", "type": "START" },
+    { "id": "gateway", "type": "GATEWAY", "gateway_type": "EXCLUSIVE_SPLIT" },
+    { "id": "task_pass", "type": "TASK", "task_template_id": "TASK_PASS" },
+    { "id": "end", "type": "END" }
+  ]
+}`
+
+// TestAdminSkipAndOverrideRejectedForParkedGatewayNode proves that a parked GATEWAY node
+// cannot be resolved with Skip or Override (both would bypass the gateway's real routing
+// logic by blindly taking its first outgoing edge) — only Retry (after correcting the
+// missing variable) or Abort are accepted.
+func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(gatewayParkWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything).
+		Return(map[string]any{}, nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	// Skip: rejected, node stays parked.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "gateway",
+			Action: AdminActionSkip,
+		})
+	}, time.Millisecond)
+
+	// Override: rejected, node stays parked.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:    "gateway",
+			Action:    AdminActionOverride,
+			Overrides: map[string]any{"decision": "pass"},
+		})
+	}, 2*time.Millisecond)
+
+	// Confirm it's still parked after both rejections.
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["gateway"].Status)
+	}, 3*time.Millisecond)
+
+	// Retry with the corrected variable: the gateway re-evaluates its real condition and
+	// correctly routes to task_pass.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:    "gateway",
+			Action:    AdminActionRetry,
+			Overrides: map[string]any{"decision": "pass"},
+		})
+	}, 4*time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+	require.Equal(t, NodeStatusCompleted, instance.NodeInfo["gateway"].Status)
+
+	env.AssertExpectations(t)
+}
+
 // TestAdminParkingIsolatesParallelBranches proves that one branch's parked node does not
 // block a sibling branch running in parallel: the sibling completes while the first branch
 // is still NodeStatusAwaitingAdmin. Aborting the parked branch afterward still fails the
