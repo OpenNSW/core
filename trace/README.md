@@ -45,6 +45,7 @@ func process(ctx context.Context) {
 
     // Inject a trace ID into a new context
     newCtx := trace.ContextWithTraceID(ctx, "custom-trace-id")
+    _ = newCtx
 }
 ```
 
