@@ -1,5 +1,7 @@
 # Contributing
 
+Contributions are welcome. For a detailed guide on setting up your local environment, creating feature branches, running unit tests, and validating builds, see the [Development Guide](docs/contributing/development.md).
+
 ## Prerequisites
 
 | Tool | Version | Install |

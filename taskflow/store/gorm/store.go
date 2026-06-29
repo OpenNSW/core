@@ -38,6 +38,7 @@ func (s *TaskStore) SaveTask(ctx context.Context, record store.TaskRecord) {
 			"parent_workflow_id",
 			"parent_run_id",
 			"parent_node_id",
+			"root_workflow_id",
 			"task_workflow_id",
 			"task_run_id",
 			"subtask_node_id",

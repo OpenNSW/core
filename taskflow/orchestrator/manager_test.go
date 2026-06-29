@@ -257,6 +257,11 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	if task.ParentWorkflowID != "parent-workflow" {
 		t.Errorf("expected parent workflow 'parent-workflow', got '%s'", task.ParentWorkflowID)
 	}
+	// A top-level workflow ID has no "--" separator, so the root consignment ID
+	// is the workflow ID itself.
+	if task.RootWorkflowID != "parent-workflow" {
+		t.Errorf("expected root workflow 'parent-workflow', got '%s'", task.RootWorkflowID)
+	}
 
 	// 2. StartSubTask — generic_user_input
 	payloadTaskWF := engine.TaskPayload{
@@ -358,6 +363,48 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when task StartWorkflow fails, got nil")
+	}
+}
+
+// TestStartTask_DerivesRootWorkflowID verifies the consignment ID extraction:
+// for SPLIT_TASK child workflows (format "{root}--{nodeID}--{branchID}") the
+// root is the segment before the first "--"; a plain top-level workflow ID is
+// its own root.
+func TestStartTask_DerivesRootWorkflowID(t *testing.T) {
+	cases := []struct {
+		name       string
+		workflowID string
+		wantRoot   string
+	}{
+		{"top-level workflow", "consignment-123", "consignment-123"},
+		{"split-task child", "consignment-123--node-5--branch-2", "consignment-123"},
+		{"single separator", "root--child", "root"},
+		{"empty workflow id", "", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newSafeMockTaskStore()
+			tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+			payload := engine.TaskPayload{
+				WorkflowID:     tc.workflowID,
+				RunID:          "run-1",
+				NodeID:         "node-1",
+				TaskTemplateID: "test_template",
+			}
+			if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
+				t.Fatalf("StartTask failed: %v", err)
+			}
+
+			task, ok := db.GetTask(context.Background(), "node-1")
+			if !ok {
+				t.Fatal("expected task record to be saved")
+			}
+			if task.RootWorkflowID != tc.wantRoot {
+				t.Errorf("RootWorkflowID = %q, want %q", task.RootWorkflowID, tc.wantRoot)
+			}
+		})
 	}
 }
 
