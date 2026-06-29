@@ -658,3 +658,104 @@ func TestInvalidEdgeDefinitionFailsWorkflow(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
 }
+
+func TestEmitSignalStandaloneWarns(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	emitSignalJSON := `
+	{
+		"workflow_id": "emit-signal-standalone-test",
+		"name": "Emit Signal Standalone Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "emit" },
+			{ "id": "e2", "source_id": "emit", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "emit",
+				"type": "TASK",
+				"task_template_id": "sys:emit_signal",
+				"input_mapping": {
+					"sig_name": "signal_name",
+					"sig_payload": "payload"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(emitSignalJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	initialVars := map[string]any{
+		"sig_name": "my_signal",
+		"sig_payload": map[string]any{
+			"key": "value",
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	err = env.GetWorkflowResult(&instance)
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, instance.Status)
+}
+
+func TestEmitSignalInvalidPayloadType(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	emitSignalJSON := `
+	{
+		"workflow_id": "emit-signal-invalid-payload-test",
+		"name": "Emit Signal Invalid Payload Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "emit" },
+			{ "id": "e2", "source_id": "emit", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "emit",
+				"type": "TASK",
+				"task_template_id": "sys:emit_signal",
+				"input_mapping": {
+					"sig_name": "signal_name",
+					"sig_payload": "payload"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(emitSignalJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	initialVars := map[string]any{
+		"sig_name":    "my_signal",
+		"sig_payload": "invalid-payload-string", // string is not map[string]any
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.Contains(t, env.GetWorkflowError().Error(), "emit_signal task payload must be a map[string]any, got string")
+}

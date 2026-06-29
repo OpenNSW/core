@@ -283,7 +283,15 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		if signalName == "" {
 			return fmt.Errorf("emit_signal task requires a non-empty signal_name input")
 		}
-		payload, _ := inputs[InputPayload].(map[string]any)
+
+		var payload map[string]any
+		if rawPayload, exists := inputs[InputPayload]; exists && rawPayload != nil {
+			var ok bool
+			payload, ok = rawPayload.(map[string]any)
+			if !ok {
+				return fmt.Errorf("emit_signal task payload must be a map[string]any, got %T", rawPayload)
+			}
+		}
 
 		parentWorkflowID, _ := g.instance.WorkflowVariables[VarParentWorkflowID].(string)
 
@@ -304,6 +312,8 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 					workflow.GetLogger(ctx).Error("emit_signal: failed to send signal to parent", "error", err)
 				}
 			})
+		} else {
+			workflow.GetLogger(ctx).Warn("emit_signal: parent_workflow_id not set; signal cannot be sent to parent")
 		}
 
 	default:
