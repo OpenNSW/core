@@ -772,6 +772,22 @@ func TestEmitSignalInvalidPayloadType(t *testing.T) {
 		"sig_payload": "invalid-payload-string", // string is not map[string]any
 	}
 
+	// Verify that the node parks on the type mismatch error, then send Abort to fail the workflow
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["emit"].Status)
+		require.Contains(t, instance.NodeInfo["emit"].LastError, "emit_signal task payload must be a map[string]any, got string")
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "emit",
+			Action: AdminActionAbort,
+			Reason: "failing on bad payload type",
+		})
+	}, time.Millisecond)
+
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
 
 	require.True(t, env.IsWorkflowCompleted())

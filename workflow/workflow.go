@@ -286,10 +286,19 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		if signalName == "" {
 			return fmt.Errorf("wait_for_signal task requires a non-empty signal_name input")
 		}
-		signalChan := workflow.GetSignalChannel(ctx, signalName)
+
 		var signalData map[string]any
-		// Block execution until a matching signal event is posted to the channel
-		signalChan.Receive(ctx, &signalData)
+		if nodeInfo.CachedTaskResult != nil {
+			signalData = nodeInfo.CachedTaskResult
+		} else {
+			signalChan := workflow.GetSignalChannel(ctx, signalName)
+			// Block execution until a matching signal event is posted to the channel
+			signalChan.Receive(ctx, &signalData)
+
+			// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
+			// fails) can see the signal data already arrived, and we don't block again on retry.
+			nodeInfo.CachedTaskResult = signalData
+		}
 
 		// Hydrate incoming broadcast state keys back into local execution variables using standard OutputMapping
 		err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, signalData)
