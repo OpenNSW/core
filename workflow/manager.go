@@ -47,10 +47,11 @@ type NodeStatus string
 
 // Node status constants.
 const (
-	NodeStatusNotStarted NodeStatus = "NOT_STARTED"
-	NodeStatusRunning    NodeStatus = "RUNNING"
-	NodeStatusCompleted  NodeStatus = "COMPLETED"
-	NodeStatusFailed     NodeStatus = "FAILED"
+	NodeStatusNotStarted    NodeStatus = "NOT_STARTED"
+	NodeStatusRunning       NodeStatus = "RUNNING"
+	NodeStatusCompleted     NodeStatus = "COMPLETED"
+	NodeStatusFailed        NodeStatus = "FAILED"
+	NodeStatusAwaitingAdmin NodeStatus = "AWAITING_ADMIN"
 )
 
 // NodeInfo holds information about the state of one of the nodes in the workflow.
@@ -62,6 +63,15 @@ type NodeInfo struct {
 	GatewayType    GatewayType `json:"gateway_type,omitempty"`     // See Gateway Types constants
 	TaskTemplateID string      `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	Status         NodeStatus  `json:"status"`                     // Status of the node
+
+	// LastError holds the error that caused the node to enter NodeStatusAwaitingAdmin
+	// (or the terminal error if it was ultimately aborted). Cleared on successful resolution.
+	LastError string `json:"last_error,omitempty"`
+	// CachedTaskResult holds the most recent raw Activity result for a TASK node, set right
+	// after the Activity succeeds and cleared once the node fully completes. It is purely
+	// informational: if a node parks with this populated, the Activity has already run, so
+	// an admin should prefer AdminActionOverride over AdminActionRetry to avoid re-running it.
+	CachedTaskResult map[string]any `json:"cached_task_result,omitempty"`
 }
 
 // WorkflowInstance holds the dynamic runtime state of the workflow execution.
@@ -135,6 +145,16 @@ type Manager interface {
 	// GetStatus retrieves a running workflow's in-memory state (the WorkflowInstance), including
 	// current variables, and audit trails.
 	GetStatus(ctx context.Context, workflowID string) (*WorkflowInstance, error)
+}
+
+// AdminInterventionResolver is implemented by managers that support resolving a node parked
+// in NodeStatusAwaitingAdmin. It is kept separate from Manager so that existing Manager
+// implementations (e.g. test doubles) aren't forced to implement it. Callers that want this
+// capability can type-assert: if r, ok := mgr.(AdminInterventionResolver); ok { ... }.
+type AdminInterventionResolver interface {
+	// ResolveAdminIntervention sends an admin's resolution decision to a node that is
+	// currently parked in NodeStatusAwaitingAdmin, identified by workflowID/runID/nodeID.
+	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
 }
 
 // TemporalManager extends the Manager interface with worker control methods.
@@ -221,6 +241,10 @@ func (m *temporalManagerImpl) TaskDone(ctx context.Context, workflowID, runID, n
 
 func (m *temporalManagerImpl) TaskUpdate(ctx context.Context, workflowID, runID string, event UpdateEvent) error {
 	return m.temporalClient.SignalWorkflow(ctx, workflowID, runID, "TaskUpdateSignal", event)
+}
+
+func (m *temporalManagerImpl) ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error {
+	return m.temporalClient.SignalWorkflow(ctx, workflowID, runID, AdminResolutionSignalName, resolution)
 }
 
 func (m *temporalManagerImpl) GetStatus(ctx context.Context, workflowID string) (*WorkflowInstance, error) {

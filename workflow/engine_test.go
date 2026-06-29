@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -371,6 +372,15 @@ func TestTaskNodeFailsWhenInputKeyMissing(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 
+	// The input mapping error now parks the node for admin intervention instead of
+	// failing the workflow outright. Abort it to reproduce today's end-state.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionAbort,
+		})
+	}, time.Millisecond)
+
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -539,6 +549,15 @@ func TestTaskNodeFailsWhenRequiredOutputMissing(t *testing.T) {
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
 		Return(map[string]any{}, nil).Once()
+
+	// The output mapping error now parks the node for admin intervention instead of
+	// failing the workflow outright. Abort it to reproduce today's end-state.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionAbort,
+		})
+	}, 100*time.Millisecond)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
 
