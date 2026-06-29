@@ -547,3 +547,159 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 	s.True(ok, "health branch result should be map[string]any")
 	s.Equal("APPROVED_CLEAN", healthResult["phyto_status"])
 }
+
+// TestConcurrentSplitTasksDoNotCrossTalkBroadcast guards against the broadcast channel being
+// shared between two SPLIT_TASK nodes that run concurrently in the same workflow execution
+// (e.g. both reachable from a PARALLEL_SPLIT gateway). Before the broadcast channel was scoped
+// per split node, both groups' monitorChildWorkflows listened on the same fixed signal name, so
+// a broadcast emitted by one group's child could be received and relayed by the other group's
+// selector instead — delivering the wrong group's payload, or losing it so the intended waiter
+// hangs forever.
+func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Reusable emit/wait template pair, parameterized per-branch via the iteration payload so
+	// the same two templates serve both concurrent groups.
+	emitDef := WorkflowDefinition{
+		ID: "signal_emitter",
+		Nodes: []Node{
+			{ID: "e_start", Type: NodeTypeStart},
+			{
+				ID:             "e_emit",
+				Type:           NodeTypeTask,
+				TaskTemplateID: SysTaskEmitSignal,
+				InputMapping: map[string]string{
+					"custom_iter.input.signal_to_emit": InputSignalName,
+					"custom_iter.input.tag":            "payload.tag",
+				},
+			},
+			{ID: "e_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "ee1", SourceID: "e_start", TargetID: "e_emit"},
+			{ID: "ee2", SourceID: "e_emit", TargetID: "e_end"},
+		},
+	}
+
+	waitDef := WorkflowDefinition{
+		ID: "signal_waiter",
+		Nodes: []Node{
+			{ID: "w_start", Type: NodeTypeStart},
+			{
+				ID:             "w_wait",
+				Type:           NodeTypeTask,
+				TaskTemplateID: SysTaskWaitForSignal,
+				InputMapping:   map[string]string{"custom_iter.input.signal_to_wait": InputSignalName},
+				OutputMapping:  map[string]string{"tag": "received_tag"},
+			},
+			{ID: "w_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "we1", SourceID: "w_start", TargetID: "w_wait"},
+			{ID: "we2", SourceID: "w_wait", TargetID: "w_end"},
+		},
+	}
+
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "signal_emitter").Return(emitDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "signal_waiter").Return(waitDef, nil)
+
+	// Master: PARALLEL_SPLIT fans out into two independent SPLIT_TASK groups (A and B), each
+	// running its own emit/wait pair concurrently, then PARALLEL_JOIN converges before END.
+	masterDef := WorkflowDefinition{
+		ID: "concurrent_split_master",
+		Nodes: []Node{
+			{ID: "m_start", Type: NodeTypeStart},
+			{ID: "m_psplit", Type: NodeTypeGateway, GatewayType: GatewayTypeParallelSplit},
+			{
+				ID:   "m_fanout_a",
+				Type: NodeTypeSplitTask,
+				SplitTask: &SplitTaskConfig{
+					Mode:            SplitModeDifferentTemplates,
+					ItemsVariable:   "group_a_items",
+					ResultsVariable: "group_a_results",
+					FailureMode:     FailureModeFailFast,
+					IterationKey:    "custom_iter",
+				},
+			},
+			{
+				ID:   "m_fanout_b",
+				Type: NodeTypeSplitTask,
+				SplitTask: &SplitTaskConfig{
+					Mode:            SplitModeDifferentTemplates,
+					ItemsVariable:   "group_b_items",
+					ResultsVariable: "group_b_results",
+					FailureMode:     FailureModeFailFast,
+					IterationKey:    "custom_iter",
+				},
+			},
+			{ID: "m_pjoin", Type: NodeTypeGateway, GatewayType: GatewayTypeParallelJoin},
+			{ID: "m_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "me1", SourceID: "m_start", TargetID: "m_psplit"},
+			{ID: "me2", SourceID: "m_psplit", TargetID: "m_fanout_a"},
+			{ID: "me3", SourceID: "m_psplit", TargetID: "m_fanout_b"},
+			{ID: "me4", SourceID: "m_fanout_a", TargetID: "m_pjoin"},
+			{ID: "me5", SourceID: "m_fanout_b", TargetID: "m_pjoin"},
+			{ID: "me6", SourceID: "m_pjoin", TargetID: "m_end"},
+		},
+	}
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+
+	initialVars := map[string]any{
+		"group_a_items": []map[string]any{
+			{
+				"template_id": "signal_emitter",
+				"branch_id":   "a-emit",
+				"payload":     map[string]any{"signal_to_emit": "SIG_A", "tag": "A"},
+			},
+			{
+				"template_id": "signal_waiter",
+				"branch_id":   "a-wait",
+				"payload":     map[string]any{"signal_to_wait": "SIG_A"},
+			},
+		},
+		"group_b_items": []map[string]any{
+			{
+				"template_id": "signal_emitter",
+				"branch_id":   "b-emit",
+				"payload":     map[string]any{"signal_to_emit": "SIG_B", "tag": "B"},
+			},
+			{
+				"template_id": "signal_waiter",
+				"branch_id":   "b-wait",
+				"payload":     map[string]any{"signal_to_wait": "SIG_B"},
+			},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	var resultState WorkflowInstance
+	err := env.GetWorkflowResult(&resultState)
+	s.NoError(err)
+	s.Equal(StatusCompleted, resultState.Status)
+
+	groupAResults, ok := resultState.WorkflowVariables["group_a_results"].([]any)
+	s.True(ok, "group_a_results should be []any")
+	s.Len(groupAResults, 2)
+	groupAWaitResult, ok := groupAResults[1].(map[string]any)
+	s.True(ok, "group A wait branch result should be map[string]any")
+	s.Equal("A", groupAWaitResult["received_tag"], "group A's waiter must receive group A's own broadcast, not group B's")
+
+	groupBResults, ok := resultState.WorkflowVariables["group_b_results"].([]any)
+	s.True(ok, "group_b_results should be []any")
+	s.Len(groupBResults, 2)
+	groupBWaitResult, ok := groupBResults[1].(map[string]any)
+	s.True(ok, "group B wait branch result should be map[string]any")
+	s.Equal("B", groupBWaitResult["received_tag"], "group B's waiter must receive group B's own broadcast, not group A's")
+}

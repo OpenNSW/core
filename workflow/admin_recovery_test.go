@@ -499,3 +499,62 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 	require.Equal(t, "resolved-value", instance.WorkflowVariables["global_target"])
 	require.Empty(t, instance.NodeInfo["wait"].CachedTaskResult)
 }
+
+// TestWaitForSignalCancellationCleanlyPropagates verifies that when a workflow is canceled while
+// blocked on sys:wait_for_signal, the node propagates the cancellation error immediately
+// and the workflow fails with a canceled error instead of parking the node for admin intervention.
+func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	waitSignalJSON := `
+	{
+		"workflow_id": "wait-signal-cancel-test",
+		"name": "Wait Signal Cancel Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "wait" },
+			{ "id": "e2", "source_id": "wait", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "wait",
+				"type": "TASK",
+				"task_template_id": "sys:wait_for_signal",
+				"input_mapping": {
+					"signal_name": "signal_name"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(waitSignalJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	// Cancel the workflow shortly after it starts blocking on the signal
+	env.RegisterDelayedCallback(func() {
+		env.CancelWorkflow()
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"signal_name": "my_test_signal",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	// Verify that it is a canceled error, which is not an admin parking/abort error
+	require.Contains(t, err.Error(), "canceled")
+
+	// Verify that the node is NOT awaiting admin
+	val, queryErr := env.QueryWorkflow("GetStatus")
+	require.NoError(t, queryErr)
+	var instance WorkflowInstance
+	require.NoError(t, val.Get(&instance))
+	require.NotEqual(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
+}

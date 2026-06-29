@@ -21,6 +21,19 @@ type activeBranch struct {
 	Index    int
 }
 
+// childBroadcastSignalName returns the signal channel name used to route cross-branch
+// broadcast messages for a given SPLIT_TASK node, scoped by splitNodeID. Scoping per node
+// keeps two SPLIT_TASK nodes active concurrently in the same workflow execution from sharing
+// a channel and cross-delivering each other's broadcasts. Falls back to the unscoped base name
+// if splitNodeID is unknown (e.g. a workflow with _parent_workflow_id set but not spawned via
+// spawnChildWorkflows, so _split_node_id was never injected).
+func childBroadcastSignalName(splitNodeID string) string {
+	if splitNodeID == "" {
+		return ChildBroadcastSignalName
+	}
+	return ChildBroadcastSignalName + ":" + splitNodeID
+}
+
 // handleSplitTaskNode executes the parallel branch fan-out child workflow execution.
 func (g *graphInterpreter) handleSplitTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	config := node.SplitTask
@@ -52,7 +65,7 @@ func (g *graphInterpreter) handleSplitTaskNode(ctx workflow.Context, nodeInfo *N
 
 	// 3. Monitor executions and collect outputs/errors
 	aggregatedResults := make([]map[string]any, len(activeBranches))
-	if err := g.monitorChildWorkflows(ctx, activeBranches, aggregatedResults, config, nodeInfo); err != nil {
+	if err := g.monitorChildWorkflows(ctx, activeBranches, aggregatedResults, config, nodeInfo, node.ID); err != nil {
 		return err
 	}
 
@@ -226,9 +239,10 @@ func (g *graphInterpreter) monitorChildWorkflows(
 	aggregatedResults []map[string]any,
 	config *SplitTaskConfig,
 	nodeInfo *NodeInfo,
+	splitNodeID string,
 ) error {
 	// 3. Initialize the Interactive Event Multiplexor Selector
-	broadcastChan := workflow.GetSignalChannel(ctx, ChildBroadcastSignalName)
+	broadcastChan := workflow.GetSignalChannel(ctx, childBroadcastSignalName(splitNodeID))
 	selector := workflow.NewSelector(ctx)
 
 	// Handler Type A: Listen for Upstream Child Broadcast signals and multicast them out

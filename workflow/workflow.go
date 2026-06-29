@@ -105,8 +105,21 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	signalChan := workflow.GetSignalChannel(ctx, "TaskUpdateSignal")
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		for {
+			selector := workflow.NewSelector(ctx)
 			var updateEvent UpdateEvent
-			signalChan.Receive(ctx, &updateEvent)
+			var ok bool
+
+			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
+				c.Receive(ctx, &updateEvent)
+				ok = true
+			})
+			selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {
+			})
+
+			selector.Select(ctx)
+			if ctx.Err() != nil || !ok {
+				return
+			}
 			// TODO: implement event handling
 		}
 	})
@@ -202,10 +215,9 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 	if err == nil {
 		return nil
 	}
-	if isTerminalAdminError(err) {
-		// This error already went through parkNodeForAdmin for a downstream node (it
-		// transitioned here, or further, before being deliberately aborted) — propagate
-		// as-is rather than treating it as a fresh failure of this node.
+	if ctx.Err() != nil || isTerminalAdminError(err) {
+		// If the workflow was canceled, or this is a terminal admin error, propagate
+		// the error directly without parking for admin.
 		return err
 	}
 	return g.parkNodeForAdmin(ctx, nodeInfo, node, outEdges, err)
@@ -292,12 +304,29 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 			signalData = nodeInfo.CachedTaskResult
 		} else {
 			signalChan := workflow.GetSignalChannel(ctx, signalName)
-			// Block execution until a matching signal event is posted to the channel
-			signalChan.Receive(ctx, &signalData)
+			selector := workflow.NewSelector(ctx)
+			var received bool
 
-			// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
-			// fails) can see the signal data already arrived, and we don't block again on retry.
-			nodeInfo.CachedTaskResult = signalData
+			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
+				c.Receive(ctx, &signalData)
+				received = true
+			})
+			selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {
+				// unblocks when context is canceled
+			})
+
+			// Block execution until either a matching signal event is posted or context is canceled
+			selector.Select(ctx)
+
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			if received {
+				// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
+				// fails) can see the signal data already arrived, and we don't block again on retry.
+				nodeInfo.CachedTaskResult = signalData
+			}
 		}
 
 		// Hydrate incoming broadcast state keys back into local execution variables using standard OutputMapping
@@ -328,16 +357,21 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 			if branchID == "" {
 				workflow.GetLogger(ctx).Warn("emit_signal: _branch_id not set; signal will be unfiltered")
 			}
+			splitNodeID, _ := g.instance.WorkflowVariables[VarSplitNodeID].(string)
 			msg := BroadcastMessage{
 				SenderBranchID: branchID,
 				SignalName:     signalName,
 				Payload:        payload,
 			}
-			// Non-blocking fire-and-forget external signal delivery up to parent instance
-			future := workflow.SignalExternalWorkflow(ctx, parentWorkflowID, "", ChildBroadcastSignalName, msg)
+			// Non-blocking fire-and-forget external signal delivery up to the parent, which
+			// rebroadcasts to this node's siblings only — one hop up, one hop back down. See
+			// the "System Task Templates" section in README.md for the scope.
+			future := workflow.SignalExternalWorkflow(ctx, parentWorkflowID, "", childBroadcastSignalName(splitNodeID), msg)
 			workflow.Go(ctx, func(ctx workflow.Context) {
 				if err := future.Get(ctx, nil); err != nil {
 					workflow.GetLogger(ctx).Error("emit_signal: failed to send signal to parent", "error", err)
+					g.instance.AuditTrail = append(g.instance.AuditTrail,
+						fmt.Sprintf("emit_signal: failed to send signal to parent %s: %s", parentWorkflowID, err.Error()))
 				}
 			})
 		} else {

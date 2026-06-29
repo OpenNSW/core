@@ -45,8 +45,11 @@ const (
 	// DefaultIterationKey is the default variable name injected into a child workflow's
 	// state containing iteration details (e.g., _iter.index, _iter.branch_id, _iter.input).
 	DefaultIterationKey = "_iter"
-	// ChildBroadcastSignalName is the name of the Temporal signal used to route cross-branch
+	// ChildBroadcastSignalName is the base name of the Temporal signal used to route cross-branch
 	// signals from a child workflow back up to the parent for brokerage to other sibling branches.
+	// It is scoped per SPLIT_TASK node via childBroadcastSignalName so that two SPLIT_TASK nodes
+	// running concurrently in the same workflow execution (e.g. under a PARALLEL_SPLIT gateway)
+	// don't share a channel and cross-deliver each other's broadcasts.
 	ChildBroadcastSignalName = "child_broadcast_signal"
 
 	// Keys injected into the child's workspace variables
@@ -65,12 +68,17 @@ const (
 	// IterInputKey is the sub-key pointing to the input payload mapped to this branch.
 	IterInputKey = "input"
 
-	// System task template IDs
+	// System task template IDs. SysTaskEmitSignal and SysTaskWaitForSignal let sibling
+	// branches spawned by the same SPLIT_TASK node coordinate: one hop up to the parent,
+	// one hop back down to that node's other children. They do not bubble further up an
+	// ancestor chain or cascade down into a sibling's own nested sub-splits — see the
+	// "System Task Templates" section in README.md for the full scope.
+	//
 	// SysTaskWaitForSignal is the template ID for the built-in system task that suspends
-	// the workflow until a specific signal is received.
+	// the workflow until a specific signal is received from a sibling branch.
 	SysTaskWaitForSignal = "sys:wait_for_signal"
 	// SysTaskEmitSignal is the template ID for the built-in system task that publishes/emits
-	// a signal to be routed to other branches.
+	// a signal to be routed to sibling branches under the same SPLIT_TASK node.
 	SysTaskEmitSignal = "sys:emit_signal"
 
 	// Input keys for system tasks

@@ -69,13 +69,23 @@ type SplitTaskConfig struct {
 
 ## System Task Templates
 
+`sys:emit_signal` and `sys:wait_for_signal` let sibling branches spawned by the *same*
+`SPLIT_TASK` node coordinate with each other. The relay is **one hop up, one hop back down** —
+a child signals its immediate parent, and the parent rebroadcasts only to the other children it
+spawned for that same `SPLIT_TASK` node. It does not bubble further up an ancestor chain, and it
+does not cascade down into a sibling's own nested sub-splits. If you need coordination across
+more than one level of nesting, each level must explicitly re-emit the signal itself — there is
+no built-in multi-level relay.
+
 ### 1. `sys:emit_signal`
-Emits an asynchronous signal from a child workflow to the parent brokerage system.
+Emits an asynchronous signal from a child workflow to its sibling branches (those spawned by the
+same `SPLIT_TASK` node), brokered through the parent.
 * **Requirements**: Must provide the `signal_name` and `payload` via `InputMapping`.
-* **Execution**: Passes messages through the parent broker using the `"child_broadcast_signal"` channel. Safe for standalone execution (gracefully ignores signaling if no parent workflow ID is registered).
+* **Execution**: Passes messages through the parent broker using a `child_broadcast_signal:<split_node_id>` channel, scoped to the SPLIT_TASK node that spawned this branch so concurrent split tasks in the same workflow don't cross-deliver broadcasts. Safe for standalone execution (gracefully ignores signaling if no parent workflow ID is registered).
 
 ### 2. `sys:wait_for_signal`
-Blocks workflow execution until a signal matching the specified channel name is received.
+Blocks workflow execution until a signal matching the specified channel name is received from a
+sibling branch via the parent broker (see above for the one-hop scope).
 * **Requirements**: Must map the target `signal_name` in `InputMapping`.
 * **Execution**: Dynamically subscribes to the named channel on Temporal and processes the payload back into the workflow variables dictionary using its `OutputMapping`.
 
