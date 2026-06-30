@@ -7,7 +7,7 @@ A powerful, JSON-DSL-driven graph interpreter engine built on top of the Go [Tem
 - **DSL-Driven DAG Execution**: Runs workflows represented by structured nodes and conditional edges.
 - **Multiple Node Types**:
   - **`START` / `END`**: Standard execution entry and exit points.
-  - **`TASK`**: Executes application activities. Supports synchronous/asynchronous work execution.
+  - **`TASK`**: Executes application activities. Supports synchronous/asynchronous work execution, and specialized system tasks (`sys:emit_signal`, `sys:wait_for_signal`).
   - **`GATEWAY`**: Controls logical branching and joining (`EXCLUSIVE_SPLIT`, `PARALLEL_SPLIT`, `EXCLUSIVE_JOIN`, `PARALLEL_JOIN`).
   - **`SPLIT_TASK`**: Spawns multiple parallel child workflows dynamically (dynamic fan-out). Supports:
     - `SAME_TEMPLATE`: Homogeneous splits running the same template across payloads.
@@ -24,8 +24,8 @@ A powerful, JSON-DSL-driven graph interpreter engine built on top of the Go [Tem
 graph TD
     Start([Start Node]) --> Task1[Task Node]
     Task1 --> Gate1{Gateway: Split}
-    Gate1 -->|Condition A| TaskA[Task A]
-    Gate1 -->|Condition B| TaskB[Task B]
+    Gate1 -->|Condition A| TaskA[sys:wait_for_signal]
+    Gate1 -->|Condition B| TaskB[sys:emit_signal]
     TaskA --> Gate2{Gateway: Join}
     TaskB --> Gate2
     Gate2 --> Split1[Split Task Node]
@@ -64,6 +64,30 @@ type SplitTaskConfig struct {
 	IterationKey    string      `json:"iteration_key,omitempty"`    // Sub-context namespace key (defaults to "_iter")
 }
 ```
+
+---
+
+## System Task Templates
+
+`sys:emit_signal` and `sys:wait_for_signal` let sibling branches spawned by the *same*
+`SPLIT_TASK` node coordinate with each other. The relay is **one hop up, one hop back down** —
+a child signals its immediate parent, and the parent rebroadcasts only to the other children it
+spawned for that same `SPLIT_TASK` node. It does not bubble further up an ancestor chain, and it
+does not cascade down into a sibling's own nested sub-splits. If you need coordination across
+more than one level of nesting, each level must explicitly re-emit the signal itself — there is
+no built-in multi-level relay.
+
+### 1. `sys:emit_signal`
+Emits an asynchronous signal from a child workflow to its sibling branches (those spawned by the
+same `SPLIT_TASK` node), brokered through the parent.
+* **Requirements**: Must provide the `signal_name` and `payload` via `InputMapping`.
+* **Execution**: Passes messages through the parent broker using a `child_broadcast_signal:<split_node_id>` channel, scoped to the SPLIT_TASK node that spawned this branch so concurrent split tasks in the same workflow don't cross-deliver broadcasts. Safe for standalone execution (gracefully ignores signaling if no parent workflow ID is registered).
+
+### 2. `sys:wait_for_signal`
+Blocks workflow execution until a signal matching the specified channel name is received from a
+sibling branch via the parent broker (see above for the one-hop scope).
+* **Requirements**: Must map the target `signal_name` in `InputMapping`.
+* **Execution**: Dynamically subscribes to the named channel on Temporal and processes the payload back into the workflow variables dictionary using its `OutputMapping`.
 
 ---
 

@@ -418,3 +418,143 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.AssertExpectations(t)
 	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything)
 }
+
+// TestAdminOverrideResolvesWaitForSignalOutputMappingError verifies that when a
+// SysTaskWaitForSignal node parks due to an output mapping error, the received signal payload
+// is cached in NodeInfo.CachedTaskResult and can be successfully overridden by the admin.
+func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	waitSignalJSON := `
+	{
+		"workflow_id": "wait-signal-park-test",
+		"name": "Wait Signal Park Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "wait" },
+			{ "id": "e2", "source_id": "wait", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "wait",
+				"type": "TASK",
+				"task_template_id": "sys:wait_for_signal",
+				"input_mapping": {
+					"signal_name": "signal_name"
+				},
+				"output_mapping": {
+					"missing_key": "global_target"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(waitSignalJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	// 1. Send the signal, but omit the "missing_key" key to trigger output mapping failure
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("my_test_signal", map[string]any{
+			"incorrect_key": "value",
+		})
+	}, time.Millisecond)
+
+	// 2. Query to verify status is parked and CachedTaskResult holds the signal payload
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
+		require.Contains(t, instance.NodeInfo["wait"].LastError, "output mapping error")
+		require.Equal(t, "value", instance.NodeInfo["wait"].CachedTaskResult["incorrect_key"])
+	}, 2*time.Millisecond)
+
+	// 3. Resolve the parked node with AdminActionOverride
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:    "wait",
+			Action:    AdminActionOverride,
+			Overrides: map[string]any{"global_target": "resolved-value"},
+		})
+	}, 3*time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"signal_name": "my_test_signal",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+	require.Equal(t, "resolved-value", instance.WorkflowVariables["global_target"])
+	require.Empty(t, instance.NodeInfo["wait"].CachedTaskResult)
+}
+
+// TestWaitForSignalCancellationCleanlyPropagates verifies that when a workflow is canceled while
+// blocked on sys:wait_for_signal, the node propagates the cancellation error immediately
+// and the workflow fails with a canceled error instead of parking the node for admin intervention.
+func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	waitSignalJSON := `
+	{
+		"workflow_id": "wait-signal-cancel-test",
+		"name": "Wait Signal Cancel Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "wait" },
+			{ "id": "e2", "source_id": "wait", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "wait",
+				"type": "TASK",
+				"task_template_id": "sys:wait_for_signal",
+				"input_mapping": {
+					"signal_name": "signal_name"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(waitSignalJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	// Cancel the workflow shortly after it starts blocking on the signal
+	env.RegisterDelayedCallback(func() {
+		env.CancelWorkflow()
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"signal_name": "my_test_signal",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	// Verify that it is a canceled error, which is not an admin parking/abort error
+	require.Contains(t, err.Error(), "canceled")
+
+	// Verify that the node is NOT awaiting admin
+	val, queryErr := env.QueryWorkflow("GetStatus")
+	require.NoError(t, queryErr)
+	var instance WorkflowInstance
+	require.NoError(t, val.Get(&instance))
+	require.NotEqual(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
+}

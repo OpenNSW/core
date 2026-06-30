@@ -78,8 +78,21 @@ func (g *graphInterpreter) startAdminResolutionDispatcher(ctx workflow.Context) 
 	signalChan := workflow.GetSignalChannel(ctx, AdminResolutionSignalName)
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		for {
+			selector := workflow.NewSelector(ctx)
 			var sig AdminResolutionSignal
-			signalChan.Receive(ctx, &sig)
+			var ok bool
+
+			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
+				c.Receive(ctx, &sig)
+				ok = true
+			})
+			selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {
+			})
+
+			selector.Select(ctx)
+			if ctx.Err() != nil || !ok {
+				return
+			}
 			if settable, ok := g.pendingAdminResolutions[sig.NodeID]; ok {
 				settable.Set(sig, nil)
 				delete(g.pendingAdminResolutions, sig.NodeID)

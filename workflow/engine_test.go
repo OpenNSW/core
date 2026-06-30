@@ -6,6 +6,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -676,4 +677,196 @@ func TestInvalidEdgeDefinitionFailsWorkflow(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
+}
+
+func TestEmitSignalStandaloneWarns(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	emitSignalJSON := `
+	{
+		"workflow_id": "emit-signal-standalone-test",
+		"name": "Emit Signal Standalone Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "emit" },
+			{ "id": "e2", "source_id": "emit", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "emit",
+				"type": "TASK",
+				"task_template_id": "sys:emit_signal",
+				"input_mapping": {
+					"sig_name": "signal_name",
+					"sig_payload": "payload"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(emitSignalJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	initialVars := map[string]any{
+		"sig_name": "my_signal",
+		"sig_payload": map[string]any{
+			"key": "value",
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	err = env.GetWorkflowResult(&instance)
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, instance.Status)
+}
+
+func TestEmitSignalInvalidPayloadType(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	emitSignalJSON := `
+	{
+		"workflow_id": "emit-signal-invalid-payload-test",
+		"name": "Emit Signal Invalid Payload Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "emit" },
+			{ "id": "e2", "source_id": "emit", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "emit",
+				"type": "TASK",
+				"task_template_id": "sys:emit_signal",
+				"input_mapping": {
+					"sig_name": "signal_name",
+					"sig_payload": "payload"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(emitSignalJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	initialVars := map[string]any{
+		"sig_name":    "my_signal",
+		"sig_payload": "invalid-payload-string", // string is not map[string]any
+	}
+
+	// Verify that the node parks on the type mismatch error, then send Abort to fail the workflow
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["emit"].Status)
+		require.Contains(t, instance.NodeInfo["emit"].LastError, "emit_signal task payload must be a map[string]any, got string")
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "emit",
+			Action: AdminActionAbort,
+			Reason: "failing on bad payload type",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.Contains(t, env.GetWorkflowError().Error(), "emit_signal task payload must be a map[string]any, got string")
+}
+
+func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	emitSignalJSON := `
+	{
+		"workflow_id": "emit-signal-fail-test",
+		"name": "Emit Signal Fail Test",
+		"version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "emit" },
+			{ "id": "e2", "source_id": "emit", "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			{
+				"id": "emit",
+				"type": "TASK",
+				"task_template_id": "sys:emit_signal",
+				"input_mapping": {
+					"sig_name": "signal_name",
+					"sig_payload": "payload"
+				}
+			},
+			{ "id": "end", "type": "END" }
+		]
+	}`
+
+	var def WorkflowDefinition
+	err := json.Unmarshal([]byte(emitSignalJSON), &def)
+	require.NoError(t, err)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	// Mock SignalExternalWorkflow to fail for non-existent-parent
+	env.OnSignalExternalWorkflow(
+		"default-test-namespace",
+		"non-existent-parent",
+		"",
+		"child_broadcast_signal",
+		mock.Anything,
+	).Return(fmt.Errorf("workflow not found")).Once()
+
+	initialVars := map[string]any{
+		"sig_name": "my_signal",
+		"sig_payload": map[string]any{
+			"key": "value",
+		},
+		// Set _parent_workflow_id to a non-existent parent so the emission fails
+		"_parent_workflow_id": "non-existent-parent",
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	err = env.GetWorkflowResult(&instance)
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, instance.Status)
+
+	// Verify that the AuditTrail contains the signal sending failure log
+	auditLogged := false
+	for _, entry := range instance.AuditTrail {
+		if strings.Contains(entry, "emit_signal: failed to send signal to parent non-existent-parent:") {
+			auditLogged = true
+			break
+		}
+	}
+	require.True(t, auditLogged, "expected signal failure to be logged to AuditTrail, got entries: %v", instance.AuditTrail)
 }
