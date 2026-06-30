@@ -292,6 +292,10 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		if activityID != "task-node" {
 			t.Errorf("expected active activity ID 'task-node', got %s", activityID)
 		}
+		tRecord, _ := storeMock.GetTask(ctx, task.TaskID)
+		if tRecord.State != "PROCESSING" {
+			t.Errorf("expected task state to be 'PROCESSING' during TaskDone, got %s", tRecord.State)
+		}
 		return nil
 	}
 
@@ -513,6 +517,38 @@ func TestCompleteTaskStep_NoActiveSubTask(t *testing.T) {
 	err := tm.CompleteTaskStep(context.Background(), "task-starting", map[string]any{"x": 1})
 	if err == nil {
 		t.Fatal("expected error for task with no active subtask step, got nil")
+	}
+}
+
+func TestCompleteTaskStep_TaskDoneError_RevertsState(t *testing.T) {
+	db := newSafeMockTaskStore()
+	db.SaveTask(context.Background(), store.TaskRecord{
+		TaskID:               "task-err",
+		State:                "PENDING_USER",
+		ActiveTaskTemplateID: "generic_user_input",
+		TaskWorkflowID:       "task-workflow",
+		TaskRunID:            "task-run",
+		SubTaskNodeID:        "task-node",
+		Data:                 map[string]any{},
+	})
+
+	mockTaskWFManager := &mockTemporalManager{
+		taskDoneFunc: func(ctx context.Context, workflowID, runID, activityID string, result map[string]any) error {
+			return errors.New("transient Temporal error")
+		},
+	}
+
+	tm := newTestTaskManager(db, newTestRegistry(), mockTaskWFManager, noopCallback)
+
+	err := tm.CompleteTaskStep(context.Background(), "task-err", map[string]any{"applicant_name": "Bob"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify task state was reverted back to PENDING_USER
+	task, _ := db.GetTask(context.Background(), "task-err")
+	if task.State != "PENDING_USER" {
+		t.Errorf("expected state to be reverted to 'PENDING_USER', got %q", task.State)
 	}
 }
 

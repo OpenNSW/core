@@ -356,6 +356,8 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 			record.Data[subTemplate.OutputNamespace] = withoutSystemVars(payload)
 		}
 	}
+	originalState := record.State
+	record.State = "PROCESSING"
 	tm.db.SaveTask(ctx, record)
 
 	tm.logger.InfoContext(ctx, "waking active activity", "activity_id", record.SubTaskNodeID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
@@ -368,6 +370,8 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 		payload, // pass full namespaced state back to the workflow
 	)
 	if err != nil {
+		record.State = originalState
+		tm.db.SaveTask(ctx, record)
 		return fmt.Errorf("failed to resume task workflow: %w", err)
 	}
 
