@@ -6,7 +6,7 @@ package plugins
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // APICallPlugin implements the generic_api_call plugin for FIRE_AND_FORGET tasks.
@@ -42,13 +42,11 @@ func (p *APICallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 
 	ctx.Record.State = "DISPATCHED"
 
-	log.Printf("[Plugin: generic_api_call] Dispatching fire-and-forget payload for task %s to URL: %s", ctx.Record.TaskID, cfg.URL)
+	slog.InfoContext(ctx.Context, "api_call: dispatching", "task_id", ctx.Record.TaskID, "url", cfg.URL)
 
-	err := p.dispatcher(ctx.Context, cfg.URL, ctx.Record.TaskID, ctx.Record.Data)
-	if err != nil {
+	if err := p.dispatcher(ctx.Context, cfg.URL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
 		return fmt.Errorf("api call dispatch failed: %w", err)
 	}
 
-	log.Printf("[Plugin: generic_api_call] Successfully invoked API for task %s (active step: %s)", ctx.Record.TaskID, ctx.Record.SubTaskNodeID)
 	return nil
 }

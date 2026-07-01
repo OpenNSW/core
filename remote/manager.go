@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -88,6 +89,7 @@ func (m *Manager) LoadServices(filePath string) error {
 	m.configs = configs
 	m.authenticators = authenticators
 
+	slog.Info("remote: services loaded", "file", filePath, "count", len(configs))
 	return nil
 }
 

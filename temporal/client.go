@@ -14,7 +14,12 @@ import (
 
 // NewClient creates a shared Temporal client for all workflow runtimes.
 func NewClient(cfg Config) (client.Client, error) {
-	return client.Dial(optionsFromConfig(cfg))
+	c, err := client.Dial(optionsFromConfig(cfg))
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("temporal client connected", "host", cfg.Host, "namespace", cfg.Namespace)
+	return c, nil
 }
 
 func optionsFromConfig(cfg Config) client.Options {

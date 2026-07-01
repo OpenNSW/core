@@ -197,7 +197,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 }
 
 func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage) (*ValidationResponse, error) {
-	slog.Info("validating incoming payment reference", "gateway", gatewayID)
+	slog.Debug("validating incoming payment reference", "gateway", gatewayID)
 
 	// 1. Get the gateway from the registry using the ID from the URL
 	gateway, err := s.registry.Get(gatewayID)
@@ -359,7 +359,6 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		return webhookResp, nil
 	}
 
-	slog.Info("payment: advancing task step", "taskId", advanceTask, "status", statusStr)
 	// Carry the settled transaction's facts (not just the status) so completion-
 	// state UIs can render the reference and amount. These come from the
 	// authoritative DB transaction (captured under lock), not gwPayload, which

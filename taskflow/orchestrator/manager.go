@@ -269,7 +269,6 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 		return err
 	}
 
-	tm.logger.InfoContext(ctx, "task completion processed", "task_id", record.TaskID)
 	record.State = "COMPLETED"
 	tm.db.SaveTask(ctx, record)
 

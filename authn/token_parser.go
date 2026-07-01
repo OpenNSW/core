@@ -6,6 +6,7 @@ package authn
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -374,6 +375,7 @@ func (te *TokenExtractor) getJWKS(forceRefresh bool) (*jwksResponse, error) {
 }
 
 func (te *TokenExtractor) fetchJWKS() (*jwksResponse, error) {
+	slog.Debug("fetching jwks", "url", te.jwksURL)
 	request, err := http.NewRequest(http.MethodGet, te.jwksURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build jwks request: %w", err)

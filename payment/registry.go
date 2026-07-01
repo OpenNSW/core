@@ -6,6 +6,7 @@ package payment
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -66,6 +67,11 @@ func NewRegistry(configPath string, factories map[string]Factory) (GatewayRegist
 		}
 	}
 
+	ids := make([]string, 0, len(registry.gateways))
+	for id := range registry.gateways {
+		ids = append(ids, id)
+	}
+	slog.Info("payment registry initialized", "gateway_count", len(registry.gateways), "active_ids", ids)
 	return registry, nil
 }
 

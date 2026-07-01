@@ -126,7 +126,6 @@ func (m *Manager) Health() error {
 	if m.tokenExtractor == nil {
 		return fmt.Errorf("token extractor not initialized")
 	}
-	slog.Info("auth system health check passed", "user_profile_service_enabled", m.userProfileService != nil)
 	return nil
 }
 

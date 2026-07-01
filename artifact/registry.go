@@ -6,6 +6,7 @@ package artifact
 import (
 	"context"
 	"fmt"
+	"log/slog"
 )
 
 // Key is an artifact's full identity: id + kind + version.
@@ -78,6 +79,7 @@ func (r *Registry) RegisterLoader(loaderType string, l Loader) {
 		panic(fmt.Sprintf("loader type already registered: %s", loaderType))
 	}
 	r.loaders[loaderType] = l
+	slog.Info("artifact loader registered", "loader_type", loaderType)
 }
 
 // RegisterArtifact adds one manifest row. version may be "" for unversioned

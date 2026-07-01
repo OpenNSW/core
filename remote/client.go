@@ -212,7 +212,7 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		}
 	}
 
-	c.logger.Info("remote: outbound request starting", "method", method, "url", finalURL)
+	c.logger.Debug("remote: outbound request starting", "method", method, "url", finalURL)
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
@@ -223,7 +223,7 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		return nil, c.mapNetworkError(err)
 	}
 
-	c.logger.Info("remote: outbound request completed", "method", method, "url", finalURL, "status", resp.StatusCode, "duration", duration)
+	c.logger.Debug("remote: outbound request completed", "method", method, "url", finalURL, "status", resp.StatusCode, "duration", duration)
 
 	return resp, nil
 }
