@@ -27,7 +27,7 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 			// Check if the origin is allowed
 			if !isOriginAllowed(origin, cfg.AllowedOrigins) {
 				// Origin is present but not allowed
-				slog.Debug("CORS request from disallowed origin blocked",
+				slog.DebugContext(r.Context(), "CORS request from disallowed origin blocked",
 					"origin", origin,
 					"method", r.Method,
 					"path", r.URL.Path,
@@ -61,7 +61,7 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 			}
 
 			// For actual requests, log and continue to the next handler.
-			slog.Debug("CORS headers set for allowed origin",
+			slog.DebugContext(r.Context(), "CORS headers set for allowed origin",
 				"origin", origin,
 				"method", r.Method,
 				"path", r.URL.Path,
