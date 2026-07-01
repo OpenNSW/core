@@ -70,11 +70,42 @@ if [ "${#STAGED_GO[@]}" -eq 0 ]; then
   ok "no staged .go files; skipping go checks"; exit 0
 fi
 
-# Unique parent dirs of staged Go files (scoped fmt/lint).
-STAGED_DIRS=()
-while IFS= read -r d; do STAGED_DIRS+=("./$d"); done \
-  < <(printf '%s\0' "${STAGED_GO[@]}" | xargs -0 -n1 dirname | sort -u)
-info "staged go dirs: ${STAGED_DIRS[*]}"
+# Unique parent dirs of staged Go files, split by module ownership.
+# ROOT_DIRS:        dirs that belong to the root module (no own go.mod in ancestry).
+# SUB_MODULE_ROOTS: de-duplicated roots of nested sub-modules that have staged files.
+# Splitting is required because golangci-lint must be invoked from within a
+# module's own root — passing a sub-module dir from the root context causes
+# "does not contain package" typechecking errors for both fmt and run.
+ROOT_DIRS=()
+SUB_MODULE_ROOTS=()
+
+_sub_module_root() {
+  # Walk up from the given relative dir; print the nearest go.mod ancestor
+  # (= sub-module root), or nothing if we reach the repo root without one.
+  local cur="${1%/}"
+  while [[ "$cur" != "." && -n "$cur" ]]; do
+    [[ -f "$cur/go.mod" ]] && echo "$cur" && return
+    cur="$(dirname "$cur")"
+  done
+}
+
+while IFS= read -r d; do
+  sub_root="$(_sub_module_root "$d")"
+  if [[ -n "$sub_root" ]]; then
+    already=false
+    for s in "${SUB_MODULE_ROOTS[@]+"${SUB_MODULE_ROOTS[@]}"}"; do
+      [[ "$s" == "$sub_root" ]] && already=true && break
+    done
+    $already || SUB_MODULE_ROOTS+=("$sub_root")
+  else
+    ROOT_DIRS+=("./$d")
+  fi
+done < <(printf '%s\0' "${STAGED_GO[@]}" | xargs -0 -n1 dirname | sort -u)
+
+_label=""
+[[ "${#ROOT_DIRS[@]}" -gt 0 ]] && _label+="${ROOT_DIRS[*]} "
+[[ "${#SUB_MODULE_ROOTS[@]}" -gt 0 ]] && _label+="${SUB_MODULE_ROOTS[*]} (own module context)"
+info "staged go dirs: ${_label:-<none>}"
 
 # 2. License headers — add SPDX header where missing, then re-stage.
 if skip license; then warn "SKIP=license"; else
@@ -87,16 +118,32 @@ fi
 # 3. Format — gofmt + goimports via golangci-lint v2, re-stage.
 if skip format; then warn "SKIP=format"; else
   info "golangci-lint fmt"
-  golangci-lint fmt -c "$GOLANGCI_CONFIG" "${STAGED_DIRS[@]}"
+  [[ "${#ROOT_DIRS[@]}" -gt 0 ]] && \
+    golangci-lint fmt -c "$GOLANGCI_CONFIG" "${ROOT_DIRS[@]}"
+  if [[ "${#SUB_MODULE_ROOTS[@]}" -gt 0 ]]; then
+    for sub in "${SUB_MODULE_ROOTS[@]}"; do
+      (cd "$sub" && golangci-lint fmt -c "$REPO_ROOT/$GOLANGCI_CONFIG" ./...)
+    done
+  fi
   git add -- "${STAGED_GO[@]}"
   ok "formatted + re-staged"
 fi
 
-# 4. Lint — scoped to changed dirs.
+# 4. Lint — scoped to changed dirs, respecting module boundaries.
 if skip lint; then warn "SKIP=lint"; else
   info "golangci-lint run (changed dirs)"
-  golangci-lint run -c "$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" "${STAGED_DIRS[@]}" \
-    || die "lint issues (above). Fix and re-stage."
+  lint_ok=true
+  if [[ "${#ROOT_DIRS[@]}" -gt 0 ]]; then
+    golangci-lint run -c "$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" "${ROOT_DIRS[@]}" \
+      || lint_ok=false
+  fi
+  if [[ "${#SUB_MODULE_ROOTS[@]}" -gt 0 ]]; then
+    for sub in "${SUB_MODULE_ROOTS[@]}"; do
+      (cd "$sub" && golangci-lint run -c "$REPO_ROOT/$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" ./...) \
+        || lint_ok=false
+    done
+  fi
+  $lint_ok || die "lint issues (above). Fix and re-stage."
   ok "lint clean"
 fi
 
