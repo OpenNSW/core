@@ -70,26 +70,56 @@ if [ "${#STAGED_GO[@]}" -eq 0 ]; then
   ok "no staged .go files; skipping go checks"; exit 0
 fi
 
-# Unique parent dirs of staged Go files, split by module ownership.
-# ROOT_DIRS:        dirs that belong to the root module (no own go.mod in ancestry).
+# Unique parent dirs of staged Go files, split by module ownership. Resolved with
+# pure Bash parameter expansion (no per-file printf/xargs/dirname/sort) to keep the
+# hook fast on macOS/WSL where process spawns are expensive.
+# STAGED_DIRS:      every unique staged dir, repo-relative, no "./" prefix.
+# ROOT_DIRS:        dirs owned by the root module (no own go.mod in ancestry), "./"-prefixed.
 # SUB_MODULE_ROOTS: de-duplicated roots of nested sub-modules that have staged files.
 # Splitting is required because golangci-lint must be invoked from within a
 # module's own root — passing a sub-module dir from the root context causes
 # "does not contain package" typechecking errors for both fmt and run.
-ROOT_DIRS=()
-SUB_MODULE_ROOTS=()
+STAGED_DIRS=()
+for f in "${STAGED_GO[@]}"; do
+  d="${f%/*}"
+  [[ "$d" == "$f" ]] && d="."   # file at repo root (no slash in path)
+  already=false
+  for existing in "${STAGED_DIRS[@]+"${STAGED_DIRS[@]}"}"; do
+    [[ "$existing" == "$d" ]] && already=true && break
+  done
+  $already || STAGED_DIRS+=("$d")
+done
 
+# _sub_module_root <dir>: print the nearest go.mod ancestor at or above <dir>
+# (= the sub-module that owns it), or nothing if it belongs to the root module.
+# Pure-Bash walk-up, no dirname subprocess.
 _sub_module_root() {
-  # Walk up from the given relative dir; print the nearest go.mod ancestor
-  # (= sub-module root), or nothing if we reach the repo root without one.
   local cur="${1%/}"
-  while [[ "$cur" != "." && -n "$cur" ]]; do
-    [[ -f "$cur/go.mod" ]] && echo "$cur" && return
-    cur="$(dirname "$cur")"
+  while [[ -n "$cur" && "$cur" != "." ]]; do
+    [[ -f "$cur/go.mod" ]] && { echo "$cur"; return; }
+    if [[ "$cur" == */* ]]; then cur="${cur%/*}"; else cur="."; fi
   done
 }
 
-while IFS= read -r d; do
+# _sub_module_rel_dirs <sub_root>: populate SUB_REL_DIRS with the staged dirs owned
+# by <sub_root>, expressed relative to it ("." or "./sub/path"), so fmt/lint stay
+# scoped to the staged change instead of the whole sub-module (./...).
+_sub_module_rel_dirs() {
+  local sub="$1" d
+  SUB_REL_DIRS=()
+  for d in "${STAGED_DIRS[@]+"${STAGED_DIRS[@]}"}"; do
+    [[ "$(_sub_module_root "$d")" == "$sub" ]] || continue
+    if [[ "$d" == "$sub" ]]; then
+      SUB_REL_DIRS+=(".")
+    else
+      SUB_REL_DIRS+=("./${d#"$sub/"}")
+    fi
+  done
+}
+
+ROOT_DIRS=()
+SUB_MODULE_ROOTS=()
+for d in "${STAGED_DIRS[@]+"${STAGED_DIRS[@]}"}"; do
   sub_root="$(_sub_module_root "$d")"
   if [[ -n "$sub_root" ]]; then
     already=false
@@ -100,7 +130,7 @@ while IFS= read -r d; do
   else
     ROOT_DIRS+=("./$d")
   fi
-done < <(printf '%s\0' "${STAGED_GO[@]}" | xargs -0 -n1 dirname | sort -u)
+done
 
 _label=""
 [[ "${#ROOT_DIRS[@]}" -gt 0 ]] && _label+="${ROOT_DIRS[*]} "
@@ -118,13 +148,13 @@ fi
 # 3. Format — gofmt + goimports via golangci-lint v2, re-stage.
 if skip format; then warn "SKIP=format"; else
   info "golangci-lint fmt"
-  [[ "${#ROOT_DIRS[@]}" -gt 0 ]] && \
+  if [[ "${#ROOT_DIRS[@]}" -gt 0 ]]; then
     golangci-lint fmt -c "$GOLANGCI_CONFIG" "${ROOT_DIRS[@]}"
-  if [[ "${#SUB_MODULE_ROOTS[@]}" -gt 0 ]]; then
-    for sub in "${SUB_MODULE_ROOTS[@]}"; do
-      (cd "$sub" && golangci-lint fmt -c "$REPO_ROOT/$GOLANGCI_CONFIG" ./...)
-    done
   fi
+  for sub in "${SUB_MODULE_ROOTS[@]+"${SUB_MODULE_ROOTS[@]}"}"; do
+    _sub_module_rel_dirs "$sub"
+    (cd "$sub" && golangci-lint fmt -c "$REPO_ROOT/$GOLANGCI_CONFIG" "${SUB_REL_DIRS[@]}")
+  done
   git add -- "${STAGED_GO[@]}"
   ok "formatted + re-staged"
 fi
@@ -137,12 +167,11 @@ if skip lint; then warn "SKIP=lint"; else
     golangci-lint run -c "$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" "${ROOT_DIRS[@]}" \
       || lint_ok=false
   fi
-  if [[ "${#SUB_MODULE_ROOTS[@]}" -gt 0 ]]; then
-    for sub in "${SUB_MODULE_ROOTS[@]}"; do
-      (cd "$sub" && golangci-lint run -c "$REPO_ROOT/$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" ./...) \
-        || lint_ok=false
-    done
-  fi
+  for sub in "${SUB_MODULE_ROOTS[@]+"${SUB_MODULE_ROOTS[@]}"}"; do
+    _sub_module_rel_dirs "$sub"
+    (cd "$sub" && golangci-lint run -c "$REPO_ROOT/$GOLANGCI_CONFIG" --timeout="$GOLANGCI_TIMEOUT" "${SUB_REL_DIRS[@]}") \
+      || lint_ok=false
+  done
   $lint_ok || die "lint issues (above). Fix and re-stage."
   ok "lint clean"
 fi
