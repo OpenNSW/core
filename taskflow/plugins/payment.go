@@ -6,7 +6,7 @@ package plugins
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // PaymentPlugin implements the generic_payment plugin.
@@ -42,13 +42,11 @@ func (p *PaymentPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 
 	ctx.Record.State = "PENDING_PAYMENT"
 
-	log.Printf("[Plugin: generic_payment] Dispatching payment request for task %s to URL: %s", ctx.Record.TaskID, cfg.PaymentServiceURL)
+	slog.InfoContext(ctx.Context, "payment_plugin: dispatching", "task_id", ctx.Record.TaskID, "url", cfg.PaymentServiceURL)
 
-	err := p.dispatcher(ctx.Context, cfg.PaymentServiceURL, ctx.Record.TaskID, ctx.Record.Data)
-	if err != nil {
+	if err := p.dispatcher(ctx.Context, cfg.PaymentServiceURL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
 		return fmt.Errorf("payment dispatch failed: %w", err)
 	}
 
-	log.Printf("[Plugin: generic_payment] Successfully dispatched payment step for task %s (active step: %s)", ctx.Record.TaskID, ctx.Record.SubTaskNodeID)
 	return ErrSuspended
 }

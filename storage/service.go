@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"path/filepath"
 
 	"github.com/OpenNSW/core/storage/drivers"
@@ -48,7 +47,6 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 		MimeType:  mime,
 	}
 
-	slog.InfoContext(ctx, "File upload prepared", "id", id, "key", key)
 	return metadata, nil
 }
 
@@ -68,6 +66,5 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
 	}
-	slog.InfoContext(ctx, "File deleted successfully", "key", key)
 	return nil
 }

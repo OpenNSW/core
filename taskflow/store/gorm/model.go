@@ -40,7 +40,7 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 	if len(m.Data) > 0 {
 		if err := json.Unmarshal(m.Data, &data); err != nil {
 			slog.Error("taskflow gorm store: ToDomain unmarshal of Data failed",
-				"taskId", m.TaskID, "error", err)
+				"task_id", m.TaskID, "error", err)
 		}
 	}
 
@@ -67,7 +67,7 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 func FromDomain(r store.TaskRecord) TaskRecordModel {
 	dataBytes, err := json.Marshal(r.Data)
 	if err != nil {
-		slog.Error("taskflow gorm store: FromDomain failed to marshal Data", "taskId", r.TaskID, "error", err)
+		slog.Error("taskflow gorm store: FromDomain failed to marshal Data", "task_id", r.TaskID, "error", err)
 	}
 
 	return TaskRecordModel{

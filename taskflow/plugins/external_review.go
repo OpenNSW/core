@@ -6,7 +6,7 @@ package plugins
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // ExternalReviewPlugin manages asynchronous delegation of task steps to third-party government agencies.
@@ -40,13 +40,11 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 	}
 
 	ctx.Record.State = "QUEUED_EXTERNALLY"
-	log.Printf("[Plugin: generic_external_review] Dispatching task %s to external URL: %s", ctx.Record.TaskID, cfg.ExternalURL)
+	slog.InfoContext(ctx.Context, "external_review: dispatching", "task_id", ctx.Record.TaskID, "url", cfg.ExternalURL)
 
-	err := p.dispatcher(ctx.Context, cfg.ExternalURL, ctx.Record.TaskID, ctx.Record.Data)
-	if err != nil {
+	if err := p.dispatcher(ctx.Context, cfg.ExternalURL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
 		return fmt.Errorf("external dispatch failed: %w", err)
 	}
 
-	log.Printf("[Plugin: generic_external_review] Successfully dispatched task %s (active step: %s)", ctx.Record.TaskID, ctx.Record.SubTaskNodeID)
 	return ErrSuspended
 }

@@ -6,6 +6,7 @@ package uiprojector
 import (
 	"context"
 	"fmt"
+	"log/slog"
 )
 
 // TemplateProvider abstracts the resolution of TemplateID to raw bytes.
@@ -41,6 +42,11 @@ func NewAssembler(tp TemplateProvider, projectors []Projector) (*Assembler, erro
 		registry[t] = p
 	}
 
+	registeredTypes := make([]string, 0, len(registry))
+	for t := range registry {
+		registeredTypes = append(registeredTypes, string(t))
+	}
+	slog.Info("uiprojector assembler initialized", "types", registeredTypes)
 	return &Assembler{
 		templateProvider: tp,
 		projectors:       registry,

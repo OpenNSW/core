@@ -5,7 +5,7 @@ package plugins
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 )
 
 // UserInputPlugin implements a standard human interaction / form submission step.
@@ -25,14 +25,14 @@ func (p *UserInputPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) 
 
 	if len(configRaw) > 0 && string(configRaw) != "null" {
 		var cfg UserInputConfig
-		if err := json.Unmarshal(configRaw, &cfg); err == nil {
-			if cfg.StatusOverride != "" {
-				status = cfg.StatusOverride
-			}
+		if err := json.Unmarshal(configRaw, &cfg); err != nil {
+			slog.WarnContext(ctx.Context, "user_input: ignoring invalid config, using default status", "task_id", ctx.Record.TaskID, "error", err)
+		} else if cfg.StatusOverride != "" {
+			status = cfg.StatusOverride
 		}
 	}
 
 	ctx.Record.State = status
-	log.Printf("[Plugin: generic_user_input] Task %s, at node %s", ctx.Record.TaskID, ctx.Record.SubTaskNodeID)
+	slog.DebugContext(ctx.Context, "user_input: awaiting submission", "task_id", ctx.Record.TaskID, "node_id", ctx.Record.SubTaskNodeID)
 	return ErrSuspended
 }

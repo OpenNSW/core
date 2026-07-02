@@ -129,7 +129,7 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 			_ = lastResp.Body.Close()
 		}
 
-		c.logger.Info("remote: retrying request",
+		c.logger.InfoContext(ctx, "remote: retrying request",
 			"method", method,
 			"path", path,
 			"attempt", attempt+1,
@@ -212,18 +212,18 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		}
 	}
 
-	c.logger.Info("remote: outbound request starting", "method", method, "url", finalURL)
+	c.logger.DebugContext(ctx, "remote: outbound request starting", "method", method, "url", finalURL)
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(start)
 
 	if err != nil {
-		c.logger.Error("remote: outbound request failed", "method", method, "url", finalURL, "duration", duration, "error", err)
+		c.logger.ErrorContext(ctx, "remote: outbound request failed", "method", method, "url", finalURL, "duration", duration, "error", err)
 		return nil, c.mapNetworkError(err)
 	}
 
-	c.logger.Info("remote: outbound request completed", "method", method, "url", finalURL, "status", resp.StatusCode, "duration", duration)
+	c.logger.DebugContext(ctx, "remote: outbound request completed", "method", method, "url", finalURL, "status", resp.StatusCode, "duration", duration)
 
 	return resp, nil
 }
@@ -257,7 +257,7 @@ func (c *Client) JSONRequest(ctx context.Context, req Request, response interfac
 
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.Warn("failed to close response body", "error", err)
+			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
 		}
 	}()
 

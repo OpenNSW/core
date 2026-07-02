@@ -323,7 +323,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 		nodeInfo.Status = NodeStatusFailed
 		logger := workflow.GetLogger(ctx)
 		for _, e := range failedBranchesErrors {
-			logger.Error("Split task branch execution failure", "error", e.Error())
+			logger.Error("split task branch execution failure", "error", e.Error())
 		}
 		var errMsgs []string
 		for _, e := range failedBranchesErrors {

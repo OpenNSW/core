@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // Manager routes notification requests to registered providers.
@@ -50,6 +51,11 @@ func NewManager(cfg Config, providers ...Provider) (*Manager, error) {
 		m.providers[p.Type()] = p
 	}
 
+	providerTypes := make([]string, 0, len(m.providers))
+	for t := range m.providers {
+		providerTypes = append(providerTypes, string(t))
+	}
+	slog.Info("notification manager initialized", "providers", providerTypes)
 	return m, nil
 }
 

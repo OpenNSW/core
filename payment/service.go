@@ -168,7 +168,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		// webhook or reconciliation can't treat an uninitialized session as payable.
 		tx.Status = PaymentStatusFailed
 		if uerr := s.repo.Update(ctx, tx); uerr != nil {
-			slog.Error("paymentsv2: failed to mark transaction failed after gateway error",
+			slog.ErrorContext(ctx, "payment: failed to mark transaction failed after gateway error",
 				"reference", tx.ReferenceNumber, "error", uerr)
 		}
 		return nil, fmt.Errorf("gateway failed to create session: %w", err)
@@ -197,7 +197,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 }
 
 func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage) (*ValidationResponse, error) {
-	slog.Info("validating incoming payment reference", "gateway", gatewayID)
+	slog.DebugContext(ctx, "validating incoming payment reference", "gateway", gatewayID)
 
 	// 1. Get the gateway from the registry using the ID from the URL
 	gateway, err := s.registry.Get(gatewayID)
@@ -225,7 +225,7 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 	isPayable := false
 	if tx != nil {
 		if tx.GatewayID != gatewayID {
-			slog.Warn("gateway mismatch during validation", "expected", tx.GatewayID, "received", gatewayID, "reference", tx.ReferenceNumber)
+			slog.WarnContext(ctx, "gateway mismatch during validation", "expected", tx.GatewayID, "received", gatewayID, "reference", tx.ReferenceNumber)
 		} else {
 			validationTx = &ValidationTransaction{
 				ReferenceNumber: tx.ReferenceNumber,
@@ -290,7 +290,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		// Idempotency: a terminal status is already recorded (possibly by a
 		// concurrent delivery that committed first) — nothing more to do.
 		if tx.Status == PaymentStatusSuccess || tx.Status == PaymentStatusFailed {
-			slog.Info("webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
+			slog.InfoContext(ctx, "webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
 			return nil
 		}
 
@@ -336,7 +336,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		return webhookResp, nil
 	}
 
-	slog.Info("processed webhook successfully", "reference", gwPayload.ReferenceNumber, "status", finalStatus)
+	slog.InfoContext(ctx, "processed webhook successfully", "reference", gwPayload.ReferenceNumber, "status", finalStatus)
 
 	// Advance the suspended workflow step OUTSIDE the transaction so the row lock
 	// is never held across the task-engine call. Only SUCCESS and FAILED map to a
@@ -354,12 +354,11 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		statusStr = "fail"
 	}
 	if statusStr == "" {
-		slog.Warn("payment: non-terminal webhook status, not advancing task",
-			"reference", gwPayload.ReferenceNumber, "taskId", advanceTask, "status", finalStatus)
+		slog.WarnContext(ctx, "payment: non-terminal webhook status, not advancing task",
+			"reference", gwPayload.ReferenceNumber, "task_id", advanceTask, "status", finalStatus)
 		return webhookResp, nil
 	}
 
-	slog.Info("payment: advancing task step", "taskId", advanceTask, "status", statusStr)
 	// Carry the settled transaction's facts (not just the status) so completion-
 	// state UIs can render the reference and amount. These come from the
 	// authoritative DB transaction (captured under lock), not gwPayload, which
@@ -372,7 +371,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}); err != nil {
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
-		slog.Error("payment: failed to advance task step", "taskId", advanceTask, "error", err)
+		slog.ErrorContext(ctx, "payment: failed to advance task step", "task_id", advanceTask, "error", err)
 		return nil, fmt.Errorf("failed to advance task step for %s: %w", advanceTask, err)
 	}
 

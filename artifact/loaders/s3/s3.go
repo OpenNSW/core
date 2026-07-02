@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/OpenNSW/core/artifact"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -21,6 +22,7 @@ type S3Loader struct {
 }
 
 func New(client *s3.Client, bucket string) *S3Loader {
+	slog.Info("s3 artifact loader initialized", "bucket", bucket)
 	return &S3Loader{
 		Client: client,
 		Bucket: bucket,

@@ -6,6 +6,7 @@ package artifact
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -35,6 +36,7 @@ func RegisterFromConfig(r *Registry, cfg ManifestConfig) error {
 		}
 		r.RegisterArtifact(row.ID, row.Kind, row.Version, row.Loader, row.Path)
 	}
+	slog.Info("artifact manifest registered", "count", len(cfg.Artifacts))
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/OpenNSW/core/taskflow/store"
@@ -55,6 +56,7 @@ func (r *Registry) Register(taskType string, p TaskPlugin) error {
 	}
 
 	r.plugins[taskType] = p
+	slog.Info("plugin registered", "task_type", taskType)
 	return nil
 }
 

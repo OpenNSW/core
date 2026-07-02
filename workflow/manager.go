@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -209,6 +210,7 @@ func NewTemporalManager(
 
 	m.worker = w
 	m.activities = acts
+	slog.Info("temporal manager initialized", "task_queue", taskQueue)
 	return m
 }
 
@@ -262,9 +264,14 @@ func (m *temporalManagerImpl) GetStatus(ctx context.Context, workflowID string) 
 }
 
 func (m *temporalManagerImpl) StartWorker() error {
-	return m.worker.Start()
+	if err := m.worker.Start(); err != nil {
+		return err
+	}
+	slog.Info("temporal worker started", "task_queue", m.taskQueue)
+	return nil
 }
 
 func (m *temporalManagerImpl) StopWorker() {
 	m.worker.Stop()
+	slog.Info("temporal worker stopped", "task_queue", m.taskQueue)
 }
