@@ -21,10 +21,10 @@ import (
 func NewStorageFromConfig(ctx context.Context, cfg Config) (StorageDriver, error) {
 	switch strings.TrimSpace(cfg.Type) {
 	case "local":
-		slog.Info("Initializing local storage", "dir", cfg.LocalBaseDir)
+		slog.InfoContext(ctx, "initializing local storage", "dir", cfg.LocalBaseDir)
 		return drivers.NewLocalFSDriver(cfg.LocalBaseDir, cfg.LocalPublicURL, cfg.LocalPutSecret, cfg.PresignTTL)
 	case "s3":
-		slog.Info("Initializing S3 storage", "endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket)
+		slog.InfoContext(ctx, "initializing S3 storage", "endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket)
 
 		opts := []func(*awsconfig.LoadOptions) error{
 			awsconfig.WithRegion(cfg.S3Region),

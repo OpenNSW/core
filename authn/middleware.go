@@ -47,7 +47,7 @@ func Middleware(userProfileService UserProfileService, tokenExtractor *TokenExtr
 
 			principal, err := tokenExtractor.ExtractPrincipalFromHeader(authHeader)
 			if err != nil {
-				slog.InfoContext(r.Context(), "failed to extract principal from token", "error", err)
+				slog.DebugContext(r.Context(), "failed to extract principal from token", "error", err)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":"unauthorized","message":"invalid authentication token"}`))
@@ -63,7 +63,7 @@ func Middleware(userProfileService UserProfileService, tokenExtractor *TokenExtr
 			}
 
 			if principal.UserPrincipal == nil && principal.ClientPrincipal == nil {
-				slog.ErrorContext(r.Context(), "token missing both userPrincipal and clientPrincipal")
+				slog.InfoContext(r.Context(), "token missing both userPrincipal and clientPrincipal")
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":"unauthorized","message":"invalid authentication token"}`))

@@ -47,8 +47,8 @@ func (s *TaskStore) SaveTask(ctx context.Context, record store.TaskRecord) {
 			"updated_at",
 		}),
 	}).Create(&model).Error; err != nil {
-		slog.Error("taskflow gorm store: SaveTask upsert failed",
-			"taskId", record.TaskID, "error", err)
+		slog.ErrorContext(ctx, "taskflow gorm store: SaveTask upsert failed",
+			"task_id", record.TaskID, "error", err)
 	}
 }
 
@@ -56,7 +56,7 @@ func (s *TaskStore) GetTask(ctx context.Context, taskID string) (store.TaskRecor
 	var model TaskRecordModel
 	if err := s.db.WithContext(ctx).First(&model, "task_id = ?", taskID).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.Error("taskflow gorm store: GetTask db error", "taskId", taskID, "error", err)
+			slog.ErrorContext(ctx, "taskflow gorm store: GetTask db error", "task_id", taskID, "error", err)
 		}
 		return store.TaskRecord{}, false
 	}
@@ -67,7 +67,7 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	var model TaskRecordModel
 	if err := s.db.WithContext(ctx).First(&model, "task_workflow_id = ?", workflowID).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.Error("taskflow gorm store: GetTaskByWorkflowID db error", "workflowId", workflowID, "error", err)
+			slog.ErrorContext(ctx, "taskflow gorm store: GetTaskByWorkflowID db error", "task_workflow_id", workflowID, "error", err)
 		}
 		return store.TaskRecord{}, false
 	}
@@ -81,7 +81,7 @@ func (s *TaskStore) GetAllTasks(ctx context.Context, parentWorkflowID string) []
 		query = query.Where("root_workflow_id = ?", parentWorkflowID)
 	}
 	if err := query.Find(&models).Error; err != nil {
-		slog.Error("taskflow gorm store: GetAllTasks db error", "parentWorkflowId", parentWorkflowID, "error", err)
+		slog.ErrorContext(ctx, "taskflow gorm store: GetAllTasks db error", "parent_workflow_id", parentWorkflowID, "error", err)
 		return nil
 	}
 

@@ -257,7 +257,7 @@ func (c *Client) JSONRequest(ctx context.Context, req Request, response interfac
 
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.WarnContext(ctx, "failed to close response body", "error", err)
+			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
 		}
 	}()
 

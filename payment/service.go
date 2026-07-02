@@ -168,7 +168,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		// webhook or reconciliation can't treat an uninitialized session as payable.
 		tx.Status = PaymentStatusFailed
 		if uerr := s.repo.Update(ctx, tx); uerr != nil {
-			slog.ErrorContext(ctx, "paymentsv2: failed to mark transaction failed after gateway error",
+			slog.ErrorContext(ctx, "payment: failed to mark transaction failed after gateway error",
 				"reference", tx.ReferenceNumber, "error", uerr)
 		}
 		return nil, fmt.Errorf("gateway failed to create session: %w", err)
@@ -355,7 +355,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}
 	if statusStr == "" {
 		slog.WarnContext(ctx, "payment: non-terminal webhook status, not advancing task",
-			"reference", gwPayload.ReferenceNumber, "taskId", advanceTask, "status", finalStatus)
+			"reference", gwPayload.ReferenceNumber, "task_id", advanceTask, "status", finalStatus)
 		return webhookResp, nil
 	}
 
@@ -371,7 +371,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}); err != nil {
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
-		slog.ErrorContext(ctx, "payment: failed to advance task step", "taskId", advanceTask, "error", err)
+		slog.ErrorContext(ctx, "payment: failed to advance task step", "task_id", advanceTask, "error", err)
 		return nil, fmt.Errorf("failed to advance task step for %s: %w", advanceTask, err)
 	}
 

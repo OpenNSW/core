@@ -89,7 +89,7 @@ func (a *Authorizer) require(allow func(Principal) bool, required ...string) fun
 				return
 			}
 			if !allow(p) {
-				slog.Warn("authz: forbidden",
+				slog.WarnContext(r.Context(), "authz: forbidden",
 					"subject", p.Subject(),
 					"required_scopes", required,
 					"granted_scopes", p.Scopes(),

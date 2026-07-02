@@ -98,7 +98,7 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "Upload preparation failed", "error", err)
+		slog.ErrorContext(r.Context(), "upload preparation failed", "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to prepare upload")
 		return
 	}
@@ -186,7 +186,7 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 	// Save using the local driver
 	err = driver.Save(r.Context(), key, r.Body, contentType)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "Local upload failed", "key", key, "error", err)
+		slog.ErrorContext(r.Context(), "local upload failed", "key", key, "error", err)
 		// MaxBytesReader returns a specific error when exceeded
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
@@ -285,7 +285,7 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 
 	body, contentType, err := h.Service.Download(r.Context(), key)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "Download content failed", "key", key, "error", err)
+		slog.ErrorContext(r.Context(), "download content failed", "key", key, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to get file")
 		return
 	}

@@ -153,7 +153,7 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.Warn("failed to close response body", "error", err)
+			slog.WarnContext(ctx, "failed to close response body", "error", err)
 		}
 	}()
 

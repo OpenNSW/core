@@ -156,14 +156,14 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			// branch or breaking a downstream parallel join. Steer the admin to Retry
 			// instead, which re-runs the gateway's real (side-effect-free) routing logic.
 			if node.Type == NodeTypeGateway {
-				workflow.GetLogger(ctx).Warn("Skip is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "nodeID", node.ID)
+				workflow.GetLogger(ctx).Warn("skip is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "node_id", node.ID)
 				continue
 			}
 			return g.completeParkedNode(ctx, nodeInfo, outEdges, nil)
 
 		case AdminActionOverride:
 			if node.Type == NodeTypeGateway {
-				workflow.GetLogger(ctx).Warn("Override is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "nodeID", node.ID)
+				workflow.GetLogger(ctx).Warn("override is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "node_id", node.ID)
 				continue
 			}
 			return g.completeParkedNode(ctx, nodeInfo, outEdges, sig.Overrides)
@@ -193,7 +193,7 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			continue
 
 		default:
-			workflow.GetLogger(ctx).Warn("ignoring unrecognized admin resolution action", "nodeID", node.ID, "action", sig.Action)
+			workflow.GetLogger(ctx).Warn("ignoring unrecognized admin resolution action", "node_id", node.ID, "action", sig.Action)
 			continue
 		}
 	}
