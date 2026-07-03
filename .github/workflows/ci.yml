@@ -201,6 +201,39 @@ jobs:
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+  # The pagination/ package is its own Go module, so the root ./... jobs above do not
+  # cover it. Run its quality checks and tests independently.
+  pagination-module:
+    name: Pagination Module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pagination
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'pagination/go.mod'
+          cache-dependency-path: pagination/go.mod
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          # pagination has no third-party deps, so no go.sum is generated; diff the
+          # whole module dir rather than naming files that may not exist.
+          git diff --exit-code -- .
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: pagination
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
   # STAGE 3: Parallel security + vuln scans.
   govulncheck:
     name: Vulnerability Scan
