@@ -115,7 +115,11 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Confirm the parked LastError explicitly warns that the Activity already ran, before
-	// resolving it.
+	// resolving it. Because this node parks on an *output* mapping error, ExecuteTaskActivity
+	// must finish running before the park sets LastError; 100ms gives the Activity time to
+	// actually complete in the test environment before we query — same timing characteristic
+	// seen elsewhere in this suite. (A 1ms query races the Activity and reads an empty
+	// LastError.)
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
 		require.NoError(t, err)
@@ -123,7 +127,7 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 		require.NoError(t, val.Get(&instance))
 		require.Contains(t, instance.NodeInfo["task"].LastError, "already completed successfully")
 		require.Contains(t, instance.NodeInfo["task"].LastError, "use OVERRIDE instead of RETRY")
-	}, time.Millisecond)
+	}, 100*time.Millisecond)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -131,7 +135,7 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 			Action:    AdminActionOverride,
 			Overrides: map[string]any{"global_user_phone": "555-1234"},
 		})
-	}, 2*time.Millisecond)
+	}, 200*time.Millisecond)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
 
