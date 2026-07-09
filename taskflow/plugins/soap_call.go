@@ -49,12 +49,23 @@ func NewSOAPCallPlugin(manager *remote.Manager, interp SOAPInterpreter) TaskPlug
 // SOAPCallConfig holds properties decoded from the TaskTemplate's JSON
 // configuration.
 type SOAPCallConfig struct {
-	ServiceID string `json:"service_id"`
-	Operation string `json:"operation"`
-	Path      string `json:"path,omitempty"` // relative to the service URL; "" posts to the service URL itself
+	ServiceID  string `json:"service_id"`
+	Operation  string `json:"operation"`
+	Path       string `json:"path,omitempty"`        // relative to the service URL; "" posts to the service URL itself
+	SOAPAction string `json:"soap_action,omitempty"` // SOAP 1.1 action; quoted automatically, "" sends SOAPAction: ""
 }
 
 func (p *SOAPCallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
+	if ctx.Record == nil {
+		return fmt.Errorf("soap_call: task record is required")
+	}
+	if p.manager == nil {
+		return fmt.Errorf("soap_call: remote manager is not initialized")
+	}
+	if p.interpreter == nil {
+		return fmt.Errorf("soap_call: interpreter is not initialized")
+	}
+
 	var cfg SOAPCallConfig
 	if len(configRaw) > 0 && string(configRaw) != "null" {
 		if err := json.Unmarshal(configRaw, &cfg); err != nil {
@@ -73,7 +84,7 @@ func (p *SOAPCallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) e
 			Path:        cfg.Path,
 			ContentType: "text/xml; charset=utf-8",
 			Body:        []byte(envelope),
-			Headers:     map[string]string{"SOAPAction": ""},
+			Headers:     map[string]string{"SOAPAction": quoteSOAPAction(cfg.SOAPAction)},
 		}
 		resp, callErr = p.manager.CallRaw(ctx.Context, cfg.ServiceID, req)
 	}
@@ -107,4 +118,14 @@ func rawStatus(resp *remote.RawResponse) int {
 		return 0
 	}
 	return resp.StatusCode
+}
+
+// quoteSOAPAction wraps the action in the double quotes SOAP 1.1 requires —
+// an empty action is sent as SOAPAction: "" — leaving an already-quoted
+// config value untouched.
+func quoteSOAPAction(action string) string {
+	if len(action) >= 2 && action[0] == '"' && action[len(action)-1] == '"' {
+		return action
+	}
+	return `"` + action + `"`
 }
