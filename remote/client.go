@@ -311,12 +311,15 @@ func (c *Client) RawRequest(ctx context.Context, req RawRequest) (*RawResponse, 
 		headers[k] = v
 	}
 
-	var bodyReader io.Reader
+	// The body is already a []byte, so go straight to executeWithRetry rather
+	// than through Do, which would wrap it in a reader only to io.ReadAll it
+	// back out. Normalize empty to nil so no Content-Type is set without a body.
+	var bodyBytes []byte
 	if len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
+		bodyBytes = req.Body
 	}
 
-	resp, err := c.Do(ctx, req.Method, req.Path, bodyReader, headers, req.Retry)
+	resp, err := c.executeWithRetry(ctx, req.Method, req.Path, bodyBytes, headers, req.Retry)
 	if err != nil {
 		return nil, err
 	}

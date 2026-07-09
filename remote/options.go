@@ -27,10 +27,17 @@ func WithAuthenticator(a auth.Authenticator) Option {
 
 // WithClientCertificate presents cert during the TLS handshake (mTLS). The
 // transport is cloned from http.DefaultTransport so proxy, HTTP/2, and
-// connection-pool defaults are preserved.
+// connection-pool defaults are preserved — unless something (an APM agent, a
+// test) has replaced http.DefaultTransport with a non-*http.Transport, in
+// which case a fresh transport is used instead of panicking.
 func WithClientCertificate(cert tls.Certificate) Option {
 	return func(c *Client) {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
+		var transport *http.Transport
+		if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = defaultTransport.Clone()
+		} else {
+			transport = &http.Transport{}
+		}
 		transport.TLSClientConfig = &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
