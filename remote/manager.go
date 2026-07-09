@@ -5,6 +5,7 @@ package remote
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,11 +23,21 @@ type AuthConfig struct {
 	Options json.RawMessage `json:"options"`
 }
 
+// TLSSettings configures transport-level client authentication (mTLS) for a
+// service. Both values are filesystem paths to PEM files, not secret
+// references: certificate chains routinely exceed the 4 KB cap that
+// auth.SecretRef places on file-sourced secrets.
+type TLSSettings struct {
+	ClientCertFile string `json:"client_cert_file"`
+	ClientKeyFile  string `json:"client_key_file"`
+}
+
 type ServiceConfig struct {
-	ID      string      `json:"id"`
-	URL     string      `json:"url"`
-	Timeout string      `json:"timeout"`
-	Auth    *AuthConfig `json:"auth,omitempty"`
+	ID      string       `json:"id"`
+	URL     string       `json:"url"`
+	Timeout string       `json:"timeout"`
+	Auth    *AuthConfig  `json:"auth,omitempty"`
+	TLS     *TLSSettings `json:"tls,omitempty"`
 }
 
 type Registry struct {
@@ -80,6 +91,14 @@ func (m *Manager) LoadServices(filePath string) error {
 			}
 			authenticators[cfg.ID] = authenticator
 		}
+
+		// Validate the tls config shape now, but defer reading the PEM files to
+		// the first client build (GetClient): mTLS material is operator-supplied
+		// and often absent in dev setups, and deferring lets it be provided
+		// after boot without failing startup for every other service.
+		if cfg.TLS != nil && (cfg.TLS.ClientCertFile == "" || cfg.TLS.ClientKeyFile == "") {
+			return fmt.Errorf("remote: service %q tls config requires both client_cert_file and client_key_file", cfg.ID)
+		}
 	}
 
 	// Swap in the validated state atomically, and reset the client cache.
@@ -118,6 +137,17 @@ func (m *Manager) Call(ctx context.Context, serviceID string, req Request, respo
 	}
 
 	return client.JSONRequest(ctx, req, response)
+}
+
+// CallRaw sends a raw-bodied request (e.g. a SOAP/XML envelope) to a
+// registered service. See Client.RawRequest for the error semantics: a non-2xx
+// status is returned in the response, not as an error.
+func (m *Manager) CallRaw(ctx context.Context, serviceID string, req RawRequest) (*RawResponse, error) {
+	client, err := m.GetClient(serviceID)
+	if err != nil {
+		return nil, err
+	}
+	return client.RawRequest(ctx, req)
 }
 
 func (m *Manager) GetClientByURL(rawURL string) (*Client, string, error) {
@@ -193,6 +223,17 @@ func (m *Manager) GetClient(id string) (*Client, error) {
 	// Authenticators are built and resolved once, at load time (see LoadServices).
 	if authenticator, ok := m.authenticators[id]; ok {
 		opts = append(opts, WithAuthenticator(authenticator))
+	}
+
+	// The client certificate is read here, on the first successful client
+	// build, and then lives in the cached client. A failed load is returned
+	// (not cached), so material dropped in later is picked up on the next call.
+	if cfg.TLS != nil {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.ClientCertFile, cfg.TLS.ClientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("remote: failed to load client certificate for service %q: %w", id, err)
+		}
+		opts = append(opts, WithClientCertificate(cert))
 	}
 
 	newClient := NewClient(cfg.URL, opts...)
