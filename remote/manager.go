@@ -5,7 +5,6 @@ package remote
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -225,15 +224,11 @@ func (m *Manager) GetClient(id string) (*Client, error) {
 		opts = append(opts, WithAuthenticator(authenticator))
 	}
 
-	// The client certificate is read here, on the first successful client
-	// build, and then lives in the cached client. A failed load is returned
-	// (not cached), so material dropped in later is picked up on the next call.
+	// The client certificate is read from disk on each TLS handshake (see
+	// WithClientCertificateFiles): a missing PEM fails the call, not startup,
+	// and rotated material is picked up by new connections without a restart.
 	if cfg.TLS != nil {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.ClientCertFile, cfg.TLS.ClientKeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("remote: failed to load client certificate for service %q: %w", id, err)
-		}
-		opts = append(opts, WithClientCertificate(cert))
+		opts = append(opts, WithClientCertificateFiles(cfg.TLS.ClientCertFile, cfg.TLS.ClientKeyFile))
 	}
 
 	newClient := NewClient(cfg.URL, opts...)

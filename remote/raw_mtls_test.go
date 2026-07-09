@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,16 +92,17 @@ func TestClient_RawRequest_CapsResponseBody(t *testing.T) {
 	assert.Len(t, resp.Body, maxRawResponseBytes)
 }
 
-// writeClientCertPair generates a self-signed certificate and writes the PEM
-// cert + key files into a temp dir, returning their paths.
-func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
+// writeClientCertPairInto generates a self-signed certificate with the given
+// CommonName and writes (or overwrites) the PEM cert + key files in dir,
+// returning their paths.
+func writeClientCertPairInto(t *testing.T, dir, commonName string) (certFile, keyFile string) {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test-nppo"},
+		Subject:      pkix.Name{CommonName: commonName},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -111,7 +113,6 @@ func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	require.NoError(t, err)
 
-	dir := t.TempDir()
 	certFile = filepath.Join(dir, "client.crt")
 	keyFile = filepath.Join(dir, "client.key")
 	require.NoError(t, os.WriteFile(certFile,
@@ -119,6 +120,11 @@ func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
 	require.NoError(t, os.WriteFile(keyFile,
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
 	return certFile, keyFile
+}
+
+func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+	return writeClientCertPairInto(t, t.TempDir(), "test-nppo")
 }
 
 // writeTLSServices writes a services.json with a single service carrying a tls
@@ -165,18 +171,108 @@ func TestManager_LoadServices_MTLSPresentsClientCertificate(t *testing.T) {
 	assert.Equal(t, "test-nppo", gotClientCert)
 }
 
-func TestManager_GetClient_MissingCertFileFailsPerCallNotAtBoot(t *testing.T) {
+func TestManager_MissingCertFileFailsPerCallNotAtBoot(t *testing.T) {
 	// mTLS material is operator-supplied and may be absent (e.g. dev setups):
 	// loading the services must still succeed, and the failure must surface on
-	// first use of this service — and only this service.
-	path := writeTLSServices(t, "http://local", "/nonexistent/client.crt", "/nonexistent/client.key")
+	// first use of this service — at the handshake — and only for this service.
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.TLS = &tls.Config{ClientAuth: tls.RequireAnyClientCert}
+	server.StartTLS()
+	defer server.Close()
+
+	path := writeTLSServices(t, server.URL, "/nonexistent/client.crt", "/nonexistent/client.key")
 	manager := NewManager()
 	require.NoError(t, manager.LoadServices(path))
 
-	_, err := manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
+	client, err := manager.GetClient("svc")
+	require.NoError(t, err, "a missing PEM must not fail the client build")
+	pool := x509.NewCertPool()
+	pool.AddCert(server.Certificate())
+	client.httpClient.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
+
+	_, err = manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `failed to load client certificate for service "svc"`)
+	assert.Contains(t, err.Error(), "loading client certificate")
 }
+
+func TestManager_CertRotationPickedUpWithoutRestart(t *testing.T) {
+	var mu sync.Mutex
+	var gotCNs []string
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			mu.Lock()
+			gotCNs = append(gotCNs, r.TLS.PeerCertificates[0].Subject.CommonName)
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.TLS = &tls.Config{ClientAuth: tls.RequireAnyClientCert}
+	server.StartTLS()
+	defer server.Close()
+
+	dir := t.TempDir()
+	certFile, keyFile := writeClientCertPairInto(t, dir, "before-rotation")
+
+	manager := NewManager()
+	require.NoError(t, manager.LoadServices(writeTLSServices(t, server.URL, certFile, keyFile)))
+	client, err := manager.GetClient("svc")
+	require.NoError(t, err)
+	pool := x509.NewCertPool()
+	pool.AddCert(server.Certificate())
+	transport := client.httpClient.Transport.(*http.Transport)
+	transport.TLSClientConfig.RootCAs = pool
+
+	_, err = manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
+	require.NoError(t, err)
+
+	// Rotate the material on disk and force a fresh connection (a real rotation
+	// is picked up as pooled connections naturally close and re-dial).
+	writeClientCertPairInto(t, dir, "after-rotation")
+	transport.CloseIdleConnections()
+
+	_, err = manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"before-rotation", "after-rotation"}, gotCNs)
+}
+
+func TestClient_WithClientCertificate_PreservesCustomTransportTLSConfig(t *testing.T) {
+	// An APM agent or corporate-proxy setup may have replaced
+	// http.DefaultTransport with one carrying its own TLSClientConfig (custom
+	// RootCAs, stricter MinVersion). Adding a client certificate must keep
+	// those settings, and never lower the minimum TLS version.
+	pool := x509.NewCertPool()
+	prev := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
+	}}
+	defer func() { http.DefaultTransport = prev }()
+
+	client := NewClient("http://local", WithClientCertificate(tls.Certificate{}))
+	got := client.httpClient.Transport.(*http.Transport).TLSClientConfig
+	assert.Same(t, pool, got.RootCAs)
+	assert.Equal(t, uint16(tls.VersionTLS13), got.MinVersion, "pre-set stricter MinVersion must not be lowered")
+	assert.Len(t, got.Certificates, 1)
+}
+
+func TestClient_WithClientCertificate_NonTransportDefaultDoesNotPanic(t *testing.T) {
+	prev := http.DefaultTransport
+	http.DefaultTransport = roundTripperFunc(func(r *http.Request) (*http.Response, error) { return nil, nil })
+	defer func() { http.DefaultTransport = prev }()
+
+	client := NewClient("http://local", WithClientCertificate(tls.Certificate{}))
+	got := client.httpClient.Transport.(*http.Transport).TLSClientConfig
+	assert.Equal(t, uint16(tls.VersionTLS12), got.MinVersion)
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestManager_LoadServices_TLSRequiresBothFiles(t *testing.T) {
 	body := `{"version":"1.0","services":[{"id":"svc","url":"http://local","tls":{"client_cert_file":"/some.crt"}}]}`
