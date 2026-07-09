@@ -274,6 +274,73 @@ func (c *Client) JSONRequest(ctx context.Context, req Request, response interfac
 	return nil
 }
 
+// maxRawResponseBytes caps how much of a raw response body RawRequest reads,
+// so an unexpectedly large or runaway payload cannot exhaust memory.
+const maxRawResponseBytes = 10 * 1024 * 1024 // 10 MiB
+
+// RawRequest bundles the caller-provided parts of an outbound call whose body
+// is sent verbatim — no JSON marshalling — e.g. a SOAP/XML envelope.
+type RawRequest struct {
+	Method      string
+	Path        string
+	ContentType string // sent as Content-Type when Body is non-empty
+	Body        []byte
+	Headers     map[string]string
+	Retry       *RetryConfig // If nil, no retries will be performed
+}
+
+// RawResponse is the undecoded outcome of a RawRequest.
+type RawResponse struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+}
+
+// RawRequest sends req.Body verbatim and returns the raw response. Unlike
+// JSONRequest, a non-2xx status is NOT an error: protocols like SOAP deliver
+// faults as HTTP 500 with a meaningful body, so the caller interprets the
+// status and body together. The returned error is transport-level only
+// (connection, timeout, auth application). The response body read is capped
+// at maxRawResponseBytes.
+func (c *Client) RawRequest(ctx context.Context, req RawRequest) (*RawResponse, error) {
+	headers := make(map[string]string, len(req.Headers)+1)
+	if req.ContentType != "" {
+		headers["Content-Type"] = req.ContentType
+	}
+	for k, v := range req.Headers {
+		headers[k] = v
+	}
+
+	// The body is already a []byte, so go straight to executeWithRetry rather
+	// than through Do, which would wrap it in a reader only to io.ReadAll it
+	// back out. Normalize empty to nil so no Content-Type is set without a body.
+	var bodyBytes []byte
+	if len(req.Body) > 0 {
+		bodyBytes = req.Body
+	}
+
+	resp, err := c.executeWithRetry(ctx, req.Method, req.Path, bodyBytes, headers, req.Retry)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
+		}
+	}()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRawResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("remote: failed to read response body: %w", err)
+	}
+
+	return &RawResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header,
+		Body:       body,
+	}, nil
+}
+
 func (c *Client) mapNetworkError(err error) error {
 	if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
 		return ErrTimeout
