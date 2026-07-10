@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/adapter/workflowdef"
 	"github.com/OpenNSW/core/artifact/testutil"
-	"github.com/OpenNSW/core/artifactadapter/workflowdef"
 )
 
 func TestWorkflowDefAdapter(t *testing.T) {

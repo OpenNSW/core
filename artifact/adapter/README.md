@@ -1,4 +1,4 @@
-# Artifact Adapter Layer (`core/artifactadapter`)
+# Artifact Adapter Layer (`core/artifact/adapter`)
 
 This directory contains adapters that bridge pure domain configuration structures and the bottom-of-stack versioned `artifact` registry.
 
@@ -7,13 +7,13 @@ This directory contains adapters that bridge pure domain configuration structure
 To keep domain packages (like `workflow` or `taskflow`) and the `artifact` registry cleanly layered:
 1. Domain packages may hold an `*artifact.Registry` reference but do not define their own loadable types — they call adapter helpers to fetch configs.
 2. The `artifact` package does not import any domain packages.
-3. Adapters live in dedicated sub-packages under `core/artifactadapter/` (for core domain types) or in country repositories, and are the only layer allowed to import both a domain package and `artifact`.
+3. Adapters live in dedicated sub-packages under `core/artifact/adapter/` (for core domain types) or in country repositories, and are the only layer allowed to import both a domain package and `artifact`.
 
 ---
 
 ## Recipe: Making ANY Type Loadable as an Artifact
 
-To make a type `T` (from package `dom`) loadable via the artifact registry, create a new adapter package (e.g. `core/artifactadapter/mytype/mytype.go`) that imports both `dom` and `artifact`:
+To make a type `T` (from package `dom`) loadable via the artifact registry, create a new adapter package (e.g. `core/artifact/adapter/mytype/mytype.go`) that imports both `dom` and `artifact`:
 
 1. **Define the Kind**:
    ```go

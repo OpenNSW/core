@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Lanka Software Foundation
 
-package tasktemplate
+package subtasktemplate
 
 import (
 	"context"
@@ -9,31 +9,31 @@ import (
 	"fmt"
 
 	"github.com/OpenNSW/core/artifact"
-	"github.com/OpenNSW/core/artifactadapter/types"
+	"github.com/OpenNSW/core/artifact/adapter/types"
 )
 
 // Kind is owned here.
-const Kind artifact.Kind = "task_template"
+const Kind artifact.Kind = "subtask_template"
 
 type loadable struct {
-	types.TaskTemplate
+	types.SubTaskTemplate
 }
 
 func (loadable) Kind() artifact.Kind { return Kind }
 
 func (l *loadable) Parse(raw []byte) error {
-	var t types.TaskTemplate
+	var t types.SubTaskTemplate
 	if err := json.Unmarshal(raw, &t); err != nil {
-		return fmt.Errorf("decode task template: %w", err)
+		return fmt.Errorf("decode subtask template: %w", err)
 	}
 	if t.ID == "" {
-		return fmt.Errorf("task template: missing id")
+		return fmt.Errorf("subtask template: missing id")
 	}
-	l.TaskTemplate = t
+	l.SubTaskTemplate = t
 	return nil
 }
 
-func Load(ctx context.Context, reg *artifact.Registry, id string) (types.TaskTemplate, error) {
+func Load(ctx context.Context, reg *artifact.Registry, id string) (types.SubTaskTemplate, error) {
 	w, err := artifact.Latest[loadable](ctx, reg, id)
-	return w.TaskTemplate, err
+	return w.SubTaskTemplate, err
 }

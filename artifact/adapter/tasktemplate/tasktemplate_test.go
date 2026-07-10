@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/adapter/tasktemplate"
 	"github.com/OpenNSW/core/artifact/testutil"
-	"github.com/OpenNSW/core/artifactadapter/tasktemplate"
 )
 
 func TestTaskTemplateAdapter(t *testing.T) {

@@ -104,7 +104,7 @@ The `core` repository structure contains:
 ```
 core/
 ├── artifact/              # Versioned configuration registry
-├── artifactadapter/       # Bridge adapters to load domain types
+│   └── adapter/           # Bridge adapters to load domain types
 ├── authn/                 # JWT validation and identity context injection
 ├── authz/                 # Scope-based authorization middleware
 ├── cors/                  # CORS HTTP middleware
