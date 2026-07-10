@@ -2,7 +2,7 @@
 
 The `artifact` package is a bottom-of-stack registry for loading versioned configuration objects (workflow definitions, task templates, render configs, etc.) from any byte source.
 
-It is deliberately **framework-agnostic and domain-agnostic**: it knows nothing about workflows or tasks. Domain packages bridge to it through adapter packages (see `core/artifactadapter/`).
+It is deliberately **framework-agnostic and domain-agnostic**: it knows nothing about workflows or tasks. Domain packages bridge to it through adapter packages (see `core/artifact/adapter/`).
 
 ---
 
@@ -164,6 +164,6 @@ reg.RegisterLoader("mem", m)
 
 ## Bridging to domain types
 
-Domain packages (e.g. `taskflow`, `workflow`) typically **don't implement `Artifact` and `Parser` directly** on their types — that would bleed registry concerns into domain code. Instead, adapter packages in `core/artifactadapter/` define private `loadable` wrappers that satisfy the interfaces and expose simple `Load(ctx, reg, id)` helpers.
+Domain packages (e.g. `taskflow`, `workflow`) typically **don't implement `Artifact` and `Parser` directly** on their types — that would bleed registry concerns into domain code. Instead, adapter packages in `core/artifact/adapter/` define private `loadable` wrappers that satisfy the interfaces and expose simple `Load(ctx, reg, id)` helpers.
 
-See [`core/artifactadapter/README.md`](../artifactadapter/README.md) for the full recipe.
+See [`core/artifact/adapter/README.md`](adapter/README.md) for the full recipe.

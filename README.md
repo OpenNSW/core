@@ -18,8 +18,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 
 | Package | Purpose |
 |---|---|
-| [`artifact`](artifact/README.md) | Versioned configuration registry — load workflow definitions, form schemas, and templates by ID |
-| [`artifactadapter`](artifactadapter/README.md) | Bridge adapters to load domain types (workflow defs, task templates) from the artifact registry |
+| [`artifact`](artifact/README.md) | Versioned configuration registry — load workflow definitions, form schemas, and templates by ID (includes [`artifact/adapter`](artifact/adapter/README.md), bridge adapters for domain types) |
 | [`authn`](authn/README.md) | JWT validation, identity context injection, and HTTP middleware |
 | [`authz`](authz/README.md) | Scope-based authorization middleware and predicates, decoupled from authn |
 | [`cors`](cors/README.md) | CORS HTTP middleware |

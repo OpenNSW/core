@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/adapter/generictemplate"
 	"github.com/OpenNSW/core/artifact/testutil"
-	"github.com/OpenNSW/core/artifactadapter/generictemplate"
 )
 
 func TestGenericTemplateAdapter(t *testing.T) {
