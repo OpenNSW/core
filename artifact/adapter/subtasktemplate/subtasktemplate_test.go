@@ -15,12 +15,11 @@ import (
 
 func TestSubTaskTemplateAdapter(t *testing.T) {
 	t.Run("Load returns unwrapped subtask template", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"subtask_v1.json": []byte(`{"id": "test_subtask", "task_type": "USER_INPUT", "plugin_properties": {"form_id": "form_1"}, "output_namespace": "out"}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("test_subtask", "subtask_template", "", "mem", "subtask_v1.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("test_subtask", "subtask_template", "", "subtask_v1.json")
 
 		template, err := subtasktemplate.Load(context.Background(), reg, "test_subtask")
 		if err != nil {
@@ -38,7 +37,7 @@ func TestSubTaskTemplateAdapter(t *testing.T) {
 	})
 
 	t.Run("Load missing returns ErrNotFound", func(t *testing.T) {
-		reg := artifact.NewRegistry()
+		reg := artifact.NewRegistry(testutil.MemLoader{})
 		_, err := subtasktemplate.Load(context.Background(), reg, "missing")
 		if !errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)

@@ -15,12 +15,11 @@ import (
 
 func TestTaskTemplateAdapter(t *testing.T) {
 	t.Run("Load returns unwrapped task template", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg"}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("test_task", "task_template", "", "mem", "task_v1.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("test_task", "task_template", "", "task_v1.json")
 
 		template, err := tasktemplate.Load(context.Background(), reg, "test_task")
 		if err != nil {
@@ -35,7 +34,7 @@ func TestTaskTemplateAdapter(t *testing.T) {
 	})
 
 	t.Run("Load missing returns ErrNotFound", func(t *testing.T) {
-		reg := artifact.NewRegistry()
+		reg := artifact.NewRegistry(testutil.MemLoader{})
 		_, err := tasktemplate.Load(context.Background(), reg, "missing")
 		if !errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)

@@ -83,21 +83,19 @@ artifact.Latest[*EmailTemplate](ctx, reg, "welcome")
 ### 2. Wire up at startup
 
 ```go
-reg := artifact.NewRegistry()
-
-// Register loaders (live clients, credentials, base paths)
-reg.RegisterLoader("local", local.New("/etc/configs"))
-reg.RegisterLoader("s3",    s3.New(s3Client, "my-bucket"))
+// One loader is the single source of truth for this registry.
+loader := local.New("/etc/configs")
+reg := artifact.NewRegistry(loader)
 
 // Register artifact rows directly in code...
-reg.RegisterArtifact("welcome_email", "email_template", "v2", "local", "emails/welcome.v2.json")
+reg.RegisterArtifact("welcome_email", "email_template", "v2", "emails/welcome.v2.json")
 
-// ...or load from a manifest file
-cfg, err := artifact.LoadManifestFile("manifest.yaml")
+// ...or load them from the manifest, fetched through the same loader.
+cfg, err := artifact.LoadManifest(ctx, loader)
 artifact.RegisterFromConfig(reg, cfg)
 ```
 
-`RegisterFromConfig` validates that every row's loader type is already registered, so misconfiguration is caught at startup rather than at first access.
+The loader is required — `NewRegistry(nil)` panics. `RegisterFromConfig` validates that each row has an `id`, `kind`, and `path`, so misconfiguration is caught at startup rather than at first access.
 
 ### 3. Fetch
 
@@ -110,28 +108,24 @@ tmpl, err := artifact.Latest[EmailTemplate](ctx, reg, "welcome_email")
 tmpl, err := artifact.Get[EmailTemplate](ctx, reg, "welcome_email", "v2")
 ```
 
-Both calls: resolve loader → fetch bytes → call `Parse` → return typed value.
+Both calls: fetch bytes via the loader → call `Parse` → return typed value.
 
 ---
 
-## Manifest files
+## Manifest file
 
-`LoadManifestFile` accepts JSON or YAML (detected by extension):
+The manifest is a single JSON file named `manifest.json`, resolved at the loader's
+root (`artifact.ManifestFilename`). `LoadManifest` fetches it through the loader,
+so the manifest lives alongside the artifacts it catalogs — one source for both.
+There is no per-row `loader`: the registry has exactly one.
 
-```yaml
-# manifest.yaml
-artifacts:
-  - id: welcome_email
-    kind: email_template
-    version: v2
-    loader: local
-    path: emails/welcome.v2.json
-
-  - id: import_clearance
-    kind: workflow
-    version: v10
-    loader: s3
-    path: workflows/import_clearance.v10.json
+```json
+{
+  "artifacts": [
+    { "id": "welcome_email",   "kind": "email_template", "version": "v2",  "path": "emails/welcome.v2.json" },
+    { "id": "import_clearance", "kind": "workflow",       "version": "v10", "path": "workflows/import_clearance.v10.json" }
+  ]
+}
 ```
 
 ---
@@ -157,7 +151,7 @@ import "github.com/OpenNSW/core/artifact/testutil"
 m := testutil.MemLoader{
     "email/welcome.json": []byte(`{"subject": "Welcome!"}`),
 }
-reg.RegisterLoader("mem", m)
+reg := artifact.NewRegistry(m)
 ```
 
 ---

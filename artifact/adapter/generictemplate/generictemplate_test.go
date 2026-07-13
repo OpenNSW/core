@@ -15,12 +15,11 @@ import (
 
 func TestGenericTemplateAdapter(t *testing.T) {
 	t.Run("Load returns unwrapped raw JSON template", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"cfg_v1.json": []byte(`{"theme": "dark", "timeout": 30}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("my_config", "generic_template", "", "mem", "cfg_v1.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("my_config", "generic_template", "", "cfg_v1.json")
 
 		raw, err := generictemplate.Load(context.Background(), reg, "my_config")
 		if err != nil {
@@ -33,12 +32,11 @@ func TestGenericTemplateAdapter(t *testing.T) {
 	})
 
 	t.Run("Load invalid JSON returns error", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"cfg_invalid.json": []byte(`{invalid-json}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("my_config", "generic_template", "", "mem", "cfg_invalid.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("my_config", "generic_template", "", "cfg_invalid.json")
 
 		_, err := generictemplate.Load(context.Background(), reg, "my_config")
 		if err == nil {
@@ -47,7 +45,7 @@ func TestGenericTemplateAdapter(t *testing.T) {
 	})
 
 	t.Run("Load missing returns ErrNotFound", func(t *testing.T) {
-		reg := artifact.NewRegistry()
+		reg := artifact.NewRegistry(testutil.MemLoader{})
 		_, err := generictemplate.Load(context.Background(), reg, "missing")
 		if !errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)

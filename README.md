@@ -98,10 +98,10 @@ func Build(cfg *Config) (*App, error) {
     // 1. Database
     db, err := database.New(cfg.Database)
 
-    // 2. Artifact registry
-    registry := artifact.NewRegistry()
-    registry.RegisterLoader("local", local.New("configs"))
-    manifest, _ := artifact.LoadManifestFile("configs/manifest.json")
+    // 2. Artifact registry — one loader is the single source of truth
+    artifactLoader := local.New("configs")
+    registry := artifact.NewRegistry(artifactLoader)
+    manifest, _ := artifact.LoadManifest(ctx, artifactLoader) // reads configs/manifest.json
     artifact.RegisterFromConfig(registry, manifest)
 
     // 3. Payment
