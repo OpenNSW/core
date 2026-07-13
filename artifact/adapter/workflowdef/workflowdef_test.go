@@ -15,12 +15,11 @@ import (
 
 func TestWorkflowDefAdapter(t *testing.T) {
 	t.Run("Load returns unwrapped workflow definition with fields populated", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"wf_v1.json": []byte(`{"id": "import_clearance", "name": "Import Clearance Process", "version": 1}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("import_clearance", "workflow", "", "mem", "wf_v1.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("import_clearance", "workflow", "", "wf_v1.json")
 
 		def, err := workflowdef.Load(context.Background(), reg, "import_clearance")
 		if err != nil {
@@ -38,14 +37,13 @@ func TestWorkflowDefAdapter(t *testing.T) {
 	})
 
 	t.Run("LoadVersion returns pinned version", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"wf_v3.json": []byte(`{"id": "import_clearance", "name": "Clearance V3", "version": 3}`),
 			"wf_v4.json": []byte(`{"id": "import_clearance", "name": "Clearance V4", "version": 4}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("import_clearance", "workflow", "v3", "mem", "wf_v3.json")
-		reg.RegisterArtifact("import_clearance", "workflow", "v4", "mem", "wf_v4.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("import_clearance", "workflow", "v3", "wf_v3.json")
+		reg.RegisterArtifact("import_clearance", "workflow", "v4", "wf_v4.json")
 
 		def, err := workflowdef.LoadVersion(context.Background(), reg, "import_clearance", "v3")
 		if err != nil {
@@ -60,16 +58,15 @@ func TestWorkflowDefAdapter(t *testing.T) {
 	})
 
 	t.Run("Load returns latest version when multiple exist", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"wf_v1.json":  []byte(`{"id": "import_clearance", "name": "Clearance V1", "version": 1}`),
 			"wf_v2.json":  []byte(`{"id": "import_clearance", "name": "Clearance V2", "version": 2}`),
 			"wf_v10.json": []byte(`{"id": "import_clearance", "name": "Clearance V10", "version": 10}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("import_clearance", "workflow", "v1", "mem", "wf_v1.json")
-		reg.RegisterArtifact("import_clearance", "workflow", "v2", "mem", "wf_v2.json")
-		reg.RegisterArtifact("import_clearance", "workflow", "v10", "mem", "wf_v10.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("import_clearance", "workflow", "v1", "wf_v1.json")
+		reg.RegisterArtifact("import_clearance", "workflow", "v2", "wf_v2.json")
+		reg.RegisterArtifact("import_clearance", "workflow", "v10", "wf_v10.json")
 
 		def, err := workflowdef.Load(context.Background(), reg, "import_clearance")
 		if err != nil {
@@ -81,12 +78,11 @@ func TestWorkflowDefAdapter(t *testing.T) {
 	})
 
 	t.Run("Missing ID returns error", func(t *testing.T) {
-		reg := artifact.NewRegistry()
 		m := testutil.MemLoader{
 			"wf_invalid.json": []byte(`{"name": "No ID Process"}`),
 		}
-		reg.RegisterLoader("mem", m)
-		reg.RegisterArtifact("import_clearance", "workflow", "", "mem", "wf_invalid.json")
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("import_clearance", "workflow", "", "wf_invalid.json")
 
 		_, err := workflowdef.Load(context.Background(), reg, "import_clearance")
 		if err == nil {
@@ -95,7 +91,7 @@ func TestWorkflowDefAdapter(t *testing.T) {
 	})
 
 	t.Run("Missing artifact returns ErrNotFound", func(t *testing.T) {
-		reg := artifact.NewRegistry()
+		reg := artifact.NewRegistry(testutil.MemLoader{})
 		_, err := workflowdef.Load(context.Background(), reg, "non_existent")
 		if !errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)

@@ -153,7 +153,6 @@ func newTestTaskManager(db store.TaskStore, registry *artifact.Registry, tm engi
 func noopCallback(_, _, _ string, _ map[string]any) error { return nil }
 
 func newTestRegistry() *artifact.Registry {
-	reg := artifact.NewRegistry()
 	m := testutil.MemLoader{
 		"task_test_template.json": []byte(`{
 			"id": "test_template",
@@ -193,13 +192,13 @@ func newTestRegistry() *artifact.Registry {
 			}
 		}`),
 	}
-	reg.RegisterLoader("mem", m)
-	reg.RegisterArtifact("test_template", "task_template", "", "mem", "task_test_template.json")
-	reg.RegisterArtifact("test_workflow_v1", "workflow", "", "mem", "wf_test_workflow_v1.json")
-	reg.RegisterArtifact("test_render_config", "generic_template", "", "mem", "generic_render_config.json")
-	reg.RegisterArtifact("generic_user_input", "subtask_template", "", "mem", "subtask_generic_user_input.json")
-	reg.RegisterArtifact("generic_user_input_with_extensions", "subtask_template", "", "mem", "subtask_generic_user_input_with_extensions.json")
-	reg.RegisterArtifact("generic_external_review", "subtask_template", "", "mem", "subtask_generic_external_review.json")
+	reg := artifact.NewRegistry(m)
+	reg.RegisterArtifact("test_template", "task_template", "", "task_test_template.json")
+	reg.RegisterArtifact("test_workflow_v1", "workflow", "", "wf_test_workflow_v1.json")
+	reg.RegisterArtifact("test_render_config", "generic_template", "", "generic_render_config.json")
+	reg.RegisterArtifact("generic_user_input", "subtask_template", "", "subtask_generic_user_input.json")
+	reg.RegisterArtifact("generic_user_input_with_extensions", "subtask_template", "", "subtask_generic_user_input_with_extensions.json")
+	reg.RegisterArtifact("generic_external_review", "subtask_template", "", "subtask_generic_external_review.json")
 	return reg
 }
 

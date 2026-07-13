@@ -6,7 +6,6 @@ package artifact
 import (
 	"context"
 	"fmt"
-	"log/slog"
 )
 
 // Key is an artifact's full identity: id + kind + version.
@@ -17,11 +16,10 @@ type Key struct {
 	Version string
 }
 
-// entry is one manifest row's payload: which loader fetches it, and the path to
-// hand that loader. path is opaque to the registry — only the loader interprets it.
+// entry is one manifest row's payload: the path handed to the loader. path is
+// opaque to the registry — only the loader interprets it.
 type entry struct {
-	loaderType string
-	path       string
+	path string
 }
 
 // idKind is the index key under which all versions of one artifact are grouped.
@@ -37,10 +35,13 @@ type Loader interface {
 	Load(ctx context.Context, path string) ([]byte, error)
 }
 
-// Registry holds loaders, the manifest (grouped so all versions of an id are
-// enumerable for Latest), and the version comparator used by Latest.
+// Registry resolves artifacts by identity. It is backed by a single loader — the
+// one source of truth for this deployment (local disk, one bucket, one repo) —
+// plus the manifest (grouped so all versions of an id are enumerable for Latest)
+// and the version comparator used by Latest. Created once at startup and shared
+// read-only at runtime.
 type Registry struct {
-	loaders  map[string]Loader           // loaderType -> how to fetch
+	loader   Loader                      // the single source, injected at construction
 	manifest map[idKind]map[string]entry // (id,kind)  -> version -> entry
 	less     func(a, b string) bool      // version "less than" (see version.go)
 }
@@ -56,10 +57,16 @@ func WithVersionComparator(less func(a, b string) bool) Option {
 	}
 }
 
-// NewRegistry creates an empty registry.
-func NewRegistry(opts ...Option) *Registry {
+// NewRegistry creates a registry backed by a single loader. The loader is the
+// source every artifact — and the manifest itself — is fetched from; it is
+// required, because a registry with no source can never resolve anything. Panic
+// on a nil loader (a startup wiring bug, not runtime input).
+func NewRegistry(loader Loader, opts ...Option) *Registry {
+	if loader == nil {
+		panic("artifact: nil loader passed to NewRegistry")
+	}
 	r := &Registry{
-		loaders:  make(map[string]Loader),
+		loader:   loader,
 		manifest: make(map[idKind]map[string]entry),
 		less:     defaultVersionLess,
 	}
@@ -69,32 +76,17 @@ func NewRegistry(opts ...Option) *Registry {
 	return r
 }
 
-// RegisterLoader registers a loader under a type name. Panic on duplicate type
-// (a startup wiring bug, not runtime input).
-func (r *Registry) RegisterLoader(loaderType string, l Loader) {
-	if l == nil {
-		panic(fmt.Sprintf("nil loader registered for type: %s", loaderType))
-	}
-	if _, ok := r.loaders[loaderType]; ok {
-		panic(fmt.Sprintf("loader type already registered: %s", loaderType))
-	}
-	r.loaders[loaderType] = l
-	slog.Info("artifact loader registered", "loader_type", loaderType)
-}
-
-// RegisterArtifact adds one manifest row. version may be "" for unversioned
-// artifacts. Multiple versions of the same (id, kind) accumulate.
-func (r *Registry) RegisterArtifact(id string, kind Kind, version, loaderType, path string) {
+// RegisterArtifact adds one manifest row: the path the loader resolves for this
+// (id, kind, version). version may be "" for unversioned artifacts. Multiple
+// versions of the same (id, kind) accumulate.
+func (r *Registry) RegisterArtifact(id string, kind Kind, version, path string) {
 	ik := idKind{ID: id, Kind: kind}
 	versions, ok := r.manifest[ik]
 	if !ok {
 		versions = make(map[string]entry)
 		r.manifest[ik] = versions
 	}
-	versions[version] = entry{
-		loaderType: loaderType,
-		path:       path,
-	}
+	versions[version] = entry{path: path}
 }
 
 // Get fetches and parses a specific version of an artifact, as type T. T drives
@@ -138,16 +130,11 @@ func Latest[T Artifact](ctx context.Context, r *Registry, id string) (T, error) 
 	return loadAndParse[T](ctx, r, versions[best], id, kind, best)
 }
 
-// loadAndParse resolves the loader, fetches bytes, and parses into T. Shared by
-// Get and Latest.
+// loadAndParse fetches bytes through the registry's loader and parses into T.
+// Shared by Get and Latest.
 func loadAndParse[T Artifact](ctx context.Context, r *Registry, e entry, id string, kind Kind, version string) (T, error) {
 	var zero T
-	loader, ok := r.loaders[e.loaderType]
-	if !ok {
-		return zero, fmt.Errorf("artifact %s/%s/%s wants loader %q, not registered",
-			id, kind, version, e.loaderType)
-	}
-	raw, err := loader.Load(ctx, e.path)
+	raw, err := r.loader.Load(ctx, e.path)
 	if err != nil {
 		// Includes loader ErrNotFound (surfaced; callers can errors.Is it) and
 		// real IO failures.

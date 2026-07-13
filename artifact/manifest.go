@@ -4,60 +4,58 @@
 package artifact
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-
-	"gopkg.in/yaml.v3"
 )
 
+// ManifestFilename is the fixed name of the manifest, resolved at the loader's
+// root. The manifest lives alongside the artifacts it catalogs, so a single
+// loader resolves both; consumers do not choose its location. Point the loader's
+// base (Root/Bucket/Repo) at wherever the manifest and artifacts reside.
+const ManifestFilename = "manifest.json"
+
 type ManifestConfig struct {
-	Artifacts []ManifestRow `json:"artifacts" yaml:"artifacts"`
+	Artifacts []ManifestRow `json:"artifacts"`
 }
 
 type ManifestRow struct {
-	ID      string `json:"id"      yaml:"id"`
-	Kind    Kind   `json:"kind"    yaml:"kind"`
-	Version string `json:"version" yaml:"version"` // "" allowed for unversioned
-	Loader  string `json:"loader"  yaml:"loader"`  // loader type name, e.g. "s3"
-	Path    string `json:"path"    yaml:"path"`
+	ID      string `json:"id"`
+	Kind    Kind   `json:"kind"`
+	Version string `json:"version"` // "" allowed for unversioned
+	Path    string `json:"path"`
 }
 
-// RegisterFromConfig applies every row via RegisterArtifact. It does NOT register
-// loaders (those need live clients/credentials, wired in code). Return an error
-// if a row references a loader type not yet registered, so misconfiguration is
-// caught at startup.
+// RegisterFromConfig applies every row via RegisterArtifact. Rows are validated
+// so misconfiguration is caught at startup rather than at first access: id, kind,
+// and path are all required (version may be "" for unversioned artifacts). There
+// is no per-row loader — the registry has a single loader, so a row only names
+// what to fetch, never how.
 func RegisterFromConfig(r *Registry, cfg ManifestConfig) error {
-	for _, row := range cfg.Artifacts {
-		if _, ok := r.loaders[row.Loader]; !ok {
-			return fmt.Errorf("manifest row references unregistered loader type %q for artifact %s/%s", row.Loader, row.ID, row.Kind)
+	for i, row := range cfg.Artifacts {
+		if row.ID == "" || row.Kind == "" || row.Path == "" {
+			return fmt.Errorf("manifest row %d (%q/%q): id, kind, and path are all required", i, row.ID, row.Kind)
 		}
-		r.RegisterArtifact(row.ID, row.Kind, row.Version, row.Loader, row.Path)
+		r.RegisterArtifact(row.ID, row.Kind, row.Version, row.Path)
 	}
 	slog.Info("artifact manifest registered", "count", len(cfg.Artifacts))
 	return nil
 }
 
-// LoadManifestFile reads + unmarshals a JSON or YAML manifest file.
-func LoadManifestFile(path string) (ManifestConfig, error) {
+// LoadManifest fetches and unmarshals the manifest from the artifact source
+// itself, through the same loader that fetches the artifacts — so the catalog
+// and its artifacts share one origin. The manifest always lives at
+// ManifestFilename ("manifest.json") relative to the loader's root; its location
+// is a fixed convention, not a parameter.
+func LoadManifest(ctx context.Context, l Loader) (ManifestConfig, error) {
 	var cfg ManifestConfig
-	data, err := os.ReadFile(path)
+	data, err := l.Load(ctx, ManifestFilename)
 	if err != nil {
-		return cfg, fmt.Errorf("read manifest file: %w", err)
+		return cfg, fmt.Errorf("load manifest %q: %w", ManifestFilename, err)
 	}
-
-	ext := filepath.Ext(path)
-	if ext == ".yaml" || ext == ".yml" {
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			return cfg, fmt.Errorf("unmarshal manifest YAML: %w", err)
-		}
-	} else {
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return cfg, fmt.Errorf("unmarshal manifest JSON: %w", err)
-		}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("unmarshal manifest %q: %w", ManifestFilename, err)
 	}
-
 	return cfg, nil
 }
