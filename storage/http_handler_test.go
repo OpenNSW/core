@@ -205,7 +205,7 @@ func TestUpload_ContentTypes(t *testing.T) {
 		want     int
 	}{
 		{name: "xlsx allowed", filename: "bags.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", want: http.StatusOK},
-		{name: "legacy xls allowed", filename: "bags.xls", mimeType: "application/vnd.ms-excel", want: http.StatusOK},
+		{name: "legacy xls prohibited (macro vector)", filename: "bags.xls", mimeType: "application/vnd.ms-excel", want: http.StatusUnsupportedMediaType},
 		{name: "executable prohibited", filename: "evil.exe", mimeType: "application/x-msdownload", want: http.StatusUnsupportedMediaType},
 	}
 
