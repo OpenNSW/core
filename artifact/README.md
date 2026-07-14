@@ -132,10 +132,10 @@ There is no per-row `loader`: the registry has exactly one.
 
 ## Built-in loaders
 
-| Package                   | Constructor                      | Description                                                                                                                                       |
-|---------------------------|----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
-| `artifact/loaders/local`  | `local.New(local.Config{Root})`  | Reads files from disk relative to `Root`; validates `Root` exists and is a directory                                                              |
-| `artifact/loaders/s3`     | `s3.New(client, bucket)`         | Reads objects from an S3 bucket                                                                                                                   |
+| Package                   | Constructor                      | Description                                                                                                                                                                                                                                              |
+|---------------------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `artifact/loaders/local`  | `local.New(local.Config{Root})`  | Reads files from disk relative to `Root`; validates `Root` exists and is a directory                                                                                                                                                                     |
+| `artifact/loaders/s3`     | `s3.New(ctx, s3.Config{...})`    | Reads objects from an S3 bucket; builds the client from `Region`/`Endpoint`/credentials (S3-compatible stores supported); `Prefix` scopes an in-bucket sub-folder for multi-deployment buckets                                                           |
 | `artifact/loaders/github` | `github.New(github.Config{...})` | Reads files from a GitHub repo at a pinned `Ref` over the Contents API (`net/http`); `BasePath` scopes a sub-directory for multi-deployment repos. Set `UseRawHost` to fetch public repos via `raw.githubusercontent.com` (no token, no REST rate limit) |
 
 Both wrap their underlying "not found" errors as `artifact.ErrNotFound` so callers can use `errors.Is`.
