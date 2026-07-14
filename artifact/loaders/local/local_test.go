@@ -16,7 +16,10 @@ import (
 
 func TestLocalFileLoader(t *testing.T) {
 	tempDir := t.TempDir()
-	loader := local.New(tempDir)
+	loader, err := local.New(local.Config{Root: tempDir})
+	if err != nil {
+		t.Fatalf("construct loader: %v", err)
+	}
 
 	t.Run("Load existing file", func(t *testing.T) {
 		filePath := filepath.Join(tempDir, "test.json")
@@ -45,6 +48,20 @@ func TestLocalFileLoader(t *testing.T) {
 		_, err := loader.Load(context.Background(), "../local_test.go")
 		if !errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected ErrNotFound for traversing path, got %v", err)
+		}
+	})
+}
+
+func TestNew(t *testing.T) {
+	t.Run("valid Config returns loader", func(t *testing.T) {
+		if _, err := local.New(local.Config{Root: t.TempDir()}); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("invalid Config returns error", func(t *testing.T) {
+		if _, err := local.New(local.Config{}); err == nil {
+			t.Error("expected error for invalid Config, got nil")
 		}
 	})
 }

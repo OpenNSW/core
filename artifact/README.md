@@ -84,7 +84,7 @@ artifact.Latest[*EmailTemplate](ctx, reg, "welcome")
 
 ```go
 // One loader is the single source of truth for this registry.
-loader := local.New("/etc/configs")
+loader, err := local.New(local.Config{Root: "/etc/configs"})
 reg := artifact.NewRegistry(loader)
 
 // Register artifact rows directly in code...
@@ -132,10 +132,10 @@ There is no per-row `loader`: the registry has exactly one.
 
 ## Built-in loaders
 
-| Package | Constructor | Description |
-|---------|-------------|-------------|
-| `artifact/loaders/local` | `local.New(root string)` | Reads files from disk relative to `root` |
-| `artifact/loaders/s3`    | `s3.New(client, bucket)` | Reads objects from an S3 bucket |
+| Package                  | Constructor                     | Description                                                                          |
+|--------------------------|---------------------------------|--------------------------------------------------------------------------------------|
+| `artifact/loaders/local` | `local.New(local.Config{Root})` | Reads files from disk relative to `Root`; validates `Root` exists and is a directory |
+| `artifact/loaders/s3`    | `s3.New(client, bucket)`        | Reads objects from an S3 bucket                                                      |
 
 Both wrap their underlying "not found" errors as `artifact.ErrNotFound` so callers can use `errors.Is`.
 

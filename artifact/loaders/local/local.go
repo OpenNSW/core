@@ -15,15 +15,20 @@ import (
 	"github.com/OpenNSW/core/artifact"
 )
 
-type LocalFileLoader struct {
+type FileLoader struct {
 	Root string
 }
 
-func New(root string) LocalFileLoader {
-	return LocalFileLoader{Root: root}
+// New validates cfg and constructs a FileLoader. It returns an error if
+// the configuration is invalid, matching the temporal.NewClient(cfg) shape.
+func New(cfg Config) (FileLoader, error) {
+	if err := cfg.Validate(); err != nil {
+		return FileLoader{}, err
+	}
+	return FileLoader(cfg), nil
 }
 
-func (l LocalFileLoader) Load(ctx context.Context, path string) ([]byte, error) {
+func (l FileLoader) Load(ctx context.Context, path string) ([]byte, error) {
 	fullPath := filepath.Join(l.Root, path)
 	rel, err := filepath.Rel(l.Root, fullPath)
 	if err != nil || strings.HasPrefix(rel, "..") {

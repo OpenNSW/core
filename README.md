@@ -99,7 +99,7 @@ func Build(cfg *Config) (*App, error) {
     db, err := database.New(cfg.Database)
 
     // 2. Artifact registry — one loader is the single source of truth
-    artifactLoader := local.New("configs")
+    artifactLoader, _ := local.New(local.Config{Root: "configs"})
     registry := artifact.NewRegistry(artifactLoader)
     manifest, _ := artifact.LoadManifest(ctx, artifactLoader) // reads configs/manifest.json
     artifact.RegisterFromConfig(registry, manifest)
