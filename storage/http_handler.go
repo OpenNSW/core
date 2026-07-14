@@ -31,6 +31,10 @@ var allowedContentTypes = map[string]struct{}{
 	"image/png":       {},
 	"image/gif":       {},
 	"image/webp":      {},
+	// .xlsx only: the OOXML spreadsheet format cannot carry VBA macros
+	// (macro-enabled workbooks use .xlsm), unlike legacy .xls which is a
+	// known malware vector and stays prohibited.
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
 }
 
 func isAllowedContentType(ct string) bool {

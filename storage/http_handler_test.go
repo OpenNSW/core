@@ -197,6 +197,46 @@ func TestUpload_Unauthorized(t *testing.T) {
 	}
 }
 
+func TestUpload_ContentTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		mimeType string
+		want     int
+	}{
+		{name: "xlsx allowed", filename: "bags.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", want: http.StatusOK},
+		{name: "legacy xls prohibited (macro vector)", filename: "bags.xls", mimeType: "application/vnd.ms-excel", want: http.StatusUnsupportedMediaType},
+		{name: "executable prohibited", filename: "evil.exe", mimeType: "application/x-msdownload", want: http.StatusUnsupportedMediaType},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHTTPHandler(NewService(&MockDriver{}))
+
+			body := map[string]any{
+				"filename":  tt.filename,
+				"mime_type": tt.mimeType,
+				"size":      1024,
+			}
+			jsonBody, _ := json.Marshal(body)
+
+			req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+			ctx := withAuthContext(req.Context(), &authn.AuthContext{
+				User: &authn.UserContext{ID: "trader-1"},
+			})
+			req = req.WithContext(ctx)
+			rec := httptest.NewRecorder()
+
+			handler.Upload(rec, req)
+
+			if rec.Code != tt.want {
+				t.Fatalf("expected status %d, got %d. Body: %s", tt.want, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestUpload_Success(t *testing.T) {
 	mock := &MockDriver{}
 	handler := NewHTTPHandler(NewService(mock))
