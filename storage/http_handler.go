@@ -26,11 +26,13 @@ func validStorageKey(key string) bool {
 }
 
 var allowedContentTypes = map[string]struct{}{
-	"application/pdf": {},
-	"image/jpeg":      {},
-	"image/png":       {},
-	"image/gif":       {},
-	"image/webp":      {},
+	"application/pdf":          {},
+	"image/jpeg":               {},
+	"image/png":                {},
+	"image/gif":                {},
+	"image/webp":               {},
+	"application/vnd.ms-excel": {},
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
 }
 
 func isAllowedContentType(ct string) bool {
