@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -762,10 +763,15 @@ func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
 	}
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf").Return(childDef, nil)
 
+	// The test env runs activity mocks on their own goroutines, so if this fix regresses and
+	// multiple branches fire the hook concurrently, the append would race under -race. Guard it.
+	var mu sync.Mutex
 	var completedIDs []string
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, workflowID string, _ map[string]any) error {
+			mu.Lock()
 			completedIDs = append(completedIDs, workflowID)
+			mu.Unlock()
 			return nil
 		})
 
