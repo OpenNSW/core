@@ -136,6 +136,34 @@ func TestLoadTraversalWithoutPrefixReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestLoadEmptyKeyReturnsErrNotFound(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte("x"))
+	}))
+	t.Cleanup(srv.Close)
+
+	// With a prefix, an empty or "." key must not collapse to the prefix itself.
+	l, err := New(context.Background(), Config{
+		Bucket: testBucket, Region: "us-east-1", Endpoint: srv.URL,
+		AccessKey: "ak", SecretKey: "sk", Prefix: "deployment-a",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, key := range []string{"", ".", "   "} {
+		_, err := l.Load(context.Background(), key)
+		if !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("Load(%q): expected ErrNotFound, got %v", key, err)
+		}
+	}
+	if hits != 0 {
+		t.Errorf("expected no S3 request for empty keys, got %d", hits)
+	}
+}
+
 func TestLoadWithPrefix(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

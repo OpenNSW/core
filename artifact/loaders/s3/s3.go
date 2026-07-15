@@ -92,6 +92,11 @@ func (l *Loader) Load(ctx context.Context, p string) ([]byte, error) {
 // escapes it (e.g. via ".."), so one deployment's loader cannot read another's
 // objects in a shared bucket.
 func (l *Loader) resolve(p string) (string, error) {
+	// Reject empty or dot inputs up front: with a non-empty prefix, joining
+	// them would collapse to the prefix itself and pass the escape check.
+	if strings.TrimSpace(p) == "" || p == "." {
+		return "", fmt.Errorf("%w: empty key", artifact.ErrNotFound)
+	}
 	full := path.Join(l.prefix, p)
 	if l.prefix == "" {
 		if full == ".." || strings.HasPrefix(full, "../") {
@@ -100,6 +105,7 @@ func (l *Loader) resolve(p string) (string, error) {
 	} else if full != l.prefix && !strings.HasPrefix(full, l.prefix+"/") {
 		return "", fmt.Errorf("%w: key %q escapes prefix %q", artifact.ErrNotFound, p, l.prefix)
 	}
+	// Defensive: a join like "a/.." can still collapse to "." with no prefix.
 	if full == "" || full == "." {
 		return "", fmt.Errorf("%w: empty key", artifact.ErrNotFound)
 	}
