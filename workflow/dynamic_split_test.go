@@ -4,7 +4,11 @@
 package engine
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -702,4 +706,132 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 	groupBWaitResult, ok := groupBResults[1].(map[string]any)
 	s.True(ok, "group B wait branch result should be map[string]any")
 	s.Equal("B", groupBWaitResult["received_tag"], "group B's waiter must receive group B's own broadcast, not group A's")
+}
+
+// splitWithChildEndNodeDefs returns a minimal master workflow that fans out to two trivial
+// (start -> end) child branches, used by the completion-hook regression tests below.
+func splitWithChildEndNodeDefs() (master WorkflowDefinition, initialVars map[string]any) {
+	master = WorkflowDefinition{
+		ID: "master_wf",
+		Nodes: []Node{
+			{ID: "m_start", Type: NodeTypeStart},
+			{
+				ID:             "m_fanout",
+				Type:           NodeTypeSplitTask,
+				TaskTemplateID: "child_wf",
+				SplitTask: &SplitTaskConfig{
+					Mode:          SplitModeSameTemplate,
+					ItemsVariable: "items",
+					FailureMode:   FailureModeFailFast,
+				},
+			},
+			{ID: "m_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "me1", SourceID: "m_start", TargetID: "m_fanout"},
+			{ID: "me2", SourceID: "m_fanout", TargetID: "m_end"},
+		},
+	}
+	initialVars = map[string]any{
+		"items": []map[string]any{
+			{"branch_id": "b1", "payload": map[string]any{}},
+			{"branch_id": "b2", "payload": map[string]any{}},
+		},
+	}
+	return master, initialVars
+}
+
+// TestChildBranchEndNodeDoesNotFireCompletionHook asserts the WorkflowCompletedActivity
+// completion hook fires exactly once — for the top-level workflow — and never for the child
+// branches spawned by a SPLIT_TASK node. The hook is documented as running when "the overall
+// workflow" completes; firing it per-branch (with each branch's synthetic child workflow ID)
+// is both semantically wrong and a hang risk (see the sibling test below).
+func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
+
+	childDef := WorkflowDefinition{
+		ID: "child_wf",
+		Nodes: []Node{
+			{ID: "c_start", Type: NodeTypeStart},
+			{ID: "c_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{{ID: "ce1", SourceID: "c_start", TargetID: "c_end"}},
+	}
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf").Return(childDef, nil)
+
+	// The test env runs activity mocks on their own goroutines, so if this fix regresses and
+	// multiple branches fire the hook concurrently, the append would race under -race. Guard it.
+	var mu sync.Mutex
+	var completedIDs []string
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any) error {
+			mu.Lock()
+			completedIDs = append(completedIDs, workflowID)
+			mu.Unlock()
+			return nil
+		})
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "master-1"})
+
+	masterDef, initialVars := splitWithChildEndNodeDefs()
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	// Only the top-level workflow fires the hook — not the two child branches.
+	s.Equal([]string{"master-1"}, completedIDs,
+		"completion hook must fire once for the top-level workflow only, not per child branch")
+}
+
+// TestChildBranchCompletionHandlerErrorDoesNotHang is the direct regression for the reported bug:
+// when the host's completion handler errors on IDs it doesn't recognize (child branches carry a
+// synthetic ID like master-1--m_fanout--b1-0 that isn't in the host's registry), the overall
+// workflow must still complete. Before the fix, each child branch invoked the hook at its END
+// node; the error there parked the branch for admin, so it never completed and the parent's
+// monitorChildWorkflows blocked forever (ScheduleToClose deadline exceeded).
+func (s *NSWEngineTestSuite) TestChildBranchCompletionHandlerErrorDoesNotHang() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
+
+	childDef := WorkflowDefinition{
+		ID: "child_wf",
+		Nodes: []Node{
+			{ID: "c_start", Type: NodeTypeStart},
+			{ID: "c_end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{{ID: "ce1", SourceID: "c_start", TargetID: "c_end"}},
+	}
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf").Return(childDef, nil)
+
+	// The host recognizes only the top-level workflow; synthetic child IDs (which contain "--")
+	// return an error, as a real DB-backed completion handler keyed by workflow ID would.
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any) error {
+			if strings.Contains(workflowID, "--") {
+				return fmt.Errorf("workflow %s not found in host registry", workflowID)
+			}
+			return nil
+		})
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "master-1"})
+
+	masterDef, initialVars := splitWithChildEndNodeDefs()
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	var resultState WorkflowInstance
+	s.NoError(env.GetWorkflowResult(&resultState))
+	s.Equal(StatusCompleted, resultState.Status)
 }

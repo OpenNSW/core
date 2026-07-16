@@ -233,11 +233,21 @@ func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeI
 	return g.transitionTo(ctx, outEdges[0])
 }
 
-// handleEndNode fires WorkflowCompletedActivity and marks itself Completed.
+// handleEndNode fires WorkflowCompletedActivity (top-level workflows only) and marks itself Completed.
 func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInfo) error {
-	err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("unable to complete workflow: %w", err)
+	// The completion hook fires only for the top-level workflow. A child workflow spawned by a
+	// SPLIT_TASK node (any execution started with a Temporal parent) must not fire it: the hook is
+	// documented as running when "the overall workflow" completes, it would be invoked with the
+	// branch's synthetic child workflow ID (parentID--nodeID--branchID) that the host doesn't
+	// recognize, and — critically — if the host handler errors on that unknown ID the END node
+	// parks for admin and the branch never completes, hanging the parent's monitorChildWorkflows
+	// forever. The parent aggregates each branch's result and fires the hook once when its own END
+	// node is reached.
+	if workflow.GetInfo(ctx).ParentWorkflowExecution == nil {
+		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("unable to complete workflow: %w", err)
+		}
 	}
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
