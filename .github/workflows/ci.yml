@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: './go.mod'
           cache-dependency-path: go.sum
@@ -47,7 +47,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: './go.mod'
           cache-dependency-path: go.sum
@@ -65,7 +65,7 @@ jobs:
         continue-on-error: true
 
       - name: Run Gosec
-        uses: securego/gosec@v2.27.1
+        uses: securego/gosec@v2.28.0
         with:
           args: -no-fail -fmt sarif -out results.sarif ./...
 
@@ -85,7 +85,7 @@ jobs:
         working-directory: remote
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'remote/go.mod'
           cache-dependency-path: remote/go.sum
@@ -116,7 +116,7 @@ jobs:
         working-directory: payment
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'payment/go.mod'
           cache-dependency-path: payment/go.sum
@@ -147,7 +147,7 @@ jobs:
         working-directory: database
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'database/go.mod'
           cache-dependency-path: database/go.sum
@@ -178,7 +178,7 @@ jobs:
         working-directory: authz
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'authz/go.mod'
           cache-dependency-path: authz/go.mod
@@ -211,7 +211,7 @@ jobs:
         working-directory: pagination
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'pagination/go.mod'
           cache-dependency-path: pagination/go.mod
