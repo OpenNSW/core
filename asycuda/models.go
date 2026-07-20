@@ -42,6 +42,11 @@ func (r DocumentReference) IsZero() bool {
 	return r.Year == "" && r.Office == "" && r.Serial == "" && r.Number == 0
 }
 
+// IsComplete reports whether all fields of the reference are populated with valid values.
+func (r DocumentReference) IsComplete() bool {
+	return r.Year != "" && r.Office != "" && r.Serial != "" && r.Number > 0
+}
+
 // --------------------------------------------------------
 // §7.2 — CDN Integration Result callback DTO
 // --------------------------------------------------------
@@ -91,9 +96,9 @@ func (r CDNIntegrationResultRequest) validate() error {
 	if r.ProcessAt.IsZero() {
 		return errors.New("processAt is required")
 	}
-	// When integration succeeds the payload MUST carry a cdnRef.
-	if r.Integrated && r.Payload.CDNRef.IsZero() {
-		return errors.New("payload.cdnRef is required when integrated is true")
+	// When integration succeeds the payload MUST carry a complete cdnRef.
+	if r.Integrated && !r.Payload.CDNRef.IsComplete() {
+		return errors.New("payload.cdnRef must be fully populated when integrated is true")
 	}
 	return nil
 }
@@ -130,8 +135,8 @@ func (r CDNAcknowledgmentRequest) validate() error {
 	if r.ProcessAt.IsZero() {
 		return errors.New("processAt is required")
 	}
-	if r.Payload.CDNRef.IsZero() {
-		return errors.New("payload.cdnRef is required")
+	if !r.Payload.CDNRef.IsComplete() {
+		return errors.New("payload.cdnRef must be fully populated")
 	}
 	return nil
 }
