@@ -136,9 +136,8 @@ func (s *cdnWebhookService) ProcessAcknowledgment(ctx context.Context, req CDNAc
 		return fmt.Errorf("cdnRef %v: %w", ref, ErrDispatchNoteNotFound)
 	}
 
-	// Idempotency: If already acknowledged, ignore duplicate callback.
 	if note.Status == DispatchNoteStatusAcknowledged {
-		slog.InfoContext(ctx, "dispatch note already acknowledged, ignoring duplicate callback", "id", note.ID)
+		slog.InfoContext(ctx, "dispatch note already acknowledged, ignoring duplicate callback", "cdn_ref", ref)
 		return nil
 	}
 
