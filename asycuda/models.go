@@ -151,10 +151,10 @@ type DispatchNote struct {
 	ID        string             `json:"id" gorm:"type:text;not null;primaryKey"`
 	EdgID     string             `json:"edg_id" gorm:"type:text;not null;uniqueIndex"` // Correlation UUID from submission
 	Status    DispatchNoteStatus `json:"status" gorm:"type:text;not null;index"`
-	CDNYear   string             `json:"cdn_year"`
-	CDNOffice string             `json:"cdn_office"`
-	CDNSerial string             `json:"cdn_serial"`
-	CDNNumber int                `json:"cdn_number"`
+	CDNYear   string             `json:"cdn_year" gorm:"index:idx_cdn_ref"`
+	CDNOffice string             `json:"cdn_office" gorm:"index:idx_cdn_ref"`
+	CDNSerial string             `json:"cdn_serial" gorm:"index:idx_cdn_ref"`
+	CDNNumber int                `json:"cdn_number" gorm:"index:idx_cdn_ref"`
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 }
