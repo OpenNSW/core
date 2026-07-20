@@ -59,18 +59,12 @@ func (s *cdnWebhookService) ProcessIntegrationResult(ctx context.Context, req CD
 		return fmt.Errorf("edgId %s: %w", req.EdgID, ErrDispatchNoteNotFound)
 	}
 
-	// If the note is already acknowledged, do not overwrite its status.
-	if note.Status == DispatchNoteStatusAcknowledged {
-		slog.InfoContext(ctx, "dispatch note already acknowledged, ignoring integration result", "edg_id", req.EdgID)
+	if note.Status == DispatchNoteStatusIntegrated || note.Status == DispatchNoteStatusAcknowledged {
+		slog.InfoContext(ctx, "dispatch note already processed, ignoring integration result", "edg_id", req.EdgID, "status", note.Status)
 		return nil
 	}
 
 	if req.Integrated {
-		// If already integrated, treat as idempotent success.
-		if note.Status == DispatchNoteStatusIntegrated {
-			slog.InfoContext(ctx, "dispatch note already integrated, ignoring duplicate callback", "edg_id", req.EdgID)
-			return nil
-		}
 
 		note.Status = DispatchNoteStatusIntegrated
 		note.CDNYear = req.Payload.CDNRef.Year
@@ -90,11 +84,6 @@ func (s *cdnWebhookService) ProcessIntegrationResult(ctx context.Context, req CD
 		// If already failed, treat as idempotent success.
 		if note.Status == DispatchNoteStatusFailed {
 			slog.InfoContext(ctx, "dispatch note already failed, ignoring duplicate callback", "edg_id", req.EdgID)
-			return nil
-		}
-		// Do not transition from integrated to failed on late/duplicate failure callbacks.
-		if note.Status == DispatchNoteStatusIntegrated {
-			slog.WarnContext(ctx, "dispatch note already integrated, ignoring late failure callback", "edg_id", req.EdgID)
 			return nil
 		}
 
