@@ -43,11 +43,23 @@ func isAllowedContentType(ct string) bool {
 }
 
 type HTTPHandler struct {
-	Service *Service
+	Service       *Service
+	KeyAuthorizer KeyAuthorizer
+	UploadTracker UploadTracker
 }
 
 func NewHTTPHandler(service *Service) *HTTPHandler {
 	return &HTTPHandler{Service: service}
+}
+
+func (h *HTTPHandler) WithKeyAuthorizer(ka KeyAuthorizer) *HTTPHandler {
+	h.KeyAuthorizer = ka
+	return h
+}
+
+func (h *HTTPHandler) WithUploadTracker(ut UploadTracker) *HTTPHandler {
+	h.UploadTracker = ut
+	return h
 }
 
 // writeJSONError sets Content-Type: application/json and writes a consistent JSON error body.
@@ -105,6 +117,14 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "upload preparation failed", "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to prepare upload")
 		return
+	}
+
+	if h.UploadTracker != nil {
+		if err := h.UploadTracker.TrackUpload(r.Context(), metadata.Key); err != nil {
+			slog.ErrorContext(r.Context(), "failed to track upload", "key", metadata.Key, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "failed to prepare upload")
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -222,6 +242,19 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.KeyAuthorizer != nil {
+		ok, err := h.KeyAuthorizer.AuthorizeKey(r.Context(), key)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "failed to authorize storage key download", "key", key, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "failed to authorize access")
+			return
+		}
+		if !ok {
+			writeJSONError(w, http.StatusForbidden, "Forbidden")
+			return
+		}
+	}
+
 	url, err := h.Service.GetDownloadURL(r.Context(), key)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "Failed to generate download URL", "key", key, "error", err)
@@ -328,6 +361,19 @@ func (h *HTTPHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !validStorageKey(key) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
+	}
+
+	if h.KeyAuthorizer != nil {
+		ok, err := h.KeyAuthorizer.AuthorizeKey(r.Context(), key)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "failed to authorize storage key delete", "key", key, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "failed to authorize access")
+			return
+		}
+		if !ok {
+			writeJSONError(w, http.StatusForbidden, "Forbidden")
+			return
+		}
 	}
 
 	if err := h.Service.Delete(r.Context(), key); err != nil {

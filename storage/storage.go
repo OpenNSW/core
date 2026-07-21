@@ -25,3 +25,13 @@ type StorageDriver interface {
 	// GetUploadURL returns a presigned URL for uploading a file directly to storage
 	GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error)
 }
+
+// KeyAuthorizer defines the interface for checking access to a storage key.
+type KeyAuthorizer interface {
+	AuthorizeKey(ctx context.Context, key string) (bool, error)
+}
+
+// UploadTracker defines the interface for tracking upload keys.
+type UploadTracker interface {
+	TrackUpload(ctx context.Context, key string) error
+}

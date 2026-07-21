@@ -352,3 +352,60 @@ func TestDownloadContent_NonLocalDriver_NotFound(t *testing.T) {
 		t.Fatalf("expected status 404, got %d", rec.Code)
 	}
 }
+
+type mockKeyAuthorizer struct {
+	authFunc func(ctx context.Context, key string) (bool, error)
+}
+
+func (m *mockKeyAuthorizer) AuthorizeKey(ctx context.Context, key string) (bool, error) {
+	if m.authFunc != nil {
+		return m.authFunc(ctx, key)
+	}
+	return false, nil
+}
+
+func TestDownload_KeyAuthorizer_Deny(t *testing.T) {
+	ka := &mockKeyAuthorizer{
+		authFunc: func(ctx context.Context, key string) (bool, error) {
+			return false, nil
+		},
+	}
+	handler := NewHTTPHandler(NewService(&MockDriver{})).WithKeyAuthorizer(ka)
+
+	req := httptest.NewRequest(http.MethodGet, "/files/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{
+		User: &authn.UserContext{ID: "trader-1"},
+	})
+	req = req.WithContext(ctx)
+	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
+	rec := httptest.NewRecorder()
+
+	handler.Download(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+}
+
+func TestDelete_KeyAuthorizer_Deny(t *testing.T) {
+	ka := &mockKeyAuthorizer{
+		authFunc: func(ctx context.Context, key string) (bool, error) {
+			return false, nil
+		},
+	}
+	handler := NewHTTPHandler(NewService(&MockDriver{})).WithKeyAuthorizer(ka)
+
+	req := httptest.NewRequest(http.MethodDelete, "/files/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{
+		User: &authn.UserContext{ID: "trader-1"},
+	})
+	req = req.WithContext(ctx)
+	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
+	rec := httptest.NewRecorder()
+
+	handler.Delete(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+}
