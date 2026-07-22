@@ -395,3 +395,43 @@ func TestDownloadContent_NonLocalDriver_NotFound(t *testing.T) {
 		t.Fatalf("expected status 404, got %d", rec.Code)
 	}
 }
+
+type mockKeyAuthorizer struct {
+	allowedKey string
+}
+
+func (m *mockKeyAuthorizer) AuthorizeKey(ctx context.Context, key string) error {
+	if key != m.allowedKey {
+		return errors.New("unauthorized key")
+	}
+	return nil
+}
+
+func TestDownload_KeyAuthorizer(t *testing.T) {
+	mockDrv := &MockDriver{}
+	service := NewService(mockDrv)
+	authorizer := &mockKeyAuthorizer{allowedKey: "550e8400-e29b-41d4-a716-446655440000.pdf"}
+	handler := NewHTTPHandler(service).WithKeyAuthorizer(authorizer)
+
+	t.Run("authorized key succeeds", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+		req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
+		rec := httptest.NewRecorder()
+
+		handler.Download(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("unauthorized key rejected with 403", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/storage/66666666-e29b-41d4-a716-446655440000.pdf", nil)
+		req.SetPathValue("key", "66666666-e29b-41d4-a716-446655440000.pdf")
+		rec := httptest.NewRecorder()
+
+		handler.Download(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden, got %d", rec.Code)
+		}
+	})
+}

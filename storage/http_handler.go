@@ -5,6 +5,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -43,12 +44,23 @@ func isAllowedContentType(ct string) bool {
 	return ok
 }
 
+// KeyAuthorizer validates whether a context (user/client) is authorized to access a given storage key.
+type KeyAuthorizer interface {
+	AuthorizeKey(ctx context.Context, key string) error
+}
+
 type HTTPHandler struct {
-	Service *Service
+	Service       *Service
+	KeyAuthorizer KeyAuthorizer
 }
 
 func NewHTTPHandler(service *Service) *HTTPHandler {
 	return &HTTPHandler{Service: service}
+}
+
+func (h *HTTPHandler) WithKeyAuthorizer(ka KeyAuthorizer) *HTTPHandler {
+	h.KeyAuthorizer = ka
+	return h
 }
 
 // writeJSONError sets Content-Type: application/json and writes a consistent JSON error body.
@@ -247,6 +259,14 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	if !validStorageKey(key) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
+	}
+
+	if h.KeyAuthorizer != nil {
+		if err := h.KeyAuthorizer.AuthorizeKey(r.Context(), key); err != nil {
+			slog.WarnContext(r.Context(), "unauthorized storage key download access attempt", "key", key, "error", err)
+			writeJSONError(w, http.StatusForbidden, "Forbidden")
+			return
+		}
 	}
 
 	url, err := h.Service.GetDownloadURL(r.Context(), key)
