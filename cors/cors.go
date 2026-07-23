@@ -44,7 +44,11 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 			}
 
 			// Origin is allowed. Set common headers.
-			w.Header().Set("Access-Control-Allow-Origin", origin)
+			if isExplicitMatch(origin, cfg.AllowedOrigins) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
 			if cfg.AllowCredentials {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
@@ -75,6 +79,16 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 func isOriginAllowed(origin string, allowedOrigins []string) bool {
 	for _, allowed := range allowedOrigins {
 		if allowed == "*" || allowed == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// isExplicitMatch checks if the given origin explicitly matches an entry in allowedOrigins
+func isExplicitMatch(origin string, allowedOrigins []string) bool {
+	for _, allowed := range allowedOrigins {
+		if allowed == origin {
 			return true
 		}
 	}

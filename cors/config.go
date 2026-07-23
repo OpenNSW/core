@@ -23,6 +23,9 @@ func (c Config) Validate() error {
 	}
 	for _, origin := range c.AllowedOrigins {
 		if origin == "*" {
+			if c.AllowCredentials {
+				return fmt.Errorf("wildcard origin '*' is not allowed when AllowCredentials is true")
+			}
 			continue
 		}
 		if err := validation.HTTPURL("CORS_ALLOWED_ORIGINS", origin); err != nil {
