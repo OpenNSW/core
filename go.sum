@@ -1,5 +1,7 @@
-github.com/OpenNSW/core/remote v0.3.0 h1:ghQfThoA8q7DztInwWuNPByhJ5NkcBHCmu/fBXKbuO8=
-github.com/OpenNSW/core/remote v0.3.0/go.mod h1:9iPlk+WNERTGUtxpyZ9pxAs0/RNmwgeauuog0H6tLug=
+github.com/OpenNSW/core/remote v0.4.0 h1:ff58cmGqe4Eh6iL/eRtW5XpKPV8Ta3P6UmehN6VZ0+A=
+github.com/OpenNSW/core/remote v0.4.0/go.mod h1:x6jxSvTUF9VjxpLL/2TsLUD7kWblUmTooWIuOWf4AA4=
+github.com/OpenNSW/core/secret v0.1.0 h1:y8fH0GfKmZu3eRFwPPQG5BLYez6yysNoiUMrLgxxN+o=
+github.com/OpenNSW/core/secret v0.1.0/go.mod h1:3W9FPvfSyB6XujKFw2tBSMr+TD39EFqlV50Q1KalL/8=
 github.com/aws/aws-sdk-go-v2 v1.43.0 h1:fharf/WhbRAVZ1du0QL7roNFxZ6T/sWr+4Ni617bwSI=
 github.com/aws/aws-sdk-go-v2 v1.43.0/go.mod h1:5pKeft2eJj+gElQ38Jqg4ibCqh+/AK33/0X3hip7IjM=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.14 h1:3IZY0XAJquT3aHzbkHfPzy4ACPcEjVG0x87KOwtpqGY=
