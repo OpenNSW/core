@@ -6,11 +6,13 @@ package auth
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/OpenNSW/core/secret"
 )
 
 type APIKeyConfig struct {
-	Key   string    `json:"key"`
-	Value SecretRef `json:"value"`
+	Key   string           `json:"key"`
+	Value secret.SecretRef `json:"value"`
 }
 
 // build resolves the configured value (failing loud on an unresolvable reference)
