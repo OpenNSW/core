@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: "gomod"
     # This is a multi-module repo: each of these directories has its own go.mod,
     # so they must be listed explicitly — Dependabot does not discover nested
-    # modules on its own. Add new modules (e.g. /secret) here as they land on main.
+    # modules on its own. Add new modules here as they land on main.
     directories:
       - "/"
       - "/remote"
@@ -11,6 +11,7 @@ updates:
       - "/pagination"
       - "/payment"
       - "/authz"
+      - "/secret"
     schedule:
       interval: "weekly"
       day: "monday"
