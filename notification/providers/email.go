@@ -13,11 +13,12 @@ import (
 	"github.com/OpenNSW/core/notification"
 	"github.com/OpenNSW/core/remote"
 	"github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/secret"
 )
 
 type emailConfig struct {
-	BaseURL string         `json:"baseURL"`
-	Token   auth.SecretRef `json:"token"`
+	BaseURL string           `json:"baseURL"`
+	Token   secret.SecretRef `json:"token"`
 }
 
 type emailRequest struct {
