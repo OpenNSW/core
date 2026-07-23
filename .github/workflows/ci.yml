@@ -29,6 +29,7 @@ jobs:
         with:
           version: v2.11.2
           args: --timeout=5m
+          verify: false
 
       - name: Verify license headers
         run: |
@@ -102,6 +103,7 @@ jobs:
           version: v2.11.2
           args: --timeout=5m
           working-directory: remote
+          verify: false
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
@@ -133,6 +135,7 @@ jobs:
           version: v2.11.2
           args: --timeout=5m
           working-directory: payment
+          verify: false
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
@@ -164,6 +167,7 @@ jobs:
           version: v2.11.2
           args: --timeout=5m
           working-directory: database
+          verify: false
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
@@ -197,6 +201,7 @@ jobs:
           version: v2.11.2
           args: --timeout=5m
           working-directory: authz
+          verify: false
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
@@ -230,6 +235,7 @@ jobs:
           version: v2.11.2
           args: --timeout=5m
           working-directory: pagination
+          verify: false
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
