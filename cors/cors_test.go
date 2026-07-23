@@ -73,6 +73,21 @@ func TestConfigValidate(t *testing.T) {
 			cfg:     Config{AllowedOrigins: []string{"*", "https://example.com"}},
 			wantErr: false,
 		},
+		{
+			name:    "wildcard origin with AllowCredentials=true rejected",
+			cfg:     Config{AllowedOrigins: []string{"*"}, AllowCredentials: true},
+			wantErr: true,
+		},
+		{
+			name:    "wildcard origin with AllowCredentials=false accepted",
+			cfg:     Config{AllowedOrigins: []string{"*"}, AllowCredentials: false},
+			wantErr: false,
+		},
+		{
+			name:    "wildcard mixed with valid origin and AllowCredentials=true rejected",
+			cfg:     Config{AllowedOrigins: []string{"https://example.com", "*"}, AllowCredentials: true},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -210,9 +225,56 @@ func TestCORSWildcardOrigin(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://any-origin.example.com" {
-		t.Errorf("Access-Control-Allow-Origin = %q, want the request origin", got)
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want '*'", got)
 	}
+}
+
+func TestCORSEmptyAllowedOrigins(t *testing.T) {
+	cfg := &Config{
+		AllowedOrigins: []string{},
+	}
+	handler := CORS(cfg)(okHandler)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("expected empty Access-Control-Allow-Origin when AllowedOrigins is empty, got %q", got)
+	}
+}
+
+func TestCORSExplicitMatchWithWildcard(t *testing.T) {
+	cfg := &Config{
+		AllowedOrigins: []string{"http://explicit.example.com", "*"},
+	}
+	handler := CORS(cfg)(okHandler)
+
+	// Explicit match should reflect the matching origin
+	t.Run("explicit match", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Origin", "http://explicit.example.com")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://explicit.example.com" {
+			t.Errorf("Access-Control-Allow-Origin = %q, want 'http://explicit.example.com'", got)
+		}
+	})
+
+	// Non-explicit match should receive literal '*'
+	t.Run("wildcard fallback match", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Origin", "http://other.example.com")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Errorf("Access-Control-Allow-Origin = %q, want '*'", got)
+		}
+	})
 }
 
 func TestCORSNoCredentials(t *testing.T) {
@@ -230,24 +292,25 @@ func TestCORSNoCredentials(t *testing.T) {
 	}
 }
 
-// ---- isOriginAllowed() ----
+// ---- matchOrigin() ----
 
-func TestIsOriginAllowed(t *testing.T) {
+func TestMatchOrigin(t *testing.T) {
 	tests := []struct {
 		origin  string
 		allowed []string
-		want    bool
+		want    originMatch
 	}{
-		{"http://localhost:3000", []string{"http://localhost:3000"}, true},
-		{"http://localhost:3000", []string{"http://other.com"}, false},
-		{"http://anything.com", []string{"*"}, true},
-		{"http://localhost:3000", []string{"http://other.com", "http://localhost:3000"}, true},
-		{"http://localhost:3000", []string{}, false},
+		{"http://localhost:3000", []string{"http://localhost:3000"}, matchExplicit},
+		{"http://localhost:3000", []string{"http://other.com"}, matchNone},
+		{"http://anything.com", []string{"*"}, matchWildcard},
+		{"http://localhost:3000", []string{"http://other.com", "http://localhost:3000"}, matchExplicit},
+		{"http://localhost:3000", []string{"*", "http://localhost:3000"}, matchExplicit},
+		{"http://localhost:3000", []string{}, matchNone},
 	}
 
 	for _, tt := range tests {
-		if got := isOriginAllowed(tt.origin, tt.allowed); got != tt.want {
-			t.Errorf("isOriginAllowed(%q, %v) = %v, want %v", tt.origin, tt.allowed, got, tt.want)
+		if got := matchOrigin(tt.origin, tt.allowed); got != tt.want {
+			t.Errorf("matchOrigin(%q, %v) = %v, want %v", tt.origin, tt.allowed, got, tt.want)
 		}
 	}
 }
