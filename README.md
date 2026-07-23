@@ -27,6 +27,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`pagination`](pagination/README.md) | Standard pagination envelope and query parameter parsing |
 | [`payment`](payment/README.md) | Pluggable payment gateway orchestration with webhook processing and idempotency |
 | [`remote`](remote/README.md) | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2) |
+| [`secret`](secret/README.md) | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources |
 | [`storage`](storage/README.md) | File storage abstraction (local filesystem and AWS S3) with presigned URLs |
 | [`taskflow`](taskflow/README.md) | Micro-interactive task orchestration — the core engine for human-in-the-loop steps |
 | [`temporal`](temporal/README.md) | Temporal client factory |
