@@ -51,22 +51,13 @@ Implements the OAuth2 Client Credentials flow with the following features:
 
 ## Secret References
 
-Secret-bearing config fields (`value`, `token`, `client_secret`) are a `SecretRef`.
-A `SecretRef` is a parsed string that is either a literal value or a reference whose
-scheme prefix names where the value comes from:
+Secret-bearing config fields (`value`, `token`, `client_secret`) are a
+[`secret.SecretRef`](../../secret/README.md) — a literal value or a scheme-prefixed
+reference (`env:NAME`, `file:/path`) that is resolved to its concrete value. The
+type lives in the standalone [`secret`](../../secret/README.md) module; see its
+README for the full scheme table and how to add a source.
 
-| Form                   | Meaning                                                                      |
-|:-----------------------|:-----------------------------------------------------------------------------|
-| `"plain-value"`        | A literal value (the default — backward compatible).                         |
-| `"env:NAME"`           | Read from environment variable `NAME`.                                       |
-| `"file:/path/to/file"` | Read from a file; trailing whitespace is trimmed.                            |
-| `"literal:env:foo"`    | Explicit literal escape hatch, for a literal that begins with a scheme name. |
-
-This lets non-sensitive configuration (URLs, scopes, header names) live alongside
-references to credentials that are provided out-of-band, so the two are no longer
-fused into one sensitive blob.
-
-In `services.json`, the same applies per field:
+In `services.json`, a reference is written per field:
 
 ```json
 {
@@ -87,10 +78,6 @@ file, or via `auth.Build`. A missing env var or an unreadable/empty file is a
 **loud error** — a reference never silently resolves to the empty string.
 Resolution is not repeated per request; if a referenced value changes, restart the
 process to pick it up.
-
-> Only the single prefixed-string form is supported; there is intentionally no
-> object form. To add a new source (e.g. `vault:`), register a resolver in
-> `secret.go` — no other code changes.
 
 ## Strategy Configuration
 

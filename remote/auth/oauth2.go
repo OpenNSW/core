@@ -14,14 +14,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpenNSW/core/secret"
 )
 
 type OAuth2Config struct {
-	TokenURL              string    `json:"token_url"`
-	ClientID              string    `json:"client_id"`
-	ClientSecret          SecretRef `json:"client_secret"`
-	Scopes                []string  `json:"scopes,omitempty"`
-	InsecureSkipTLSVerify bool      `json:"insecure_skip_tls_verify,omitempty"`
+	TokenURL              string           `json:"token_url"`
+	ClientID              string           `json:"client_id"`
+	ClientSecret          secret.SecretRef `json:"client_secret"`
+	Scopes                []string         `json:"scopes,omitempty"`
+	InsecureSkipTLSVerify bool             `json:"insecure_skip_tls_verify,omitempty"`
 }
 
 // build resolves the configured client secret (failing loud on an unresolvable

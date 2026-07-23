@@ -6,10 +6,12 @@ package auth
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/OpenNSW/core/secret"
 )
 
 type BearerConfig struct {
-	Token SecretRef `json:"token"`
+	Token secret.SecretRef `json:"token"`
 }
 
 type Bearer struct {

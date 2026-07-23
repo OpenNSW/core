@@ -25,7 +25,7 @@ type AuthConfig struct {
 // TLSSettings configures transport-level client authentication (mTLS) for a
 // service. Both values are filesystem paths to PEM files, not secret
 // references: certificate chains routinely exceed the 4 KB cap that
-// auth.SecretRef places on file-sourced secrets.
+// secret.SecretRef places on file-sourced secrets.
 type TLSSettings struct {
 	ClientCertFile string `json:"client_cert_file"`
 	ClientKeyFile  string `json:"client_key_file"`
