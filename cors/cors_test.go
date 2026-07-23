@@ -292,24 +292,25 @@ func TestCORSNoCredentials(t *testing.T) {
 	}
 }
 
-// ---- isOriginAllowed() ----
+// ---- matchOrigin() ----
 
-func TestIsOriginAllowed(t *testing.T) {
+func TestMatchOrigin(t *testing.T) {
 	tests := []struct {
 		origin  string
 		allowed []string
-		want    bool
+		want    originMatch
 	}{
-		{"http://localhost:3000", []string{"http://localhost:3000"}, true},
-		{"http://localhost:3000", []string{"http://other.com"}, false},
-		{"http://anything.com", []string{"*"}, true},
-		{"http://localhost:3000", []string{"http://other.com", "http://localhost:3000"}, true},
-		{"http://localhost:3000", []string{}, false},
+		{"http://localhost:3000", []string{"http://localhost:3000"}, matchExplicit},
+		{"http://localhost:3000", []string{"http://other.com"}, matchNone},
+		{"http://anything.com", []string{"*"}, matchWildcard},
+		{"http://localhost:3000", []string{"http://other.com", "http://localhost:3000"}, matchExplicit},
+		{"http://localhost:3000", []string{"*", "http://localhost:3000"}, matchExplicit},
+		{"http://localhost:3000", []string{}, matchNone},
 	}
 
 	for _, tt := range tests {
-		if got := isOriginAllowed(tt.origin, tt.allowed); got != tt.want {
-			t.Errorf("isOriginAllowed(%q, %v) = %v, want %v", tt.origin, tt.allowed, got, tt.want)
+		if got := matchOrigin(tt.origin, tt.allowed); got != tt.want {
+			t.Errorf("matchOrigin(%q, %v) = %v, want %v", tt.origin, tt.allowed, got, tt.want)
 		}
 	}
 }

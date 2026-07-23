@@ -25,7 +25,8 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 
 			// Check if the origin is allowed
-			if !isOriginAllowed(origin, cfg.AllowedOrigins) {
+			match := matchOrigin(origin, cfg.AllowedOrigins)
+			if match == matchNone {
 				// Origin is present but not allowed
 				slog.DebugContext(r.Context(), "CORS request from disallowed origin blocked",
 					"origin", origin,
@@ -44,7 +45,7 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 			}
 
 			// Origin is allowed. Set common headers.
-			if isExplicitMatch(origin, cfg.AllowedOrigins) {
+			if match == matchExplicit {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 			} else {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -75,22 +76,28 @@ func CORS(cfg *Config) func(http.Handler) http.Handler {
 	}
 }
 
-// isOriginAllowed checks if the given origin is in the list of allowed origins
-func isOriginAllowed(origin string, allowedOrigins []string) bool {
-	for _, allowed := range allowedOrigins {
-		if allowed == "*" || allowed == origin {
-			return true
-		}
-	}
-	return false
-}
+type originMatch int
 
-// isExplicitMatch checks if the given origin explicitly matches an entry in allowedOrigins
-func isExplicitMatch(origin string, allowedOrigins []string) bool {
+const (
+	matchNone originMatch = iota
+	matchExplicit
+	matchWildcard
+)
+
+// matchOrigin inspects allowedOrigins in a single pass to determine if origin matches
+// explicitly, via wildcard (*), or not at all.
+func matchOrigin(origin string, allowedOrigins []string) originMatch {
+	hasWildcard := false
 	for _, allowed := range allowedOrigins {
 		if allowed == origin {
-			return true
+			return matchExplicit
+		}
+		if allowed == "*" {
+			hasWildcard = true
 		}
 	}
-	return false
+	if hasWildcard {
+		return matchWildcard
+	}
+	return matchNone
 }
