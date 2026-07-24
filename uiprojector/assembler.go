@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 )
 
 // TemplateProvider abstracts the resolution of TemplateID to raw bytes.
@@ -59,6 +60,14 @@ func (a *Assembler) Assemble(ctx context.Context, blueprint *Blueprint, facts Fa
 		return nil, fmt.Errorf("assembler: blueprint is nil")
 	}
 
+	// Fail fast on a caller-contract violation: every claim the blueprint
+	// references must be populated in Facts.Claims. This turns a silent,
+	// hard-to-debug fail-closed (a typo or casing mismatch that hides a
+	// section forever) into a loud error at call time.
+	if err := validateClaims(blueprint, facts); err != nil {
+		return nil, err
+	}
+
 	// TODO: Should add a cache to cache the frequently fetched templates. Should decide whether the template should be from the TemplateProvider level or This Level.
 
 	sections := make(map[string]Section, len(blueprint.Sections))
@@ -106,4 +115,39 @@ func (a *Assembler) Assemble(ctx context.Context, blueprint *Blueprint, facts Fa
 	}
 
 	return sections, nil
+}
+
+// validateClaims ensures every claim referenced by a section's RequireClaim
+// rule is present in facts.Claims. Claim keys are matched exactly
+// (case-sensitive), so this check catches the common failure mode where the
+// blueprint and the caller disagree on a claim's spelling or casing: without
+// it, the mismatch would silently hide the section with no error to trace.
+// Presence is the contract — a claim explicitly set to false is a valid,
+// intentional deny; a claim that is simply missing is treated as a bug.
+func validateClaims(blueprint *Blueprint, facts Facts) error {
+	seen := make(map[string]struct{})
+	var missing []string
+	for _, sb := range blueprint.Sections {
+		if sb.VisibleWhen == nil {
+			continue
+		}
+		claim := sb.VisibleWhen.RequireClaim
+		if claim == "" {
+			continue
+		}
+		if _, ok := facts.Claims[claim]; ok {
+			continue
+		}
+		if _, dup := seen[claim]; dup {
+			continue
+		}
+		seen[claim] = struct{}{}
+		missing = append(missing, claim)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing) // deterministic message; map iteration order is random
+	return fmt.Errorf("assembler: blueprint references claim(s) %v not present in Facts.Claims; "+
+		"claim keys are case-sensitive, so populate each one explicitly (including denials set to false)", missing)
 }
