@@ -12,6 +12,7 @@ updates:
       - "/payment"
       - "/authz"
       - "/secret"
+      - "/tlsguard"
     schedule:
       interval: "weekly"
       day: "monday"

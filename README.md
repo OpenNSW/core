@@ -31,6 +31,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`storage`](storage/README.md) | File storage abstraction (local filesystem and AWS S3) with presigned URLs |
 | [`taskflow`](taskflow/README.md) | Micro-interactive task orchestration — the core engine for human-in-the-loop steps |
 | [`temporal`](temporal/README.md) | Temporal client factory |
+| [`tlsguard`](tlsguard/README.md) | Gates insecure TLS (skip certificate verification) behind an explicit `APP_ENV=development` signal |
 | [`trace`](trace/README.md) | HTTP request trace propagation and context-based trace ID correlation |
 | [`uiprojector`](uiprojector/README.md) | Zone-based, metadata-driven UI rendering from workflow state and business data |
 | [`workflow`](workflow/README.md) | JSON DSL-driven Temporal workflow graph interpreter |
