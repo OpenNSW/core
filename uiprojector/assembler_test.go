@@ -194,6 +194,73 @@ func TestAssembler_Assemble_BlueprintIsNil(t *testing.T) {
 	assert.Contains(t, err.Error(), "blueprint is nil")
 }
 
+func TestAssembler_Assemble_UnknownClaimKeyErrors(t *testing.T) {
+	ctx := context.Background()
+	tp := &stubTemplateProvider{templates: map[string][]byte{"t": []byte("x")}}
+	p := &stubProjector{typeName: "P", out: "ok"}
+	asm, err := uiprojector.NewAssembler(tp, []uiprojector.Projector{p})
+	require.NoError(t, err)
+
+	blueprint := &uiprojector.Blueprint{
+		Sections: map[string]uiprojector.SectionBlueprint{
+			"approval": {TemplateID: "t", Projector: "P", VisibleWhen: &uiprojector.VisibleWhen{
+				RequireClaim: "canApprove",
+			}},
+		},
+	}
+
+	// Caller populated a differently-cased key; the referenced claim is absent.
+	_, err = asm.Assemble(ctx, blueprint, uiprojector.Facts{
+		Claims: map[string]bool{"can_approve": true},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "canApprove", "error should name the missing claim")
+}
+
+func TestAssembler_Assemble_UnknownClaimKeyNilMapErrors(t *testing.T) {
+	ctx := context.Background()
+	tp := &stubTemplateProvider{templates: map[string][]byte{"t": []byte("x")}}
+	p := &stubProjector{typeName: "P", out: "ok"}
+	asm, err := uiprojector.NewAssembler(tp, []uiprojector.Projector{p})
+	require.NoError(t, err)
+
+	blueprint := &uiprojector.Blueprint{
+		Sections: map[string]uiprojector.SectionBlueprint{
+			"approval": {TemplateID: "t", Projector: "P", VisibleWhen: &uiprojector.VisibleWhen{
+				RequireClaim: "canApprove",
+			}},
+		},
+	}
+
+	// Caller forgot to populate Facts.Claims entirely.
+	_, err = asm.Assemble(ctx, blueprint, uiprojector.Facts{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "canApprove")
+}
+
+func TestAssembler_Assemble_ClaimExplicitlyFalseIsValid(t *testing.T) {
+	ctx := context.Background()
+	tp := &stubTemplateProvider{templates: map[string][]byte{"t": []byte("x")}}
+	p := &stubProjector{typeName: "P", out: "ok"}
+	asm, err := uiprojector.NewAssembler(tp, []uiprojector.Projector{p})
+	require.NoError(t, err)
+
+	blueprint := &uiprojector.Blueprint{
+		Sections: map[string]uiprojector.SectionBlueprint{
+			"approval": {TemplateID: "t", Projector: "P", VisibleWhen: &uiprojector.VisibleWhen{
+				RequireClaim: "canApprove",
+			}},
+		},
+	}
+
+	// An explicit deny is a populated key: no error, section simply hidden.
+	sections, err := asm.Assemble(ctx, blueprint, uiprojector.Facts{
+		Claims: map[string]bool{"canApprove": false},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, sections, "approval")
+}
+
 func TestAssembler_Assemble_TemplateFetchError(t *testing.T) {
 	ctx := context.Background()
 	fetchErr := errors.New("boom")
