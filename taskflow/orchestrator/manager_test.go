@@ -12,7 +12,7 @@ import (
 
 	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/testutil"
-	"github.com/OpenNSW/core/internal/maputil"
+	"github.com/OpenNSW/core/shared/maputil"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"

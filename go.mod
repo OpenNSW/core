@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/OpenNSW/core/remote v0.4.0
 	github.com/OpenNSW/core/secret v0.1.0
+	github.com/OpenNSW/core/shared v0.0.0-00010101000000-000000000000
 	github.com/aws/aws-sdk-go-v2 v1.43.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.31
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.30
@@ -57,3 +58,7 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// TODO(shared): drop this replace and bump the require above to the tagged
+// shared/v0.1.0 once it's pushed -- see plan for the two-commit sequence.
+replace github.com/OpenNSW/core/shared => ./shared

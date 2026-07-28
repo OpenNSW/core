@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/OpenNSW/core/internal/maputil"
+	"github.com/OpenNSW/core/shared/maputil"
 )
 
 // graphInterpreter holds the state for a single workflow execution.

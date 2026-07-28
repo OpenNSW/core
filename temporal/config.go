@@ -6,7 +6,7 @@ package temporal
 import (
 	"fmt"
 
-	"github.com/OpenNSW/core/internal/validation"
+	"github.com/OpenNSW/core/shared/validation"
 )
 
 // Config holds configuration required to connect to Temporal.

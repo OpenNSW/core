@@ -12,7 +12,7 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/OpenNSW/core/internal/maputil"
+	"github.com/OpenNSW/core/shared/maputil"
 )
 
 type activeBranch struct {
