@@ -15,6 +15,19 @@ type Config struct {
 	Audience              string
 	ClientIDs             []string
 	InsecureSkipTLSVerify bool
+
+	// UserClaims declares extra JWT claims (beyond authn's fixed schema, e.g.
+	// "email", "phone_number", "ouId", "ouHandle", "given_name") to extract
+	// for user-principal (authorization_code grant) tokens. ClientClaims is
+	// the client-credential (M2M) analogue. See WithUserClaims /
+	// WithClientClaims. Zero value = no extra claims extracted.
+	UserClaims   ClaimSpec
+	ClientClaims ClaimSpec
+
+	// RolesClaim overrides which claim carries the principal's roles, for
+	// IdPs that do not emit a top-level "roles" claim. See WithRolesClaim.
+	// Empty = "roles".
+	RolesClaim string
 }
 
 func (c Config) Validate() error {
@@ -37,5 +50,33 @@ func (c Config) Validate() error {
 	if len(c.ClientIDs) == 0 {
 		return fmt.Errorf("AUTH_CLIENT_IDS is required")
 	}
+
+	if err := validateRolesClaimName(c.rolesClaim()); err != nil {
+		return err
+	}
+	for _, decl := range []struct {
+		what  string
+		names []string
+	}{
+		{"UserClaims.Optional", c.UserClaims.Optional},
+		{"UserClaims.Required", c.UserClaims.Required},
+		{"ClientClaims.Optional", c.ClientClaims.Optional},
+		{"ClientClaims.Required", c.ClientClaims.Required},
+	} {
+		if err := validateClaimNames(decl.what, decl.names, c.rolesClaim()); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// rolesClaim resolves the configured roles claim name, treating an unset field
+// as the default. A whitespace-only value is left as-is so Validate reports it
+// as a typo rather than silently defaulting.
+func (c Config) rolesClaim() string {
+	if c.RolesClaim == "" {
+		return defaultRolesClaim
+	}
+	return c.RolesClaim
 }

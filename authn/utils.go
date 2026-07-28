@@ -10,13 +10,6 @@ import (
 	"math/big"
 )
 
-func derefString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
 func buildAuthContext(principal *Principal) *AuthContext {
 	if principal == nil {
 		return &AuthContext{}
@@ -29,13 +22,10 @@ func buildAuthContext(principal *Principal) *AuthContext {
 		}
 		return &AuthContext{
 			User: &UserContext{
-				IDPUserID:   principal.UserPrincipal.UserID,
-				Email:       principal.UserPrincipal.Email,
-				PhoneNumber: derefString(principal.UserPrincipal.PhoneNumber),
-				OUID:        principal.UserPrincipal.OUID,
-				OUHandle:    principal.UserPrincipal.OUHandle,
+				IDPUserID:   principal.UserPrincipal.Subject,
 				Roles:       principal.UserPrincipal.Roles,
 				Scopes:      principal.UserPrincipal.Scopes,
+				ExtraClaims: principal.UserPrincipal.ExtraClaims,
 			},
 		}
 	case ClientPrincipalType:
@@ -44,9 +34,10 @@ func buildAuthContext(principal *Principal) *AuthContext {
 		}
 		return &AuthContext{
 			Client: &ClientContext{
-				ClientID: principal.ClientPrincipal.ClientID,
-				Roles:    principal.ClientPrincipal.Roles,
-				Scopes:   principal.ClientPrincipal.Scopes,
+				ClientID:    principal.ClientPrincipal.ClientID,
+				Roles:       principal.ClientPrincipal.Roles,
+				Scopes:      principal.ClientPrincipal.Scopes,
+				ExtraClaims: principal.ClientPrincipal.ExtraClaims,
 			},
 		}
 	default:

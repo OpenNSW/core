@@ -48,7 +48,7 @@ func TestTokenExtractor_ExtractPrincipalFromHeader(t *testing.T) {
 			}
 			got := ""
 			if principal != nil && principal.UserPrincipal != nil {
-				got = principal.UserPrincipal.UserID
+				got = principal.UserPrincipal.Subject
 			}
 			if principal != nil && principal.ClientPrincipal != nil {
 				got = principal.ClientPrincipal.ClientID
@@ -150,59 +150,61 @@ func TestTokenExtractor_ExtractPrincipalFromHeader_MissingClaims(t *testing.T) {
 }
 
 func TestUserPrincipalFromClaims(t *testing.T) {
-	claims := &tokenClaims{
-		RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID},
-		Email:            strPtr(testEmail),
-		PhoneNumber:      strPtr(testPhone),
-		OUID:             strPtr(testOUID),
-		OUHandle:         strPtr(testOUHandle),
-		Roles:            []string{"exporter"},
-	}
+	claims := &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}}
+	extra := ExtraClaims{"email": testEmail, "ouId": testOUID, "ouHandle": testOUHandle}
 
-	principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims)
+	principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims, extra, []string{"exporter"})
 	if err != nil {
 		t.Fatalf("userPrincipalFromClaims() error = %v", err)
 	}
-	if principal.UserID != testUserID || principal.Email != testEmail || principal.PhoneNumber == nil || *principal.PhoneNumber != testPhone {
+	if principal.Subject != testUserID {
 		t.Fatalf("unexpected principal: %#v", principal)
 	}
-	if principal.OUID != testOUID || principal.OUHandle != testOUHandle || len(principal.Roles) != 1 || principal.Roles[0] != "exporter" {
-		t.Fatalf("unexpected claims mapping: %#v", principal)
+	if len(principal.Roles) != 1 || principal.Roles[0] != "exporter" {
+		t.Fatalf("unexpected roles: %#v", principal.Roles)
+	}
+	if principal.ExtraClaims.String("email") != testEmail || principal.ExtraClaims.String("ouId") != testOUID || principal.ExtraClaims.String("ouHandle") != testOUHandle {
+		t.Fatalf("unexpected extra claims mapping: %#v", principal.ExtraClaims)
 	}
 
-	missingClaims := []struct {
-		name   string
-		claims *tokenClaims
-	}{
-		{name: "missing email", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, OUID: strPtr(testOUID), OUHandle: strPtr(testOUHandle)}},
-		{name: "missing ou id", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, Email: strPtr(testEmail), OUHandle: strPtr(testOUHandle)}},
-		{name: "missing ou handle", claims: &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}, Email: strPtr(testEmail), OUID: strPtr(testOUID)}},
-	}
-
-	for _, tt := range missingClaims {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := (&TokenExtractor{}).userPrincipalFromClaims(tt.claims); err == nil {
-				t.Fatalf("expected error for %s", tt.name)
-			}
-		})
-	}
-
-	// Test optional phone_number field
-	t.Run("optional phone_number", func(t *testing.T) {
-		claims := &tokenClaims{
-			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID},
-			Email:            strPtr(testEmail),
-			OUID:             strPtr(testOUID),
-			OUHandle:         strPtr(testOUHandle),
+	// sub is the only claim userPrincipalFromClaims itself still requires:
+	// email/ouId/ouHandle moved to the generic extra-claims mechanism (see
+	// TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU) and are no
+	// longer validated here at all.
+	t.Run("missing sub is an error", func(t *testing.T) {
+		if _, err := (&TokenExtractor{}).userPrincipalFromClaims(&tokenClaims{}, nil, nil); err == nil {
+			t.Fatalf("expected error for missing sub claim")
 		}
-		principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims)
+	})
+
+	t.Run("nil extra claims is fine", func(t *testing.T) {
+		claims := &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}}
+		principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims, nil, nil)
 		if err != nil {
 			t.Fatalf("userPrincipalFromClaims() error = %v", err)
 		}
-		if principal.PhoneNumber != nil {
-			t.Fatalf("expected nil phone_number, got %v", *principal.PhoneNumber)
+		if principal.ExtraClaims != nil {
+			t.Fatalf("expected nil extra claims, got %#v", principal.ExtraClaims)
 		}
 	})
+}
+
+// TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU documents a
+// deliberate behavior change: email/ouId/ouHandle used to be hard-required
+// fixed-schema claims. They are now ordinary extra claims, so a token that
+// omits them entirely is accepted unless a consumer opts into requiring them
+// via WithUserClaims(ClaimSpec{Required: ...}).
+func TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU(t *testing.T) {
+	extractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
+
+	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims["sub"] = testUserID
+	// Deliberately omit email/phone_number/ouId/ouHandle/roles entirely.
+
+	if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims)); err != nil {
+		t.Fatalf("expected success: email/ouId/ouHandle are no longer hard-required, got %v", err)
+	}
 }
 
 func TestTokenExtractor_JWKSIsCached(t *testing.T) {
