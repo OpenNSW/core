@@ -16,6 +16,9 @@ func Value(v any) any {
 	case map[string]any:
 		return Map(t)
 	case []any:
+		if t == nil {
+			return []any(nil)
+		}
 		cp := make([]any, len(t))
 		for i, e := range t {
 			cp[i] = Value(e)
