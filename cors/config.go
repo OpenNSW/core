@@ -6,7 +6,7 @@ package cors
 import (
 	"fmt"
 
-	"github.com/OpenNSW/core/internal/validation"
+	"github.com/OpenNSW/core/shared/validation"
 )
 
 type Config struct {

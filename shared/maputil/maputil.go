@@ -4,7 +4,7 @@
 package maputil
 
 import (
-	"github.com/OpenNSW/core/internal/deepcopy"
+	"github.com/OpenNSW/core/shared/deepcopy"
 )
 
 // GetNestedKey retrieves a value from a nested map using a dot-separated path.
