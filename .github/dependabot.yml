@@ -12,6 +12,7 @@ updates:
       - "/payment"
       - "/authz"
       - "/secret"
+      - "/shared"
     schedule:
       interval: "weekly"
       day: "monday"
