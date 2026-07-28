@@ -31,6 +31,14 @@ const (
 
 func newTokenExtractor(t *testing.T) (*TokenExtractor, *rsa.PrivateKey, func()) {
 	t.Helper()
+	return newTokenExtractorWithOptions(t)
+}
+
+// newTokenExtractorWithOptions mirrors newTokenExtractor but threads Options
+// through to NewTokenExtractor, for tests exercising WithUserClaims /
+// WithClientClaims / WithRolesClaim.
+func newTokenExtractorWithOptions(t *testing.T, opts ...Option) (*TokenExtractor, *rsa.PrivateKey, func()) {
+	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("failed to generate rsa key: %v", err)
@@ -50,7 +58,7 @@ func newTokenExtractor(t *testing.T) (*TokenExtractor, *rsa.PrivateKey, func()) 
 		})
 	}))
 
-	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID})
+	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID}, opts...)
 	if err != nil {
 		jwksServer.Close()
 		t.Fatalf("failed to create token extractor: %v", err)
@@ -101,5 +109,3 @@ func signToken(t *testing.T, privateKey *rsa.PrivateKey, claims jwt.MapClaims) s
 	}
 	return signedToken
 }
-
-func strPtr(value string) *string { return &value }

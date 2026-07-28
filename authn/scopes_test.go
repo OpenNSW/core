@@ -107,8 +107,9 @@ func TestBuildAuthContext_SurfacesScopesAndRoles(t *testing.T) {
 	uc := buildAuthContext(&Principal{
 		Type: UserPrincipalType,
 		UserPrincipal: &UserPrincipal{
-			UserID: "u1", Email: testEmail, OUID: testOUID, OUHandle: testOUHandle,
-			Roles: []string{"Trader"}, Scopes: []string{"nsw:task:read"},
+			Subject:     "u1",
+			ExtraClaims: ExtraClaims{"email": testEmail, "ouId": testOUID, "ouHandle": testOUHandle},
+			Roles:       []string{"Trader"}, Scopes: []string{"nsw:task:read"},
 		},
 	})
 	if uc.User == nil || !sameScopes(uc.User.Scopes, []string{"nsw:task:read"}) {
