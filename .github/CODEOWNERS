@@ -1,0 +1,25 @@
+# CODEOWNERS
+# Ownership is assigned per top-level package based on primary contribution history.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Protect this file itself: changes to ownership policy require review.
+/.github/CODEOWNERS   @mushrafmim
+
+/artifact/      @mushrafmim @lokewate
+/authn/         @sthanikan2000 @mushrafmim
+/authz/         @sthanikan2000 @mushrafmim
+/cors/          @sthanikan2000 @ginaxu1
+/database/      @mushrafmim @sthanikan2000
+/docs/          @mushrafmim @lokewate
+/internal/      @lokewate @mushrafmim
+/notification/  @sthanikan2000 @mushrafmim
+/pagination/    @saknarajapakshe @ginaxu1
+/payment/       @mushrafmim @sthanikan2000
+/remote/        @mushrafmim @sthanikan2000
+/secret/        @mushrafmim @sthanikan2000
+/storage/       @ginaxu1 @mushrafmim
+/taskflow/      @lokewate @mushrafmim
+/temporal/      @Aravinda-HWK @sthanikan2000
+/trace/         @ginaxu1 @mushrafmim
+/uiprojector/   @mushrafmim @lokewate
+/workflow/      @lokewate @Aravinda-HWK
