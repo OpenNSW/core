@@ -6,6 +6,7 @@ require (
 	github.com/OpenNSW/core/remote v0.4.0
 	github.com/OpenNSW/core/secret v0.1.0
 	github.com/OpenNSW/core/shared v0.1.0
+	github.com/OpenNSW/core/uiprojector v0.1.0
 	github.com/aws/aws-sdk-go-v2 v1.43.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.31
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.30
@@ -17,6 +18,8 @@ require (
 	go.temporal.io/sdk v1.46.0
 	gorm.io/gorm v1.31.2
 )
+
+replace github.com/OpenNSW/core/uiprojector => ./uiprojector
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.14 // indirect
