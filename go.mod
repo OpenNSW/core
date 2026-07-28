@@ -19,8 +19,6 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
-replace github.com/OpenNSW/core/uiprojector => ./uiprojector
-
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.15 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.33 // indirect
