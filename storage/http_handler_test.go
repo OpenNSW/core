@@ -396,6 +396,24 @@ func TestUpload_ProhibitedExtension_Rejects(t *testing.T) {
 	}
 }
 
+func TestDownload_AccessValidator_Denies(t *testing.T) {
+	handler := NewHTTPHandler(NewService(&MockDriver{})).WithAccessValidator(func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error) {
+		return false, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{User: &authn.UserContext{ID: "u1"}})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.Download(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 Forbidden when AccessValidator denies, got %d", rec.Code)
+	}
+}
+
 func TestDelete_Unauthorized(t *testing.T) {
 	handler := NewHTTPHandler(NewService(&MockDriver{}))
 
