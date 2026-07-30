@@ -4,7 +4,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/OpenNSW/core/authn"
@@ -119,14 +117,6 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cleanName, err := CleanFilename(req.Filename)
-	if err != nil {
-		slog.WarnContext(r.Context(), "invalid or prohibited filename", "filename", req.Filename, "error", err)
-		writeJSONError(w, http.StatusUnsupportedMediaType, "prohibited file extension or invalid filename")
-		return
-	}
-	req.Filename = cleanName
-
 	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "upload preparation failed", "error", err)
@@ -144,8 +134,6 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
 	if err := json.NewEncoder(w).Encode(metadata); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
 	}
@@ -225,53 +213,8 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 	// 3. Prevent Local Disk Exhaustion (DoS) - enforce dynamic limit from URL
 	r.Body = http.MaxBytesReader(w, r.Body, maxSizeBytes)
 
-	// Magic Bytes Inspection: Read and validate header (first 512 bytes)
-	headerBuf := make([]byte, 512)
-	n, readErr := io.ReadFull(r.Body, headerBuf)
-	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
-		var maxBytesError *http.MaxBytesError
-		if errors.As(readErr, &maxBytesError) {
-			writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
-			return
-		}
-		writeJSONError(w, http.StatusBadRequest, "failed to read file header")
-		return
-	}
-	headerBytes := headerBuf[:n]
-
-	if err := ValidateHeader(headerBytes, contentType); err != nil {
-		slog.WarnContext(r.Context(), "file content validation failed", "key", key, "error", err)
-		writeJSONError(w, http.StatusUnsupportedMediaType, "file content does not match declared type or contains prohibited data")
-		return
-	}
-
-	// For text-like MIME types, validate full payload to ensure prohibited markup is not hidden after byte 512
-	cleanContentType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	var combinedBody io.Reader
-	if cleanContentType == "text/plain" || cleanContentType == "text/csv" || cleanContentType == "application/json" {
-		restBytes, restErr := io.ReadAll(r.Body)
-		if restErr != nil {
-			var maxBytesError *http.MaxBytesError
-			if errors.As(restErr, &maxBytesError) {
-				writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
-				return
-			}
-			writeJSONError(w, http.StatusBadRequest, "failed to read file content")
-			return
-		}
-		fullBytes := append(headerBytes, restBytes...)
-		if err := ValidateTextContent(fullBytes); err != nil {
-			slog.WarnContext(r.Context(), "file content validation failed for text body", "key", key, "error", err)
-			writeJSONError(w, http.StatusUnsupportedMediaType, "file content does not match declared type or contains prohibited data")
-			return
-		}
-		combinedBody = bytes.NewReader(fullBytes)
-	} else {
-		combinedBody = io.MultiReader(bytes.NewReader(headerBytes), r.Body)
-	}
-
 	// Save using the local driver
-	err = driver.Save(r.Context(), key, combinedBody, contentType)
+	err = driver.Save(r.Context(), key, r.Body, contentType)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "local upload failed", "key", key, "error", err)
 		// MaxBytesReader returns a specific error when exceeded
@@ -288,11 +231,12 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
-	if authn.GetAuthContext(r.Context()) == nil {
-		slog.WarnContext(r.Context(), "authentication required but not provided for download")
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
+	// TODO: Uncomment when M2M AUTH Implemented.
+	//if authn.GetAuthContext(r.Context()) == nil {
+	//	slog.WarnContext(r.Context(), "authentication required but not provided for download")
+	//	writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+	//	return
+	//}
 
 	key := r.PathValue("key")
 	if key == "" {
@@ -326,8 +270,6 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"download_url": url,
 		"expires_at":   time.Now().Add(drivers.DefaultPresignTTL).Unix(),
@@ -346,11 +288,6 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 	driver, ok := h.Service.Driver.(*drivers.LocalFSDriver)
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "not found")
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
