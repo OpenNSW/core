@@ -11,6 +11,13 @@ func TestMap_Nil(t *testing.T) {
 	}
 }
 
+func TestValue_NilSlice(t *testing.T) {
+	var orig []any
+	if copied := Value(orig).([]any); copied != nil {
+		t.Error("expected deep copy of nil slice to be nil")
+	}
+}
+
 func TestMap_ScalarsAreCopied(t *testing.T) {
 	orig := map[string]any{"key1": "value1", "key2": 42}
 	copied := Map(orig)
