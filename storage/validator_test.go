@@ -93,6 +93,13 @@ func TestValidateHeader_ValidPDF_WithMimeParameter(t *testing.T) {
 	}
 }
 
+func TestValidateHeader_BinaryPayloadLabeledAsJSON(t *testing.T) {
+	elfHeader := []byte("\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+	if err := ValidateHeader(elfHeader, "application/json"); err == nil {
+		t.Fatal("expected binary ELF payload declared as application/json to be rejected, got nil")
+	}
+}
+
 func TestCleanFilename(t *testing.T) {
 	tests := []struct {
 		input    string

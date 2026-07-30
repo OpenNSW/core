@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OpenNSW/core/authn"
@@ -202,6 +203,11 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 	headerBuf := make([]byte, 512)
 	n, readErr := io.ReadFull(r.Body, headerBuf)
 	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(readErr, &maxBytesError) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
+			return
+		}
 		writeJSONError(w, http.StatusBadRequest, "failed to read file header")
 		return
 	}
@@ -213,8 +219,30 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Prepend read header bytes back to stream
-	combinedBody := io.MultiReader(bytes.NewReader(headerBytes), r.Body)
+	// For text-like MIME types, validate full payload to ensure prohibited markup is not hidden after byte 512
+	cleanContentType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	var combinedBody io.Reader
+	if cleanContentType == "text/plain" || cleanContentType == "text/csv" || cleanContentType == "application/json" {
+		restBytes, restErr := io.ReadAll(r.Body)
+		if restErr != nil {
+			var maxBytesError *http.MaxBytesError
+			if errors.As(restErr, &maxBytesError) {
+				writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, "failed to read file content")
+			return
+		}
+		fullBytes := append(headerBytes, restBytes...)
+		if err := ValidateTextContent(fullBytes); err != nil {
+			slog.WarnContext(r.Context(), "file content validation failed for text body", "key", key, "error", err)
+			writeJSONError(w, http.StatusUnsupportedMediaType, "file content does not match declared type or contains prohibited data")
+			return
+		}
+		combinedBody = bytes.NewReader(fullBytes)
+	} else {
+		combinedBody = io.MultiReader(bytes.NewReader(headerBytes), r.Body)
+	}
 
 	// Save using the local driver
 	err = driver.Save(r.Context(), key, combinedBody, contentType)
