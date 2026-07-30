@@ -60,6 +60,10 @@ func TestDownloadContent_LocalDriver_Success(t *testing.T) {
 		t.Errorf("expected Content-Type application/pdf, got %s", rec.Header().Get("Content-Type"))
 	}
 
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("expected X-Content-Type-Options nosniff, got %s", rec.Header().Get("X-Content-Type-Options"))
+	}
+
 	if !bytes.Equal(rec.Body.Bytes(), content) {
 		t.Error("body does not match")
 	}
@@ -393,6 +397,24 @@ func TestUpload_ProhibitedExtension_Rejects(t *testing.T) {
 
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("expected status 415, got %d", rec.Code)
+	}
+}
+
+func TestDownload_AccessValidator_Denies(t *testing.T) {
+	handler := NewHTTPHandler(NewService(&MockDriver{})).WithAccessValidator(func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error) {
+		return false, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{User: &authn.UserContext{ID: "u1"}})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.Download(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 Forbidden when AccessValidator denies, got %d", rec.Code)
 	}
 }
 

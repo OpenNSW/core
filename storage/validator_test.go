@@ -4,6 +4,8 @@
 package storage
 
 import (
+	"archive/zip"
+	"bytes"
 	"testing"
 )
 
@@ -28,17 +30,43 @@ func TestValidateHeader_ValidJPEG(t *testing.T) {
 	}
 }
 
+func createMockZip(files map[string]string) []byte {
+	buf := new(bytes.Buffer)
+	w := zip.NewWriter(buf)
+	for name, content := range files {
+		f, _ := w.Create(name)
+		_, _ = f.Write([]byte(content))
+	}
+	_ = w.Close()
+	return buf.Bytes()
+}
+
 func TestValidateHeader_ValidXLSX(t *testing.T) {
-	xlsxHeader := []byte{0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00}
-	if err := ValidateHeader(xlsxHeader, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); err != nil {
+	xlsxZip := createMockZip(map[string]string{
+		"[Content_Types].xml": "<Types></Types>",
+		"xl/workbook.xml":     "<workbook></workbook>",
+	})
+	if err := ValidateHeader(xlsxZip, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); err != nil {
 		t.Fatalf("expected valid XLSX header, got error: %v", err)
 	}
 }
 
 func TestValidateHeader_ValidDOCX(t *testing.T) {
-	docxHeader := []byte{0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00}
-	if err := ValidateHeader(docxHeader, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); err != nil {
+	docxZip := createMockZip(map[string]string{
+		"[Content_Types].xml": "<Types></Types>",
+		"word/document.xml":   "<document></document>",
+	})
+	if err := ValidateHeader(docxZip, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); err != nil {
 		t.Fatalf("expected valid DOCX header, got error: %v", err)
+	}
+}
+
+func TestValidateHeader_GenericZipAsXLSX_Fails(t *testing.T) {
+	genericZip := createMockZip(map[string]string{
+		"file.txt": "hello world",
+	})
+	if err := ValidateHeader(genericZip, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); err == nil {
+		t.Fatal("expected generic ZIP declared as XLSX to be rejected, got nil")
 	}
 }
 
@@ -67,6 +95,39 @@ func TestValidateHeader_TextWithScriptTag_Fails(t *testing.T) {
 	maliciousText := []byte("col1,col2\n<script>alert('xss')</script>")
 	if err := ValidateHeader(maliciousText, "text/csv"); err == nil {
 		t.Fatal("expected script tag in CSV to be rejected, got nil")
+	}
+}
+
+func TestValidateTextContent_ExpandedMarkers(t *testing.T) {
+	vectors := [][]byte{
+		[]byte("<iframe src='evil.com'></iframe>"),
+		[]byte("<object data='evil.swf'></object>"),
+		[]byte("<embed src='evil.swf'>"),
+		[]byte("<meta http-equiv='refresh' content='0;url=http://evil.com'>"),
+		[]byte("<a href='javascript:alert(1)'>click</a>"),
+		[]byte("<a href='vbscript:msgbox(1)'>click</a>"),
+		[]byte("<iframe src='data:text/html,<script>alert(1)</script>'>"),
+	}
+
+	for _, v := range vectors {
+		if err := ValidateTextContent(v); err == nil {
+			t.Errorf("expected vector %q to be rejected, got nil", string(v))
+		}
+	}
+}
+
+func TestValidateTextContent_InlineEventHandlers(t *testing.T) {
+	vectors := [][]byte{
+		[]byte("<img src=x onerror=alert(1)>"),
+		[]byte("<body onload=alert(1)>"),
+		[]byte("<svg/onload=alert(1)>"),
+		[]byte("<div onclick = alert(1)>"),
+	}
+
+	for _, v := range vectors {
+		if err := ValidateTextContent(v); err == nil {
+			t.Errorf("expected inline event handler vector %q to be rejected, got nil", string(v))
+		}
 	}
 }
 

@@ -4,11 +4,13 @@
 package storage
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -37,6 +39,10 @@ var allowedExtensions = map[string]struct{}{
 	".xlsx": {},
 }
 
+// prohibitedMimeTypes contains MIME types rejected if identified by http.DetectContentType content sniffing.
+// Note: http.DetectContentType only sniffs a limited set of MIME types (such as text/html,
+// text/xml, application/xml, image/audio formats, and application/octet-stream). Unreachable entries
+// (e.g. scripts or binaries) are retained as defense-in-depth in case sniffing rules are updated or expanded.
 var prohibitedMimeTypes = map[string]struct{}{
 	"image/svg+xml":            {},
 	"text/html":                {},
@@ -120,10 +126,13 @@ func ValidateHeader(header []byte, declaredMime string) error {
 		if len(header) < 12 || !bytes.HasPrefix(header, []byte("RIFF")) || string(header[8:12]) != "WEBP" {
 			return fmt.Errorf("%w: expected WEBP header", ErrMimeMismatch)
 		}
-	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-		if !bytes.HasPrefix(header, []byte{0x50, 0x4B, 0x03, 0x04}) {
-			return fmt.Errorf("%w: expected OpenXML/ZIP header (PK)", ErrMimeMismatch)
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		if err := validateOpenXML(header, "xl/"); err != nil {
+			return err
+		}
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		if err := validateOpenXML(header, "word/"); err != nil {
+			return err
 		}
 	case "application/msword":
 		if !bytes.HasPrefix(header, []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}) {
@@ -145,11 +154,71 @@ func ValidateHeader(header []byte, declaredMime string) error {
 	return nil
 }
 
+var prohibitedTextMarkers = [][]byte{
+	[]byte("<script"),
+	[]byte("<html"),
+	[]byte("<svg"),
+	[]byte("<iframe"),
+	[]byte("<object"),
+	[]byte("<embed"),
+	[]byte("<meta"),
+	[]byte("<link"),
+	[]byte("<body"),
+	[]byte("<head"),
+	[]byte("<style"),
+	[]byte("<form"),
+	[]byte("<base"),
+	[]byte("<applet"),
+	[]byte("javascript:"),
+	[]byte("vbscript:"),
+	[]byte("data:text/html"),
+}
+
+var inlineEventHandlerRx = regexp.MustCompile(`(?i)\bon[a-z]+\s*=`)
+
 // ValidateTextContent scans body content for prohibited HTML/script markup.
 func ValidateTextContent(content []byte) error {
 	lowerContent := bytes.ToLower(content)
-	if bytes.Contains(lowerContent, []byte("<script")) || bytes.Contains(lowerContent, []byte("<html")) || bytes.Contains(lowerContent, []byte("<svg")) {
-		return fmt.Errorf("%w: text file contains prohibited HTML or script markup", ErrProhibitedFileType)
+	for _, marker := range prohibitedTextMarkers {
+		if bytes.Contains(lowerContent, marker) {
+			return fmt.Errorf("%w: text file contains prohibited HTML or script markup", ErrProhibitedFileType)
+		}
 	}
+	if inlineEventHandlerRx.Match(content) {
+		return fmt.Errorf("%w: text file contains prohibited inline event handler", ErrProhibitedFileType)
+	}
+	return nil
+}
+
+// validateOpenXML verifies PK magic bytes and checks ZIP structure for OOXML package entries ([Content_Types].xml and target directory prefix like xl/ or word/).
+func validateOpenXML(header []byte, expectedPrefix string) error {
+	if !bytes.HasPrefix(header, []byte{0x50, 0x4B, 0x03, 0x04}) {
+		return fmt.Errorf("%w: expected OpenXML/ZIP header (PK)", ErrMimeMismatch)
+	}
+
+	// Try zip.NewReader if full zip payload is available
+	zr, err := zip.NewReader(bytes.NewReader(header), int64(len(header)))
+	if err == nil {
+		hasContentTypes := false
+		hasTargetDir := false
+		for _, f := range zr.File {
+			if f.Name == "[Content_Types].xml" {
+				hasContentTypes = true
+			}
+			if strings.HasPrefix(f.Name, expectedPrefix) {
+				hasTargetDir = true
+			}
+		}
+		if !hasContentTypes || !hasTargetDir {
+			return fmt.Errorf("%w: invalid OpenXML package structure (missing [Content_Types].xml or %s entries)", ErrMimeMismatch, expectedPrefix)
+		}
+		return nil
+	}
+
+	// Fallback for partial header probes (e.g., first 512 bytes)
+	if !bytes.Contains(header, []byte("[Content_Types].xml")) && !bytes.Contains(header, []byte(expectedPrefix)) {
+		return fmt.Errorf("%w: zip header missing OOXML package markers ([Content_Types].xml or %s)", ErrMimeMismatch, expectedPrefix)
+	}
+
 	return nil
 }

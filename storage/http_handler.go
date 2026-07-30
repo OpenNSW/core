@@ -5,6 +5,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -44,12 +45,27 @@ func isAllowedContentType(ct string) bool {
 	return ok
 }
 
+type AccessValidator func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error)
+type OnUploadHook func(ctx context.Context, metadata *FileMetadata, authCtx *authn.AuthContext) error
+
 type HTTPHandler struct {
-	Service *Service
+	Service         *Service
+	AccessValidator AccessValidator
+	OnUploadHook    OnUploadHook
 }
 
 func NewHTTPHandler(service *Service) *HTTPHandler {
 	return &HTTPHandler{Service: service}
+}
+
+func (h *HTTPHandler) WithAccessValidator(fn AccessValidator) *HTTPHandler {
+	h.AccessValidator = fn
+	return h
+}
+
+func (h *HTTPHandler) WithOnUploadHook(fn OnUploadHook) *HTTPHandler {
+	h.OnUploadHook = fn
+	return h
 }
 
 // writeJSONError sets Content-Type: application/json and writes a consistent JSON error body.
@@ -68,9 +84,10 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// New Presigned URL generation flow (application/json)
 	var req struct {
-		Filename string `json:"filename"`
-		MimeType string `json:"mime_type"`
-		Size     int64  `json:"size"`
+		Filename  string         `json:"filename"`
+		MimeType  string         `json:"mime_type"`
+		Size      int64          `json:"size"`
+		Ownership map[string]any `json:"ownership,omitempty"`
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -115,6 +132,15 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "upload preparation failed", "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to prepare upload")
 		return
+	}
+	if len(req.Ownership) > 0 {
+		metadata.Ownership = req.Ownership
+	}
+
+	if h.OnUploadHook != nil {
+		if err := h.OnUploadHook(r.Context(), metadata, authn.GetAuthContext(r.Context())); err != nil {
+			slog.ErrorContext(r.Context(), "OnUploadHook callback failed", "key", metadata.Key, "error", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -262,12 +288,11 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
-	// TODO: Uncomment when M2M AUTH Implemented.
-	//if authn.GetAuthContext(r.Context()) == nil {
-	//	slog.WarnContext(r.Context(), "authentication required but not provided for download")
-	//	writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-	//	return
-	//}
+	if authn.GetAuthContext(r.Context()) == nil {
+		slog.WarnContext(r.Context(), "authentication required but not provided for download")
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
 	key := r.PathValue("key")
 	if key == "" {
@@ -277,6 +302,20 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	if !validStorageKey(key) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
+	}
+
+	if h.AccessValidator != nil {
+		allowed, err := h.AccessValidator(r.Context(), key, authn.GetAuthContext(r.Context()))
+		if err != nil {
+			slog.ErrorContext(r.Context(), "Failed to validate access for key", "key", key, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "failed to validate access")
+			return
+		}
+		if !allowed {
+			slog.WarnContext(r.Context(), "Access denied by storage AccessValidator", "key", key)
+			writeJSONError(w, http.StatusForbidden, "forbidden")
+			return
+		}
 	}
 
 	url, err := h.Service.GetDownloadURL(r.Context(), key)
@@ -362,6 +401,7 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	// Check if the body can report its size (standard for files/drivers)
 	w.Header().Set("Content-Disposition", "inline")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
 		if fi, err := stater.Stat(); err == nil {
 			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
