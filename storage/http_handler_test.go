@@ -60,10 +60,6 @@ func TestDownloadContent_LocalDriver_Success(t *testing.T) {
 		t.Errorf("expected Content-Type application/pdf, got %s", rec.Header().Get("Content-Type"))
 	}
 
-	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
-		t.Errorf("expected X-Content-Type-Options nosniff, got %s", rec.Header().Get("X-Content-Type-Options"))
-	}
-
 	if !bytes.Equal(rec.Body.Bytes(), content) {
 		t.Error("body does not match")
 	}
@@ -328,75 +324,52 @@ func TestUploadContentLocal_Success(t *testing.T) {
 	}
 }
 
-func TestUploadContentLocal_MagicBytesSpoofedPDF_Rejects(t *testing.T) {
-	tempDir := t.TempDir()
-	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
-	service := NewService(driver)
-	handler := NewHTTPHandler(service)
+func TestUpload_WithOwnershipAndHook(t *testing.T) {
+	mock := &MockDriver{}
+	hookCalled := false
+	handler := NewHTTPHandler(NewService(mock)).WithOnUploadHook(func(ctx context.Context, meta *FileMetadata, authCtx *authn.AuthContext) error {
+		hookCalled = true
+		if meta.Ownership["company_id"] != "comp-123" {
+			t.Errorf("expected company_id comp-123 in hook, got %v", meta.Ownership["company_id"])
+		}
+		return nil
+	})
 
-	key := "550e8400-e29b-41d4-a716-446655440000.pdf"
-	spoofedContent := []byte("<html><body><script>alert('xss')</script></body></html>")
-
-	contentType := "application/pdf"
-	maxSizeBytes := int64(32 << 20)
-
-	uploadURL, _ := driver.GetUploadURL(context.Background(), key, contentType, maxSizeBytes)
-	parsedURL, _ := url.Parse(uploadURL)
-
-	req := httptest.NewRequest(http.MethodPut, parsedURL.RequestURI(), bytes.NewReader(spoofedContent))
-	req.SetPathValue("key", key)
-	req.Header.Set("Content-Type", "application/pdf")
-	rec := httptest.NewRecorder()
-
-	handler.UploadContentLocal(rec, req)
-
-	if rec.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("expected status 415, got %d", rec.Code)
+	body := map[string]any{
+		"filename":  "test.pdf",
+		"mime_type": "application/pdf",
+		"size":      1024,
+		"ownership": map[string]any{
+			"company_id": "comp-123",
+			"task_id":    "task-456",
+		},
 	}
-}
+	jsonBody, _ := json.Marshal(body)
 
-func TestUploadContentLocal_MarkupAfter512Bytes_Rejects(t *testing.T) {
-	tempDir := t.TempDir()
-	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
-	service := NewService(driver)
-	handler := NewHTTPHandler(service)
-
-	key := "550e8400-e29b-41d4-a716-446655440000.txt"
-	// Padding > 512 bytes followed by malicious script tag
-	padding := bytes.Repeat([]byte("a,b,c\n"), 100) // ~600 bytes
-	payload := append(padding, []byte("<script>alert('xss')</script>")...)
-
-	contentType := "text/plain"
-	maxSizeBytes := int64(32 << 20)
-
-	uploadURL, _ := driver.GetUploadURL(context.Background(), key, contentType, maxSizeBytes)
-	parsedURL, _ := url.Parse(uploadURL)
-
-	req := httptest.NewRequest(http.MethodPut, parsedURL.RequestURI(), bytes.NewReader(payload))
-	req.SetPathValue("key", key)
-	req.Header.Set("Content-Type", contentType)
-	rec := httptest.NewRecorder()
-
-	handler.UploadContentLocal(rec, req)
-
-	if rec.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("expected status 415 for script tag after byte 512, got %d. Body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestUpload_ProhibitedExtension_Rejects(t *testing.T) {
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
-
-	body := []byte(`{"filename":"malware.exe","mime_type":"application/pdf","size":100}`)
-	req := httptest.NewRequest(http.MethodPost, "/storage/upload", bytes.NewBuffer(body))
-	ctx := withAuthContext(req.Context(), &authn.AuthContext{User: &authn.UserContext{ID: "u1"}})
+	req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{
+		User: &authn.UserContext{ID: "trader-1"},
+	})
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	handler.Upload(rec, req)
 
-	if rec.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("expected status 415, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	var metadata FileMetadata
+	if err := json.NewDecoder(rec.Body).Decode(&metadata); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if metadata.Ownership["company_id"] != "comp-123" {
+		t.Errorf("expected ownership company_id comp-123, got %v", metadata.Ownership["company_id"])
+	}
+	if !hookCalled {
+		t.Error("expected OnUploadHook to be called")
 	}
 }
 

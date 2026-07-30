@@ -4,7 +4,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/OpenNSW/core/authn"
@@ -34,9 +32,6 @@ var allowedContentTypes = map[string]struct{}{
 	"image/png":       {},
 	"image/gif":       {},
 	"image/webp":      {},
-	// .xlsx only: the OOXML spreadsheet format cannot carry VBA macros
-	// (macro-enabled workbooks use .xlsm), unlike legacy .xls which is a
-	// known malware vector and stays prohibited.
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
 }
 
@@ -119,20 +114,13 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cleanName, err := CleanFilename(req.Filename)
-	if err != nil {
-		slog.WarnContext(r.Context(), "invalid or prohibited filename", "filename", req.Filename, "error", err)
-		writeJSONError(w, http.StatusUnsupportedMediaType, "prohibited file extension or invalid filename")
-		return
-	}
-	req.Filename = cleanName
-
 	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "upload preparation failed", "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to prepare upload")
 		return
 	}
+
 	if len(req.Ownership) > 0 {
 		metadata.Ownership = req.Ownership
 	}
@@ -225,53 +213,8 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 	// 3. Prevent Local Disk Exhaustion (DoS) - enforce dynamic limit from URL
 	r.Body = http.MaxBytesReader(w, r.Body, maxSizeBytes)
 
-	// Magic Bytes Inspection: Read and validate header (first 512 bytes)
-	headerBuf := make([]byte, 512)
-	n, readErr := io.ReadFull(r.Body, headerBuf)
-	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
-		var maxBytesError *http.MaxBytesError
-		if errors.As(readErr, &maxBytesError) {
-			writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
-			return
-		}
-		writeJSONError(w, http.StatusBadRequest, "failed to read file header")
-		return
-	}
-	headerBytes := headerBuf[:n]
-
-	if err := ValidateHeader(headerBytes, contentType); err != nil {
-		slog.WarnContext(r.Context(), "file content validation failed", "key", key, "error", err)
-		writeJSONError(w, http.StatusUnsupportedMediaType, "file content does not match declared type or contains prohibited data")
-		return
-	}
-
-	// For text-like MIME types, validate full payload to ensure prohibited markup is not hidden after byte 512
-	cleanContentType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	var combinedBody io.Reader
-	if cleanContentType == "text/plain" || cleanContentType == "text/csv" || cleanContentType == "application/json" {
-		restBytes, restErr := io.ReadAll(r.Body)
-		if restErr != nil {
-			var maxBytesError *http.MaxBytesError
-			if errors.As(restErr, &maxBytesError) {
-				writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
-				return
-			}
-			writeJSONError(w, http.StatusBadRequest, "failed to read file content")
-			return
-		}
-		fullBytes := append(headerBytes, restBytes...)
-		if err := ValidateTextContent(fullBytes); err != nil {
-			slog.WarnContext(r.Context(), "file content validation failed for text body", "key", key, "error", err)
-			writeJSONError(w, http.StatusUnsupportedMediaType, "file content does not match declared type or contains prohibited data")
-			return
-		}
-		combinedBody = bytes.NewReader(fullBytes)
-	} else {
-		combinedBody = io.MultiReader(bytes.NewReader(headerBytes), r.Body)
-	}
-
 	// Save using the local driver
-	err = driver.Save(r.Context(), key, combinedBody, contentType)
+	err = driver.Save(r.Context(), key, r.Body, contentType)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "local upload failed", "key", key, "error", err)
 		// MaxBytesReader returns a specific error when exceeded
@@ -399,17 +342,13 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = body.Close() }()
 
 	w.Header().Set("Content-Type", contentType)
-	// Check if the body can report its size (standard for files/drivers)
 	w.Header().Set("Content-Disposition", "inline")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
 		if fi, err := stater.Stat(); err == nil {
 			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 		}
 	}
 
-	// Ensure headers (including Content-Length) are written before the body so
-	// that browsers can correctly display download progress.
 	w.WriteHeader(http.StatusOK)
 
 	_, err = io.Copy(w, body)

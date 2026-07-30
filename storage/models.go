@@ -3,7 +3,7 @@
 
 package storage
 
-// FileMetadata represents the metadata of an uploaded file, enriched with ownership and workflow identifiers.
+// FileMetadata represents the metadata of an uploaded file, enriched with ownership metadata.
 type FileMetadata struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
