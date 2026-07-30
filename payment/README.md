@@ -51,8 +51,16 @@ func (g *MyGateway) CreateSession(ctx context.Context, req payment.SessionReques
 // no default: every gateway must implement a real check here, or no
 // transaction can ever be settled through it.
 func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
-    // e.g. validate an Authorization: Bearer <token> header, or an HMAC
-    // signature computed over body.
+    token := http.Header(headers).Get("Authorization")
+    if !isValidBearerToken(token) {
+        // Wrap ErrWebhookVerificationFailed only when verification has
+        // positively determined the caller is invalid — this is what maps
+        // to 401. Any other error (e.g. a timeout reaching an upstream
+        // token-introspection endpoint) must be returned unwrapped, so it's
+        // treated as a transient failure, not a rejection — see
+        // "Verification error classification" below.
+        return fmt.Errorf("invalid or missing bearer token: %w", payment.ErrWebhookVerificationFailed)
+    }
     return nil
 }
 
@@ -136,17 +144,24 @@ When a user enters a reference in a bank app, the gateway calls NSW.
 ### Webhook Processing
 Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing, and then performs domain actions: updating status, persisting metadata, and firing internal events.
 
-## Extending verification (mTLS / source-IP schemes)
+## Verification error classification
 
-`VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This is sufficient for header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) — the two realistic verification schemes at the time this hook was added.
+`VerifyWebhook` implementations must distinguish two different kinds of failure:
 
-If a future gateway needs mTLS or source-IP verification, **do not** change `VerifyWebhook`'s signature — that would be a third breaking change to this interface (after `ParseWebhook`'s return-value change and `VerifyWebhook`'s own addition), requiring another coordinated PR across every consumer plus a version bump. Instead, thread connection-level data through `ctx`, mirroring this SDK's own `core/trace` package (`TraceMiddleware` injects a trace ID into `context.Context`, retrieved via `trace.GetTraceID(ctx)` — no interface signature involved):
+- **The caller is not genuinely this gateway** (an invalid or expired token, a signature that doesn't match): wrap `payment.ErrWebhookVerificationFailed` (via `%w`) when returning the error. `HTTPHandler` maps this to `401 Unauthorized`.
+- **Verification could not be completed for an operational reason** (a timeout reaching an upstream introspection/JWKS endpoint, a missing local configuration, a cancelled context): return any other error, unwrapped. This is NOT proof the caller is invalid, and is treated like any other unclassified error — a transient `500`, so the gateway's own retry can re-drive it.
 
-- Add `payment.ConnectionInfo{TLS *tls.ConnectionState, RemoteAddr string}` plus `ContextWithConnectionInfo`/`ConnectionInfoFromContext(ctx) (ConnectionInfo, bool)` accessors (additive, non-breaking).
-- Have `HTTPHandler` populate it from `r.TLS`/`r.RemoteAddr` before calling into the service.
-- A gateway that wants it calls `ConnectionInfoFromContext(ctx)` inside its own `VerifyWebhook`; gateways that don't care ignore it entirely.
+Conflating the two means an operational blip on your own side (not an attack) can permanently drop a legitimate webhook, since most providers treat a `401` as "credentials are bad, stop retrying" rather than something to retry.
 
-**Important caveat before choosing this scheme at all:** it only works if TLS actually terminates at this process. If a WAF/LB/ingress terminates TLS first, `r.TLS` here is nil regardless of any code change — real mTLS would require the edge to verify the client certificate and forward the result via a trusted header (e.g. `x-forwarded-client-cert`), which is only safe to trust if network policy guarantees the edge is the sole path in (otherwise a client could set that header itself and spoof verification). The same caveat applies to source-IP allowlisting via `X-Forwarded-For` vs. `r.RemoteAddr`. This is a deployment-topology decision to confirm with your infrastructure team, not something this package can resolve on its own.
+## Extending verification beyond body and headers
+
+`VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This covers header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) — every gateway currently planned for this SDK. GovPay+ (the only gateway actually being implemented) uses a bearer token; LankaPay has no documented signing scheme anywhere and has never been implemented.
+
+Nothing beyond that is built today, because nothing currently needs it — building a mechanism for query parameters, method/path-inclusive signatures, mTLS, or source-IP verification before a real gateway requires it would mean shipping unused API surface with nothing depending on it.
+
+**If a real need arises:** do not change `VerifyWebhook`'s signature — that would be a third breaking change to this interface (after `ParseWebhook`'s return-value change and `VerifyWebhook`'s own addition), requiring another coordinated PR across every consumer plus a version bump, every time a different scheme needs a different dimension of the request. Instead, thread the additional data through `ctx`, mirroring this SDK's own `core/trace` package (`TraceMiddleware` injects a trace ID into `context.Context`, retrieved via `trace.GetTraceID(ctx)` — no interface signature involved): have `HTTPHandler` inject whatever the concrete scheme needs (e.g. the inbound `*http.Request`, for full generality) into `ctx` before calling into the service, and expose an accessor a gateway's `VerifyWebhook` can call if it needs it. This keeps the interface stable regardless of how many future schemes turn out to need different request data, without speculatively building that mechanism now.
+
+If choosing a scheme that needs TLS state or the real client IP specifically: confirm with your infrastructure team where TLS actually terminates first. If a WAF/LB/ingress terminates TLS ahead of this process, `r.TLS` here is nil regardless of any code change — real mTLS would require the edge to verify the client certificate and forward the result via a trusted header, safe to trust only if network policy guarantees the edge is the sole path in. The same caveat applies to source-IP allowlisting via `X-Forwarded-For` vs. `r.RemoteAddr`. This is a deployment-topology decision, not something this package can resolve on its own.
 
 ## Exported Types and Functions
 
@@ -178,7 +193,7 @@ If a future gateway needs mTLS or source-IP verification, **do not** change `Ver
 - `ErrUnsupportedWebhookStatus`: Gateway status cannot be normalized
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
-- `ErrWebhookVerificationFailed`: Caller could not be cryptographically verified
+- `ErrWebhookVerificationFailed`: Caller could not be cryptographically verified — see "Verification error classification" above for when a gateway should (and should not) use this
 
 ## Integration Example
 

@@ -6,6 +6,7 @@ package payment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -331,7 +332,7 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 
 func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 	gw := new(MockGateway)
-	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("bad signature"))
+	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
 	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
@@ -339,6 +340,17 @@ func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 	assert.Contains(t, err.Error(), "bad signature", "underlying verifier error text must survive for logging")
 	gw.AssertNotCalled(t, "ExtractReferenceNumber", mock.Anything, mock.Anything)
 	gw.AssertNotCalled(t, "HandleValidateReference", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestValidateReference_VerificationOperationalError_NotClassifiedAsAuthFailure(t *testing.T) {
+	gw := new(MockGateway)
+	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("jwks endpoint timeout"))
+	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrWebhookVerificationFailed), "an operational verifier failure must not be classified as an authentication rejection")
+	gw.AssertNotCalled(t, "ExtractReferenceNumber", mock.Anything, mock.Anything)
 }
 
 // --- ProcessWebhook ---------------------------------------------------------
@@ -522,12 +534,23 @@ func TestProcessWebhook_CompleterErrorPropagates(t *testing.T) {
 
 func TestProcessWebhook_VerificationFailure_NeverParses(t *testing.T) {
 	gw := new(MockGateway)
-	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("bad signature"))
+	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
 	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrWebhookVerificationFailed)
 	assert.Contains(t, err.Error(), "bad signature", "underlying verifier error text must survive for logging")
+	gw.AssertNotCalled(t, "ParseWebhook", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestProcessWebhook_VerificationOperationalError_NotClassifiedAsAuthFailure(t *testing.T) {
+	gw := new(MockGateway)
+	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("jwks endpoint timeout"))
+	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrWebhookVerificationFailed), "an operational verifier failure must not be classified as an authentication rejection")
 	gw.AssertNotCalled(t, "ParseWebhook", mock.Anything, mock.Anything, mock.Anything)
 }
 

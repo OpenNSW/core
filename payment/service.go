@@ -42,13 +42,19 @@ func toDomainStatus(s WebhookStatus) (PaymentStatus, error) {
 	}
 }
 
-// verifyCaller runs the gateway's cryptographic verification hook before any
-// gateway-specific parsing, wrapping a failure so
-// errors.Is(err, ErrWebhookVerificationFailed) succeeds while the underlying
-// verifier error's text (not its type) is preserved for logging.
+// verifyCaller runs the gateway's cryptographic verification hook before
+// any gateway-specific parsing. It does NOT unconditionally classify a
+// failure as an authentication rejection: per VerifyWebhook's error
+// contract, the gateway itself wraps ErrWebhookVerificationFailed only
+// when it has positively determined the caller is invalid, and
+// errors.Is(..., ErrWebhookVerificationFailed) downstream only succeeds
+// for that case. Any other error (an operational failure inside the
+// gateway's own verification logic) propagates here unwrapped-by-us, so
+// it falls through to the generic transient/500 handling in HTTPHandler,
+// not a 401.
 func verifyCaller(ctx context.Context, gateway PaymentGateway, gatewayID string, body []byte, headers map[string][]string) error {
 	if err := gateway.VerifyWebhook(ctx, body, headers); err != nil {
-		return fmt.Errorf("gateway %s: %w (%v)", gatewayID, ErrWebhookVerificationFailed, err)
+		return fmt.Errorf("gateway %s: %w", gatewayID, err)
 	}
 	return nil
 }

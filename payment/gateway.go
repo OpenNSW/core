@@ -116,6 +116,18 @@ type PaymentGateway interface {
 	// settlement, and no presentment info may reach an unverified caller.
 	// There is no default/no-op — every implementation must perform a real
 	// check.
+	//
+	// Error contract: return ErrWebhookVerificationFailed (wrapped via %w)
+	// only when verification has positively determined the caller is NOT
+	// genuinely this gateway (e.g. an invalid signature, an expired or
+	// unrecognized token). HTTPHandler maps that sentinel to 401. Return any
+	// other error for a failure to complete verification for an operational
+	// reason (a timeout reaching an upstream introspection/JWKS endpoint, a
+	// missing local configuration, a cancelled context) — those are NOT proof
+	// the caller is invalid and must not use this sentinel; they are treated
+	// as transient (mapped to 500, so the gateway's retry can re-drive it),
+	// exactly like an unclassified error from any of this interface's other
+	// methods.
 	VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error
 
 	// ExtractReferenceNumber parses the gateway-specific validation request to extract the reference number.
