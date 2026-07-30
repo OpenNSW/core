@@ -134,13 +134,22 @@ func ValidateHeader(header []byte, declaredMime string) error {
 			return fmt.Errorf("%w: expected TIFF header", ErrMimeMismatch)
 		}
 	case "text/plain", "text/csv", "application/json":
-		lowerHeader := bytes.ToLower(header)
-		if bytes.Contains(lowerHeader, []byte("<script")) || bytes.Contains(lowerHeader, []byte("<html")) || bytes.Contains(lowerHeader, []byte("<svg")) {
-			return fmt.Errorf("%w: text file contains prohibited HTML or script markup", ErrProhibitedFileType)
+		if detectedMime == "application/octet-stream" || detectedMime == "application/x-executable" || detectedMime == "application/x-msdownload" {
+			return fmt.Errorf("%w: binary payload detected (%s) for text format %s", ErrMimeMismatch, detectedMime, cleanDeclaredMime)
 		}
+		return ValidateTextContent(header)
 	default:
 		return fmt.Errorf("%w: unsupported declared MIME type %s", ErrProhibitedFileType, declaredMime)
 	}
 
+	return nil
+}
+
+// ValidateTextContent scans body content for prohibited HTML/script markup.
+func ValidateTextContent(content []byte) error {
+	lowerContent := bytes.ToLower(content)
+	if bytes.Contains(lowerContent, []byte("<script")) || bytes.Contains(lowerContent, []byte("<html")) || bytes.Contains(lowerContent, []byte("<svg")) {
+		return fmt.Errorf("%w: text file contains prohibited HTML or script markup", ErrProhibitedFileType)
+	}
 	return nil
 }
