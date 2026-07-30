@@ -314,6 +314,39 @@ jobs:
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+  # The uiprojector/ package is its own Go module, so the root ./... jobs above do not
+  # cover it. Run its quality checks and tests independently.
+  uiprojector-module:
+    name: UIProjector Module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: uiprojector
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'uiprojector/go.mod'
+          cache-dependency-path: uiprojector/go.sum
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: uiprojector
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
   # The shared/ package is its own Go module, so the root ./... jobs above do not
   # cover it. Run its quality checks and tests independently.
   shared-module:

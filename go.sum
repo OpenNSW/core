@@ -6,6 +6,8 @@ github.com/OpenNSW/core/secret v0.1.0 h1:y8fH0GfKmZu3eRFwPPQG5BLYez6yysNoiUMrLgx
 github.com/OpenNSW/core/secret v0.1.0/go.mod h1:3W9FPvfSyB6XujKFw2tBSMr+TD39EFqlV50Q1KalL/8=
 github.com/OpenNSW/core/shared v0.1.0 h1:mY4ZNvF61QYe7+EwuiAveMQDONiMARqQOZ/Mxwm6Bag=
 github.com/OpenNSW/core/shared v0.1.0/go.mod h1:C149n/Kz1Fj+50J88zQx2WTPK+hsEh7gtGwuBB2M4fk=
+github.com/OpenNSW/core/uiprojector v0.1.0 h1:+3TLwXVOViguJAV80DIH+WpE2tzPbx2LTHtP7EZnOSs=
+github.com/OpenNSW/core/uiprojector v0.1.0/go.mod h1:kByV+3fJWXNdNoCO98Xx6XFyIVVpe5KYKauiGSDuPa0=
 github.com/aws/aws-sdk-go-v2 v1.43.2 h1:cl+IXwWb3qazClUcm08tGSsB6OiuV83JVJO9B0jQcPc=
 github.com/aws/aws-sdk-go-v2 v1.43.2/go.mod h1:WEzLKBh/mEjXvx1FtQMWgSxMSTVqxQzjkRtk5fa3wkg=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.15 h1:rq/p1VNFfygoKEQ9hHMKsKBE98lspPvT8IxaFs5mFhw=

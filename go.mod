@@ -7,6 +7,7 @@ require (
 	github.com/OpenNSW/core/remote v0.4.0
 	github.com/OpenNSW/core/secret v0.1.0
 	github.com/OpenNSW/core/shared v0.1.0
+	github.com/OpenNSW/core/uiprojector v0.1.0
 	github.com/aws/aws-sdk-go-v2 v1.43.2
 	github.com/aws/aws-sdk-go-v2/config v1.32.33
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.32
