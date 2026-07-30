@@ -27,7 +27,7 @@ func (m *mockService) ListAvailableMethods(context.Context) ([]GatewayInfo, erro
 func (m *mockService) CreateCheckoutSession(context.Context, CreateCheckoutRequest) (*CreateCheckoutResponse, error) {
 	return nil, nil
 }
-func (m *mockService) ValidateReference(context.Context, string, json.RawMessage) (*ValidationResponse, error) {
+func (m *mockService) ValidateReference(context.Context, string, json.RawMessage, map[string][]string) (*ValidationResponse, error) {
 	return m.validateResp, m.validateErr
 }
 func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string][]string) (*WebhookResponse, error) {
@@ -51,11 +51,12 @@ func TestHandleWebhook_StatusClassification(t *testing.T) {
 		err  error
 		want int
 	}{
-		"success":            {err: nil, want: http.StatusOK},
-		"not found":          {err: fmt.Errorf("ref X: %w", ErrTransactionNotFound), want: http.StatusNotFound},
-		"unsupported status": {err: fmt.Errorf("bad: %w", ErrUnsupportedWebhookStatus), want: http.StatusBadRequest},
-		"amount mismatch":    {err: fmt.Errorf("bad: %w", ErrAmountMismatch), want: http.StatusUnprocessableEntity},
-		"transient":          {err: fmt.Errorf("db down"), want: http.StatusInternalServerError},
+		"success":             {err: nil, want: http.StatusOK},
+		"verification failed": {err: fmt.Errorf("gw: %w (bad sig)", ErrWebhookVerificationFailed), want: http.StatusUnauthorized},
+		"not found":           {err: fmt.Errorf("ref X: %w", ErrTransactionNotFound), want: http.StatusNotFound},
+		"unsupported status":  {err: fmt.Errorf("bad: %w", ErrUnsupportedWebhookStatus), want: http.StatusBadRequest},
+		"amount mismatch":     {err: fmt.Errorf("bad: %w", ErrAmountMismatch), want: http.StatusUnprocessableEntity},
+		"transient":           {err: fmt.Errorf("db down"), want: http.StatusInternalServerError},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -97,6 +98,19 @@ func TestHandleValidateReference_ServiceErrorIs500(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+func TestHandleValidateReference_VerificationFailureIs401(t *testing.T) {
+	svc := &mockService{validateErr: fmt.Errorf("gw: %w (bad sig)", ErrWebhookVerificationFailed)}
+	h := NewHTTPHandler(svc)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/payments/{gatewayId}/validate", h.HandleValidateReference)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments/govpay/validate", http.NoBody)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 }
 
 func TestHandleWebhook_MissingGatewayID(t *testing.T) {

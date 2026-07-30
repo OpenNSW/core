@@ -34,6 +34,15 @@ const (
 // same payload won't help), so callers should not signal the gateway to retry.
 var ErrUnsupportedWebhookStatus = errors.New("unsupported webhook status")
 
+// ErrWebhookVerificationFailed indicates a caller — either a real-time
+// validation request or an asynchronous webhook notification — could not be
+// cryptographically verified as genuinely originating from the gateway it
+// claims to be. No transaction may be settled, and no presentment
+// information may be disclosed, on the strength of an unverified caller, so
+// this must be checked (and satisfied) before any gateway-specific parsing
+// of the request runs.
+var ErrWebhookVerificationFailed = errors.New("webhook verification failed")
+
 type SessionRequest struct {
 	Amount             decimal.Decimal `json:"amount"`
 	Currency           string          `json:"currency"`
@@ -97,6 +106,17 @@ type PaymentGateway interface {
 
 	// CreateSession initializes a payment session with the gateway.
 	CreateSession(ctx context.Context, req SessionRequest) (*SessionResponse, error)
+
+	// VerifyWebhook cryptographically authenticates an inbound request — a
+	// real-time validation request or an asynchronous webhook notification —
+	// as genuinely originating from this gateway, using whatever scheme the
+	// gateway requires (e.g. an HMAC signature over body, a bearer token
+	// extracted from headers). It is called before ExtractReferenceNumber and
+	// ParseWebhook, and a non-nil return blocks both: no reference lookup, no
+	// settlement, and no presentment info may reach an unverified caller.
+	// There is no default/no-op — every implementation must perform a real
+	// check.
+	VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error
 
 	// ExtractReferenceNumber parses the gateway-specific validation request to extract the reference number.
 	ExtractReferenceNumber(ctx context.Context, reqData json.RawMessage) (string, error)

@@ -33,6 +33,11 @@ func (m *MockGateway) CreateSession(ctx context.Context, req SessionRequest) (*S
 	return args.Get(0).(*SessionResponse), args.Error(1)
 }
 
+func (m *MockGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
+	args := m.Called(ctx, body, headers)
+	return args.Error(0)
+}
+
 func (m *MockGateway) ExtractReferenceNumber(ctx context.Context, reqData json.RawMessage) (string, error) {
 	args := m.Called(ctx, reqData)
 	return args.String(0), args.Error(1)

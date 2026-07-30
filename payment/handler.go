@@ -36,8 +36,16 @@ func (h *HTTPHandler) HandleValidateReference(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	resp, err := h.service.ValidateReference(r.Context(), gatewayID, body)
+	resp, err := h.service.ValidateReference(r.Context(), gatewayID, body, r.Header)
 	if err != nil {
+		// Unverified caller: reject before any gateway-specific parsing or
+		// disclosure of presentment info. 401, not the generic 500 below —
+		// this is an authentication failure, not a transient/internal one.
+		if errors.Is(err, ErrWebhookVerificationFailed) {
+			slog.WarnContext(r.Context(), "validation request failed verification", "gateway", gatewayID, "error", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		slog.ErrorContext(r.Context(), "failed to validate reference", "gateway", gatewayID, "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -74,6 +82,15 @@ func (h *HTTPHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.ProcessWebhook(r.Context(), gatewayID, body, r.Header)
 	if err != nil {
+		// Unverified caller: rejected before any parsing or settlement
+		// happened. 401 (see rationale on the validate handler above),
+		// distinct from the 404/400/422 business-logic cases and the
+		// transient-500 fallback below.
+		if errors.Is(err, ErrWebhookVerificationFailed) {
+			slog.WarnContext(r.Context(), "webhook failed verification", "gateway", gatewayID, "error", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		// An unknown reference is permanent; respond 404 so the gateway stops
 		// retrying instead of hammering us forever. Everything else is treated
 		// as transient (500) so the gateway's retry can re-drive it.

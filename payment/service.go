@@ -42,6 +42,17 @@ func toDomainStatus(s WebhookStatus) (PaymentStatus, error) {
 	}
 }
 
+// verifyCaller runs the gateway's cryptographic verification hook before any
+// gateway-specific parsing, wrapping a failure so
+// errors.Is(err, ErrWebhookVerificationFailed) succeeds while the underlying
+// verifier error's text (not its type) is preserved for logging.
+func verifyCaller(ctx context.Context, gateway PaymentGateway, gatewayID string, body []byte, headers map[string][]string) error {
+	if err := gateway.VerifyWebhook(ctx, body, headers); err != nil {
+		return fmt.Errorf("gateway %s: %w (%v)", gatewayID, ErrWebhookVerificationFailed, err)
+	}
+	return nil
+}
+
 // TaskCompleter resumes a suspended workflow step once a payment reaches a
 // terminal outcome. It is satisfied by the taskv2 TaskManager.
 type TaskCompleter interface {
@@ -57,7 +68,7 @@ type PaymentService interface {
 	CreateCheckoutSession(ctx context.Context, req CreateCheckoutRequest) (*CreateCheckoutResponse, error)
 
 	// ValidateReference is used for real-time validation requests from gateways.
-	ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage) (*ValidationResponse, error)
+	ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage, headers map[string][]string) (*ValidationResponse, error)
 
 	// ProcessWebhook handles asynchronous notifications from payment gateways and
 	// returns the gateway-specific acknowledgement to relay back to the gateway.
@@ -196,7 +207,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 	}, nil
 }
 
-func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage) (*ValidationResponse, error) {
+func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage, headers map[string][]string) (*ValidationResponse, error) {
 	slog.DebugContext(ctx, "validating incoming payment reference", "gateway", gatewayID)
 
 	// 1. Get the gateway from the registry using the ID from the URL
@@ -205,19 +216,26 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 		return nil, fmt.Errorf("gateway %s not found: %w", gatewayID, err)
 	}
 
-	// 2. Extract reference number from raw body
+	// 2. Verify the caller before any gateway-specific parsing runs. No
+	// reference lookup, and no presentment info, may be disclosed to an
+	// unverified caller.
+	if err := verifyCaller(ctx, gateway, gatewayID, rawBody, headers); err != nil {
+		return nil, err
+	}
+
+	// 3. Extract reference number from raw body
 	refNo, err := gateway.ExtractReferenceNumber(ctx, rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract reference number: %w", err)
 	}
 
-	// 3. Look up the transaction metadata from the DB
+	// 4. Look up the transaction metadata from the DB
 	tx, err := s.repo.GetByReferenceNumber(ctx, refNo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve payment reference: %w", err)
 	}
 
-	// 4. Map the internal record to the gateway DTO and decide payability.
+	// 5. Map the internal record to the gateway DTO and decide payability.
 	// A nil validationTx signals "no usable transaction" to the gateway: either
 	// the reference is unknown, or it belongs to a different gateway (we must not
 	// leak one gateway's transaction details to another).
@@ -248,6 +266,12 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	gateway, err := s.registry.Get(gatewayID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gateway %s: %w", gatewayID, err)
+	}
+
+	// Verify the caller before any gateway-specific parsing runs. No
+	// transaction may be settled on the strength of an unverified caller.
+	if err := verifyCaller(ctx, gateway, gatewayID, body, headers); err != nil {
+		return nil, err
 	}
 
 	gwPayload, webhookResp, err := gateway.ParseWebhook(ctx, body, headers)
