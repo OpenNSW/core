@@ -1,3 +1,5 @@
+github.com/OpenNSW/core/authn v0.1.0 h1:Q9e/8Mjhz21rk9v4Ns9drZFEOmEuNPzfdu3DX50Tz5Q=
+github.com/OpenNSW/core/authn v0.1.0/go.mod h1:PG0/CfrGYKESPkqGVrR+VNldSnjE7FX1+hqtMFUmHVs=
 github.com/OpenNSW/core/remote v0.4.0 h1:ff58cmGqe4Eh6iL/eRtW5XpKPV8Ta3P6UmehN6VZ0+A=
 github.com/OpenNSW/core/remote v0.4.0/go.mod h1:x6jxSvTUF9VjxpLL/2TsLUD7kWblUmTooWIuOWf4AA4=
 github.com/OpenNSW/core/secret v0.1.0 h1:y8fH0GfKmZu3eRFwPPQG5BLYez6yysNoiUMrLgxxN+o=

@@ -13,6 +13,7 @@ updates:
       - "/authz"
       - "/secret"
       - "/shared"
+      - "/authn"
     schedule:
       interval: "weekly"
       day: "monday"
