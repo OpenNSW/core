@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -42,6 +43,23 @@ var ErrUnsupportedWebhookStatus = errors.New("unsupported webhook status")
 // this must be checked (and satisfied) before any gateway-specific parsing
 // of the request runs.
 var ErrWebhookVerificationFailed = errors.New("webhook verification failed")
+
+// NewWebhookVerificationError builds the error a VerifyWebhook implementation
+// should return once it has positively determined the caller is NOT
+// genuinely this gateway (see VerifyWebhook's error-classification contract
+// below). It wraps ErrWebhookVerificationFailed via %w, so
+// errors.Is(err, ErrWebhookVerificationFailed) succeeds and HTTPHandler maps
+// the response to 401.
+//
+// Using this instead of hand-rolling fmt.Errorf("%s: %w", reason,
+// ErrWebhookVerificationFailed) is entirely optional — any error that
+// already wraps ErrWebhookVerificationFailed some other way is equally
+// valid — but it gives gateway authors an easy, hard-to-get-wrong default,
+// reducing the risk of forgetting the %w and misclassifying a genuine
+// rejection as an operational failure.
+func NewWebhookVerificationError(reason string) error {
+	return fmt.Errorf("%s: %w", reason, ErrWebhookVerificationFailed)
+}
 
 type SessionRequest struct {
 	Amount             decimal.Decimal `json:"amount"`
@@ -127,7 +145,12 @@ type PaymentGateway interface {
 	// the caller is invalid and must not use this sentinel; they are treated
 	// as transient (mapped to 500, so the gateway's retry can re-drive it),
 	// exactly like an unclassified error from any of this interface's other
-	// methods.
+	// methods. Forgetting to wrap the sentinel for a genuine rejection has a
+	// concrete cost: HTTPHandler responds 500 instead of 401, so the caller
+	// burns its retry budget retrying a request that can never succeed, and
+	// monitoring records it as a transient/internal failure rather than an
+	// auth rejection. See NewWebhookVerificationError for a helper that
+	// builds a correctly-wrapped rejection.
 	//
 	// For a scheme needing anything beyond body/headers — e.g. query
 	// parameters, HTTP method, request path, TLS connection state, or remote

@@ -59,7 +59,7 @@ func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[
         // token-introspection endpoint) must be returned unwrapped, so it's
         // treated as a transient failure, not a rejection — see
         // "Verification error classification" below.
-        return fmt.Errorf("invalid or missing bearer token: %w", payment.ErrWebhookVerificationFailed)
+        return payment.NewWebhookVerificationError("invalid or missing bearer token")
     }
     return nil
 }
@@ -167,7 +167,7 @@ func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[
         // bypassing HTTPHandler (a unit test, say). Fall back to whatever
         // the explicit body/headers params allow, or fail closed if this
         // scheme can't verify without the request.
-        return fmt.Errorf("request context unavailable: %w", payment.ErrWebhookVerificationFailed)
+        return errors.New("request context unavailable: cannot verify without the inbound request")
     }
 
     // Pick whatever dimension(s) this scheme actually needs:
@@ -177,7 +177,7 @@ func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[
     remoteAddr := req.RemoteAddr             // source-IP allowlisting
 
     if !isValid(query, method, path, tlsState, remoteAddr) {
-        return fmt.Errorf("invalid signature: %w", payment.ErrWebhookVerificationFailed)
+        return payment.NewWebhookVerificationError("invalid signature")
     }
     return nil
 }
@@ -223,6 +223,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
 - `ErrWebhookVerificationFailed`: Caller could not be cryptographically verified — see "Verification error classification" above for when a gateway should (and should not) use this
+- `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
 
 ## Integration Example
 

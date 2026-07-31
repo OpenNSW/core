@@ -32,6 +32,11 @@ const requestContextKey contextKey = "payment_inbound_request"
 // payload; r.Body here will read as empty, not the original payload. This
 // mechanism is for everything else about the request, not for re-reading the
 // body.
+//
+// r itself is stored as given — its own r.Context() at this point is
+// whatever it was before this call (e.g. net/http's server-assigned
+// context), not the context this function returns. RequestFromContext
+// reconciles that on retrieval: see its doc comment.
 func ContextWithRequest(ctx context.Context, r *http.Request) context.Context {
 	return context.WithValue(ctx, requestContextKey, r)
 }
@@ -43,12 +48,22 @@ func ContextWithRequest(ctx context.Context, r *http.Request) context.Context {
 // return as "not available" and fall back to whatever the explicit
 // body/headers parameters allow, rather than treating nil as a zero-value
 // request. The returned *http.Request must not be mutated: HTTPHandler is
-// still using the same instance to serve the response after PaymentService
-// returns.
+// still using the underlying request to serve the response after
+// PaymentService returns, and other callers may hold their own copy.
+//
+// The returned request is rewrapped via r.WithContext(ctx) using the exact
+// ctx this function is called with, so its own .Context() is that same ctx
+// — not just whatever context ContextWithRequest happened to return earlier.
+// This stays consistent even if ctx is wrapped further after
+// ContextWithRequest ran, since context.Value lookups delegate to parent
+// contexts regardless of how many layers were added afterward. One
+// consequence: repeated calls to RequestFromContext, even with the same ctx,
+// return distinct *http.Request instances (shallow copies sharing the same
+// underlying Header/URL/Body/etc.), not the exact same pointer every time.
 func RequestFromContext(ctx context.Context) *http.Request {
 	if v := ctx.Value(requestContextKey); v != nil {
-		if r, ok := v.(*http.Request); ok {
-			return r
+		if r, ok := v.(*http.Request); ok && r != nil {
+			return r.WithContext(ctx)
 		}
 	}
 	return nil
