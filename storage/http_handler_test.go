@@ -90,7 +90,9 @@ func TestDownload_MissingKey(t *testing.T) {
 
 func TestDownload_Success(t *testing.T) {
 	mock := &MockDriver{}
-	handler := NewHTTPHandler(NewService(mock))
+	handler := NewHTTPHandler(NewService(mock)).WithAccessValidator(func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error) {
+		return true, nil
+	})
 
 	// Build request with auth context and path value.
 	mux := http.NewServeMux()
@@ -131,7 +133,9 @@ func TestDownload_GenerateURLError(t *testing.T) {
 	mock := &MockDriver{
 		GenerateURLErr: errors.New("presign failure"),
 	}
-	handler := NewHTTPHandler(NewService(mock))
+	handler := NewHTTPHandler(NewService(mock)).WithAccessValidator(func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error) {
+		return true, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /files/{key}", handler.Download)
@@ -156,7 +160,9 @@ func TestDownload_GenerateURLError(t *testing.T) {
 }
 
 func TestDownload_InvalidKeyFormat(t *testing.T) {
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
+	handler := NewHTTPHandler(NewService(&MockDriver{})).WithAccessValidator(func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error) {
+		return true, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /files/{key}", handler.Download)
@@ -211,7 +217,9 @@ func TestUpload_ContentTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHTTPHandler(NewService(&MockDriver{}))
+			handler := NewHTTPHandler(NewService(&MockDriver{})).WithOnUploadHook(func(ctx context.Context, meta *FileMetadata, authCtx *authn.AuthContext) error {
+				return nil
+			})
 
 			body := map[string]any{
 				"filename":  tt.filename,
@@ -239,7 +247,9 @@ func TestUpload_ContentTypes(t *testing.T) {
 
 func TestUpload_Success(t *testing.T) {
 	mock := &MockDriver{}
-	handler := NewHTTPHandler(NewService(mock))
+	handler := NewHTTPHandler(NewService(mock)).WithOnUploadHook(func(ctx context.Context, meta *FileMetadata, authCtx *authn.AuthContext) error {
+		return nil
+	})
 
 	body := map[string]any{
 		"filename":  "test.pdf",
@@ -282,7 +292,7 @@ func TestUploadContentLocal_Success(t *testing.T) {
 	handler := NewHTTPHandler(service)
 
 	key := "550e8400-e29b-41d4-a716-446655440000.pdf"
-	content := []byte("pdf content")
+	content := []byte("%PDF-1.4 valid test pdf content")
 
 	// Generate valid upload URL using the driver
 	contentType := "application/pdf"
@@ -321,6 +331,97 @@ func TestUploadContentLocal_Success(t *testing.T) {
 	savedContent, _ := io.ReadAll(reader)
 	if !bytes.Equal(savedContent, content) {
 		t.Error("saved content does not match")
+	}
+}
+
+func TestUpload_WithOnUploadHook(t *testing.T) {
+	mock := &MockDriver{}
+	hookCalled := false
+	handler := NewHTTPHandler(NewService(mock)).WithOnUploadHook(func(ctx context.Context, meta *FileMetadata, authCtx *authn.AuthContext) error {
+		hookCalled = true
+		if meta.Name != "test.pdf" {
+			t.Errorf("expected filename test.pdf in hook, got %v", meta.Name)
+		}
+		return nil
+	})
+
+	body := map[string]any{
+		"filename":  "test.pdf",
+		"mime_type": "application/pdf",
+		"size":      1024,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{
+		User: &authn.UserContext{ID: "trader-1"},
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.Upload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	var metadata FileMetadata
+	if err := json.NewDecoder(rec.Body).Decode(&metadata); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if metadata.Name != "test.pdf" {
+		t.Errorf("expected metadata.Name test.pdf, got %v", metadata.Name)
+	}
+	if !hookCalled {
+		t.Error("expected OnUploadHook to be called")
+	}
+}
+
+func TestUpload_OnUploadHookError_Denies(t *testing.T) {
+	mock := &MockDriver{}
+	handler := NewHTTPHandler(NewService(mock)).WithOnUploadHook(func(ctx context.Context, meta *FileMetadata, authCtx *authn.AuthContext) error {
+		return errors.New("ownership verification failed")
+	})
+
+	body := map[string]any{
+		"filename":  "test.pdf",
+		"mime_type": "application/pdf",
+		"size":      1024,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{
+		User: &authn.UserContext{ID: "trader-1"},
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.Upload(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 Forbidden when OnUploadHook returns error, got %d", rec.Code)
+	}
+}
+
+func TestDownload_AccessValidator_Denies(t *testing.T) {
+	handler := NewHTTPHandler(NewService(&MockDriver{})).WithAccessValidator(func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error) {
+		return false, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
+	ctx := withAuthContext(req.Context(), &authn.AuthContext{User: &authn.UserContext{ID: "u1"}})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.Download(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 Forbidden when AccessValidator denies, got %d", rec.Code)
 	}
 }
 

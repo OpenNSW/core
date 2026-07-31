@@ -3,7 +3,7 @@
 
 package storage
 
-// FileMetadata represents the metadata of an uploaded file
+// FileMetadata represents the metadata of an uploaded file.
 type FileMetadata struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
