@@ -25,6 +25,36 @@ func main() {
 }
 ```
 
+### Logging with Trace IDs
+
+Wrap an `slog.Handler` with `logging.NewHandler` (in the `trace/logging` subpackage) to automatically attach the request's trace ID as a `"traceId"` attribute on every log record produced via a `*Context` `slog` method (`InfoContext`, `WarnContext`, `ErrorContext`, ...). Call sites no longer need to add `traceId` manually:
+
+```go
+import (
+    "log/slog"
+    "net/http"
+    "os"
+
+    "github.com/OpenNSW/core/trace"
+    "github.com/OpenNSW/core/trace/logging"
+)
+
+func main() {
+    base := slog.NewJSONHandler(os.Stdout, nil)
+    logger := slog.New(logging.NewHandler(base))
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api/v1/resource", func(w http.ResponseWriter, r *http.Request) {
+        // r.Context() carries the trace ID injected by TraceMiddleware below.
+        logger.ErrorContext(r.Context(), "request failed") // includes "traceId" automatically
+    })
+
+    http.ListenAndServe(":8080", trace.TraceMiddleware(mux))
+}
+```
+
+If the context passed to the logging call has no trace ID, the record is logged unchanged.
+
 ### Context Helpers
 
 You can manually get or set the trace ID within a `context.Context` using the provided helpers:
