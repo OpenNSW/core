@@ -77,8 +77,8 @@ This ensures that the client receives the exact trace ID that was used to proces
 
 ## Testing
 
-Run the package tests using:
+Run the package tests using (from within the `trace` directory):
 
 ```bash
-go test ./trace/...
+go test ./...
 ```

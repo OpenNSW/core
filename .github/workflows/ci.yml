@@ -382,6 +382,41 @@ jobs:
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+  # The trace/ package is its own Go module, so the root ./... jobs above do not
+  # cover it. Run its quality checks and tests independently.
+  trace-module:
+    name: Trace Module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: trace
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'trace/go.mod'
+          cache-dependency-path: trace/go.mod
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          # trace has no third-party deps, so no go.sum is generated; diff the
+          # whole module dir rather than naming files that may not exist.
+          git diff --exit-code -- .
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: trace
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
   # STAGE 3: Parallel security + vuln scans.
   govulncheck:
     name: Vulnerability Scan
