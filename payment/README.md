@@ -155,13 +155,37 @@ Conflating the two means an operational blip on your own side (not an attack) ca
 
 ## Extending verification beyond body and headers
 
-`VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This covers header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) — every gateway currently planned for this SDK. GovPay+ (the only gateway actually being implemented) uses a bearer token; LankaPay has no documented signing scheme anywhere and has never been implemented.
+`VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This covers header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) directly — but some schemes need more: a signature computed over the HTTP method and request path, a check against query parameters, an IP allowlist against the remote address, or an mTLS client-certificate check against the TLS connection state.
 
-Nothing beyond that is built today, because nothing currently needs it — building a mechanism for query parameters, method/path-inclusive signatures, mTLS, or source-IP verification before a real gateway requires it would mean shipping unused API surface with nothing depending on it.
+Rather than changing `VerifyWebhook`'s signature every time a scheme needs a different dimension of the request — which would mean a coordinated breaking change across every implementer, every time — that data is available via context: `HTTPHandler` attaches the full inbound `*http.Request` to the context (via `payment.ContextWithRequest`) before ever calling into `PaymentService`, on every request, so a gateway's `VerifyWebhook` can retrieve it with `payment.RequestFromContext(ctx)` and read whatever dimension its own scheme requires, without `core/payment` ever having to anticipate which one that is:
 
-**If a real need arises:** do not change `VerifyWebhook`'s signature — that would be a third breaking change to this interface (after `ParseWebhook`'s return-value change and `VerifyWebhook`'s own addition), requiring another coordinated PR across every consumer plus a version bump, every time a different scheme needs a different dimension of the request. Instead, thread the additional data through `ctx`, mirroring this SDK's own `core/trace` package (`TraceMiddleware` injects a trace ID into `context.Context`, retrieved via `trace.GetTraceID(ctx)` — no interface signature involved): have `HTTPHandler` inject whatever the concrete scheme needs (e.g. the inbound `*http.Request`, for full generality) into `ctx` before calling into the service, and expose an accessor a gateway's `VerifyWebhook` can call if it needs it. This keeps the interface stable regardless of how many future schemes turn out to need different request data, without speculatively building that mechanism now.
+```go
+func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
+    req := payment.RequestFromContext(ctx)
+    if req == nil {
+        // Not available — e.g. PaymentService was invoked directly,
+        // bypassing HTTPHandler (a unit test, say). Fall back to whatever
+        // the explicit body/headers params allow, or fail closed if this
+        // scheme can't verify without the request.
+        return fmt.Errorf("request context unavailable: %w", payment.ErrWebhookVerificationFailed)
+    }
 
-If choosing a scheme that needs TLS state or the real client IP specifically: confirm with your infrastructure team where TLS actually terminates first. If a WAF/LB/ingress terminates TLS ahead of this process, `r.TLS` here is nil regardless of any code change — real mTLS would require the edge to verify the client certificate and forward the result via a trusted header, safe to trust only if network policy guarantees the edge is the sole path in. The same caveat applies to source-IP allowlisting via `X-Forwarded-For` vs. `r.RemoteAddr`. This is a deployment-topology decision, not something this package can resolve on its own.
+    // Pick whatever dimension(s) this scheme actually needs:
+    query := req.URL.Query()                 // signature/timestamp in query params
+    method, path := req.Method, req.URL.Path // method+path-bound signatures
+    tlsState := req.TLS                      // mTLS client-certificate checks
+    remoteAddr := req.RemoteAddr             // source-IP allowlisting
+
+    if !isValid(query, method, path, tlsState, remoteAddr) {
+        return fmt.Errorf("invalid signature: %w", payment.ErrWebhookVerificationFailed)
+    }
+    return nil
+}
+```
+
+`req.Body` has already been drained by `HTTPHandler` by the time `VerifyWebhook` runs (to produce the `body` parameter above) — use the explicit `body` parameter for the payload, not `req.Body`. Treat a `nil` return from `RequestFromContext` as "not available" rather than a zero-value request, and never mutate the returned request — `HTTPHandler` is still using it to serve the response.
+
+If your scheme needs TLS state or the real client IP specifically: confirm with your infrastructure team where TLS actually terminates first. If a WAF/LB/ingress terminates TLS ahead of this process, `req.TLS` here is nil regardless of any code change — real mTLS requires the edge to verify the client certificate and forward the result via a trusted header, safe to trust only if network policy guarantees the edge is the sole path in. The same caveat applies to source-IP allowlisting via `X-Forwarded-For` vs. `req.RemoteAddr`. This is a deployment-topology decision, not something this package can resolve on its own.
 
 ## Exported Types and Functions
 
@@ -187,6 +211,11 @@ If choosing a scheme that needs TLS state or the real client IP specifically: co
 - `NewPaymentService(repo PaymentRepository, registry GatewayRegistry)`: Create payment service
 - `NewPaymentRepository(db *gorm.DB)`: Create payment repository
 - `NewHTTPHandler(service PaymentService)`: Create HTTP handler
+
+### Context Helpers
+
+- `ContextWithRequest(ctx context.Context, r *http.Request) context.Context`: Attach the inbound request to a context — called by `HTTPHandler`
+- `RequestFromContext(ctx context.Context) *http.Request`: Retrieve it — see "Extending verification beyond body and headers" above
 
 ### Error Types
 

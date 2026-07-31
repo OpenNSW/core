@@ -128,6 +128,11 @@ type PaymentGateway interface {
 	// as transient (mapped to 500, so the gateway's retry can re-drive it),
 	// exactly like an unclassified error from any of this interface's other
 	// methods.
+	//
+	// For a scheme needing anything beyond body/headers — e.g. query
+	// parameters, HTTP method, request path, TLS connection state, or remote
+	// address — see RequestFromContext, which HTTPHandler populates with the
+	// full inbound *http.Request before this is invoked.
 	VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error
 
 	// ExtractReferenceNumber parses the gateway-specific validation request to extract the reference number.
