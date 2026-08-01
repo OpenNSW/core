@@ -1,9 +1,9 @@
 module github.com/OpenNSW/core/remote
 
-go 1.26.4
+go 1.26
 
 require (
-	github.com/OpenNSW/core/secret v0.1.0
+	github.com/OpenNSW/core/secret v0.2.0
 	github.com/stretchr/testify v1.11.1
 )
 
