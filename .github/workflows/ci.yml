@@ -84,6 +84,8 @@ jobs:
   remote-module:
     name: Remote Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: remote
@@ -117,6 +119,8 @@ jobs:
   payment-module:
     name: Payment Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: payment
@@ -150,6 +154,8 @@ jobs:
   database-module:
     name: Database Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: database
@@ -183,6 +189,8 @@ jobs:
   authz-module:
     name: Authz Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: authz
@@ -218,6 +226,8 @@ jobs:
   pagination-module:
     name: Pagination Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: pagination
@@ -253,6 +263,8 @@ jobs:
   secret-module:
     name: Secret Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: secret
@@ -286,6 +298,8 @@ jobs:
   authn-module:
     name: Authn Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: authn
@@ -319,6 +333,8 @@ jobs:
   uiprojector-module:
     name: UIProjector Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: uiprojector
@@ -352,6 +368,8 @@ jobs:
   shared-module:
     name: Shared Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: shared
