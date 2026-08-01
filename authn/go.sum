@@ -1,4 +1,4 @@
-github.com/OpenNSW/core/shared v0.1.0 h1:mY4ZNvF61QYe7+EwuiAveMQDONiMARqQOZ/Mxwm6Bag=
-github.com/OpenNSW/core/shared v0.1.0/go.mod h1:C149n/Kz1Fj+50J88zQx2WTPK+hsEh7gtGwuBB2M4fk=
+github.com/OpenNSW/core/shared v0.2.0 h1:4cLGdfE9Qf6m1mjgYPWFZDKrnUsXxajLyQn26hg2FOw=
+github.com/OpenNSW/core/shared v0.2.0/go.mod h1:Lgh13h6agGl6WFR9i1W0iaUUky7wC0uLJrVc+FRRtMU=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
