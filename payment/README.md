@@ -45,20 +45,25 @@ func (g *MyGateway) CreateSession(ctx context.Context, req payment.SessionReques
     return &payment.SessionResponse{...}, nil
 }
 
-// VerifyWebhook cryptographically authenticates the caller — using
-// whatever scheme this gateway requires (HMAC signature, bearer token,
-// etc.) — before ExtractReferenceNumber or ParseWebhook ever runs. There is
-// no default: every gateway must implement a real check here, or no
-// transaction can ever be settled through it.
+// VerifyWebhook authenticates the caller — using whatever scheme this
+// gateway requires (HMAC signature, bearer token, IP allowlist, a
+// server-side status check, etc. — not every scheme needs to be
+// cryptographic) — before ExtractReferenceNumber or ParseWebhook ever runs.
+// There is no default: every gateway must implement a real check here, or
+// no transaction can ever be settled through it.
 func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
     token := http.Header(headers).Get("Authorization")
-    if !isValidBearerToken(token) {
-        // Wrap ErrWebhookVerificationFailed only when verification has
-        // positively determined the caller is invalid — this is what maps
-        // to 401. Any other error (e.g. a timeout reaching an upstream
-        // token-introspection endpoint) must be returned unwrapped, so it's
-        // treated as a transient failure, not a rejection — see
-        // "Verification error classification" below.
+    valid, err := isValidBearerToken(ctx, token)
+    if err != nil {
+        // An operational failure to complete the check (e.g. a timeout
+        // reaching an upstream token-introspection endpoint) — NOT proof
+        // the caller is invalid. Return unwrapped so it's treated as
+        // transient — see "Verification error classification" below.
+        return fmt.Errorf("checking bearer token: %w", err)
+    }
+    if !valid {
+        // The check ran and determined the caller is invalid — this is
+        // what maps to 401.
         return payment.NewWebhookVerificationError("invalid or missing bearer token")
     }
     return nil
@@ -176,7 +181,13 @@ func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[
     tlsState := req.TLS                      // mTLS client-certificate checks
     remoteAddr := req.RemoteAddr             // source-IP allowlisting
 
-    if !isValid(query, method, path, tlsState, remoteAddr) {
+    valid, err := isValid(ctx, query, method, path, tlsState, remoteAddr)
+    if err != nil {
+        // An operational failure to complete the check — NOT proof the
+        // caller is invalid. Return unwrapped so it's treated as transient.
+        return fmt.Errorf("verifying request: %w", err)
+    }
+    if !valid {
         return payment.NewWebhookVerificationError("invalid signature")
     }
     return nil
@@ -222,7 +233,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrUnsupportedWebhookStatus`: Gateway status cannot be normalized
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
-- `ErrWebhookVerificationFailed`: Caller could not be cryptographically verified — see "Verification error classification" above for when a gateway should (and should not) use this
+- `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
 - `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
 
 ## Integration Example
