@@ -1,6 +1,6 @@
 module github.com/OpenNSW/core/secret
 
-go 1.26.4
+go 1.26
 
 require github.com/stretchr/testify v1.11.1
 
