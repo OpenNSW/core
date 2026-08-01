@@ -405,6 +405,8 @@ jobs:
   trace-module:
     name: Trace Module
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: trace
