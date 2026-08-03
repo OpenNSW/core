@@ -3,7 +3,7 @@ module github.com/OpenNSW/core/database
 go 1.26
 
 require (
-	gorm.io/driver/postgres v1.6.1
+	gorm.io/driver/postgres v1.6.2
 	gorm.io/gorm v1.31.2
 )
 
