@@ -39,7 +39,7 @@ type LocalFSDriver struct {
 // secretKey is the secret used for HMAC signing of local-put upload URLs.
 // presignTTL is the default time-to-live for presigned URLs.
 func NewLocalFSDriver(baseDir, publicURL, secretKey string, presignTTL time.Duration) (*LocalFSDriver, error) {
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	if err := os.MkdirAll(baseDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create base directory: %w", err)
 	}
 	if presignTTL == 0 {
@@ -91,7 +91,7 @@ func (d *LocalFSDriver) Save(ctx context.Context, key string, body io.Reader, co
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(fullAbs), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fullAbs), 0750); err != nil {
 		return fmt.Errorf("failed to create hashed directory: %w", err)
 	}
 
@@ -108,7 +108,7 @@ func (d *LocalFSDriver) Save(ctx context.Context, key string, body io.Reader, co
 	}
 
 	metaPath := fullAbs + ".meta"
-	if err := os.WriteFile(metaPath, []byte(contentType), 0644); err != nil {
+	if err := os.WriteFile(metaPath, []byte(contentType), 0600); err != nil {
 		_ = os.Remove(fullAbs)
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
