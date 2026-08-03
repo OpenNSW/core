@@ -10,6 +10,7 @@ import (
 )
 
 func loadConfigMap(path string) (map[string]json.RawMessage, error) {
+	// #nosec G304 -- path is deployment-supplied notification config (cfg.Path), not derived from user input
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read notification config %q: %w", path, err)
