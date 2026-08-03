@@ -20,10 +20,7 @@ import (
 // Callers can use errors.Is(err, drivers.ErrInvalidPath) to detect validation failures.
 var ErrInvalidPath = errors.New("invalid path: traversal or invalid key not allowed")
 
-var (
-	errInvalidKey  = errors.New("invalid key: path traversal not allowed")
-	errPathOutside = errors.New("path outside base directory")
-)
+var errInvalidKey = errors.New("invalid key: path traversal not allowed")
 
 // LocalFSDriver implements StorageDriver for local disk with directory hashing
 type LocalFSDriver struct {
@@ -31,6 +28,7 @@ type LocalFSDriver struct {
 	PublicURL  string
 	secretKey  string
 	presignTTL time.Duration
+	root       *os.Root
 }
 
 // NewLocalFSDriver creates a new LocalFSDriver.
@@ -42,10 +40,16 @@ func NewLocalFSDriver(baseDir, publicURL, secretKey string, presignTTL time.Dura
 	if err := os.MkdirAll(baseDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create base directory: %w", err)
 	}
+	// root confines every subsequent file operation to baseDir at the OS level,
+	// including across symlinks in hashed subdirectories created later by Save.
+	root, err := os.OpenRoot(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open base directory: %w", err)
+	}
 	if presignTTL == 0 {
 		presignTTL = DefaultPresignTTL
 	}
-	return &LocalFSDriver{BaseDir: baseDir, PublicURL: publicURL, secretKey: secretKey, presignTTL: presignTTL}, nil
+	return &LocalFSDriver{BaseDir: baseDir, PublicURL: publicURL, secretKey: secretKey, presignTTL: presignTTL, root: root}, nil
 }
 
 // getHashedPath generates a two-level deep path for a key to avoid flat directory issues.
@@ -56,46 +60,25 @@ func (d *LocalFSDriver) getHashedPath(key string) string {
 	return filepath.Join(key[0:2], key[2:4], key)
 }
 
-// resolveAndValidate returns the absolute path for key and ensures it is under BaseDir.
-// Uses EvalSymlinks on the base so symlinks cannot be used to escape the root.
-func (d *LocalFSDriver) resolveAndValidate(key string) (fullAbs string, err error) {
+// validateKey rejects keys that could traverse or escape the storage root and
+// returns the two-level hashed path (relative to d.root) used for on-disk storage.
+func (d *LocalFSDriver) validateKey(key string) (hashed string, err error) {
 	if strings.Contains(key, "..") || strings.Contains(key, "/") || strings.Contains(key, "\\") {
 		return "", fmt.Errorf("invalid key: %w", errors.Join(ErrInvalidPath, errInvalidKey))
 	}
-	baseAbs, err := filepath.Abs(d.BaseDir)
-	if err != nil {
-		return "", fmt.Errorf("base directory resolution: %w", err)
-	}
-	baseResolved := baseAbs
-	if resolved, evalErr := filepath.EvalSymlinks(baseAbs); evalErr == nil {
-		baseResolved = resolved
-	}
-	hashed := d.getHashedPath(key)
-	fullPath := filepath.Join(baseResolved, hashed)
-	fullAbs, err = filepath.Abs(fullPath)
-	if err != nil {
-		return "", fmt.Errorf("path resolution: %w", err)
-	}
-	rel, err := filepath.Rel(baseResolved, fullAbs)
-	if err != nil {
-		return "", fmt.Errorf("path resolution: %w", err)
-	}
-	if strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("path outside base: %w", errors.Join(ErrInvalidPath, errPathOutside))
-	}
-	return fullAbs, nil
+	return d.getHashedPath(key), nil
 }
 
 func (d *LocalFSDriver) Save(ctx context.Context, key string, body io.Reader, contentType string) error {
-	fullAbs, err := d.resolveAndValidate(key)
+	hashed, err := d.validateKey(key)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(fullAbs), 0750); err != nil {
+	if err := d.root.MkdirAll(filepath.Dir(hashed), 0750); err != nil {
 		return fmt.Errorf("failed to create hashed directory: %w", err)
 	}
 
-	file, err := os.Create(fullAbs)
+	file, err := d.root.Create(hashed)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
@@ -103,13 +86,13 @@ func (d *LocalFSDriver) Save(ctx context.Context, key string, body io.Reader, co
 
 	if _, err := io.Copy(file, body); err != nil {
 		_ = file.Close()
-		_ = os.Remove(fullAbs)
+		_ = d.root.Remove(hashed)
 		return fmt.Errorf("failed to save file content: %w", err)
 	}
 
-	metaPath := fullAbs + ".meta"
-	if err := os.WriteFile(metaPath, []byte(contentType), 0600); err != nil {
-		_ = os.Remove(fullAbs)
+	metaPath := hashed + ".meta"
+	if err := d.root.WriteFile(metaPath, []byte(contentType), 0600); err != nil {
+		_ = d.root.Remove(hashed)
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
@@ -117,18 +100,18 @@ func (d *LocalFSDriver) Save(ctx context.Context, key string, body io.Reader, co
 }
 
 func (d *LocalFSDriver) Get(ctx context.Context, key string) (io.ReadCloser, string, error) {
-	fullAbs, err := d.resolveAndValidate(key)
+	hashed, err := d.validateKey(key)
 	if err != nil {
 		return nil, "", err
 	}
-	f, err := os.Open(fullAbs)
+	f, err := d.root.Open(hashed)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get file: %w", err)
 	}
 
-	metaPath := fullAbs + ".meta"
+	metaPath := hashed + ".meta"
 	contentType := DefaultMime
-	if metaBytes, err := os.ReadFile(metaPath); err == nil {
+	if metaBytes, err := d.root.ReadFile(metaPath); err == nil {
 		contentType = string(metaBytes)
 	}
 
@@ -136,12 +119,12 @@ func (d *LocalFSDriver) Get(ctx context.Context, key string) (io.ReadCloser, str
 }
 
 func (d *LocalFSDriver) Delete(ctx context.Context, key string) error {
-	fullAbs, err := d.resolveAndValidate(key)
+	hashed, err := d.validateKey(key)
 	if err != nil {
 		return err
 	}
-	_ = os.Remove(fullAbs + ".meta")
-	if err := os.Remove(fullAbs); err != nil && !os.IsNotExist(err) {
+	_ = d.root.Remove(hashed + ".meta")
+	if err := d.root.Remove(hashed); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete file: %w", err)
 	}
 	return nil
