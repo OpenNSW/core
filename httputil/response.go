@@ -6,6 +6,7 @@
 package httputil
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -26,12 +27,21 @@ type ErrorResponse struct {
 //	httputil.CorrelationIDFunc = trace.GetTraceID
 var CorrelationIDFunc func(context.Context) string
 
-// JSON writes payload as the JSON response body with the given status.
+// JSON writes payload as the JSON response body with the given status. If
+// payload fails to encode, it responds with 500 instead of a partial body
+// under the originally requested status.
 func JSON(w http.ResponseWriter, status int, payload any) {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(payload); err != nil {
+		slog.Error("httputil: failed to encode JSON response", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		slog.Error("httputil: failed to encode JSON response", "error", err)
+	if _, err := w.Write(body.Bytes()); err != nil {
+		slog.Error("httputil: failed to write JSON response", "error", err)
 	}
 }
 

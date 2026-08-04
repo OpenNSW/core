@@ -48,8 +48,18 @@ func (e *errorWriter) Header() http.Header       { return e.header }
 func (e *errorWriter) Write([]byte) (int, error) { return 0, errors.New("write error") }
 func (e *errorWriter) WriteHeader(int)           {}
 
-func TestJSON_EncodeFailureDoesNotPanic(t *testing.T) {
+func TestJSON_WriteFailureDoesNotPanic(t *testing.T) {
 	JSON(&errorWriter{header: http.Header{}}, http.StatusOK, map[string]string{"id": "c-1"})
+}
+
+func TestJSON_EncodeFailureReturns500(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	JSON(w, http.StatusCreated, make(chan int))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
 }
 
 func TestCorrelationID_MatchesResponseCorrelationID(t *testing.T) {

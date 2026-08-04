@@ -7,7 +7,11 @@ Shared HTTP response helpers for writing JSON payloads and standardized, correla
 ### Writing JSON responses
 
 ```go
-import "github.com/OpenNSW/core/httputil"
+import (
+    "net/http"
+
+    "github.com/OpenNSW/core/httputil"
+)
 
 func handleGet(w http.ResponseWriter, r *http.Request) {
     httputil.JSON(w, http.StatusOK, map[string]string{"id": "c-1"})
