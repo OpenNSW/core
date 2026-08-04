@@ -437,6 +437,43 @@ jobs:
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+  # The httputil/ package is its own Go module, so the root ./... jobs above do not
+  # cover it. Run its quality checks and tests independently.
+  httputil-module:
+    name: HTTPUtil Module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: httputil
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'httputil/go.mod'
+          cache-dependency-path: httputil/go.mod
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          # httputil has no third-party deps, so no go.sum is generated; diff the
+          # whole module dir rather than naming files that may not exist.
+          git diff --exit-code -- .
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: httputil
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
   # STAGE 3: Parallel security + vuln scans.
   govulncheck:
     name: Vulnerability Scan
