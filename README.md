@@ -23,6 +23,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`authz`](authz/README.md) | Scope-based authorization middleware and predicates, decoupled from authn |
 | [`cors`](cors/README.md) | CORS HTTP middleware |
 | [`database`](database/README.md) | GORM/PostgreSQL connection factory with pooling and health checks |
+| [`httputil`](httputil/README.md) | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies |
 | [`notification`](notification/README.md) | Multi-channel notification router (SMS, email) with pluggable providers |
 | [`pagination`](pagination/README.md) | Standard pagination envelope and query parameter parsing |
 | [`payment`](payment/README.md) | Pluggable payment gateway orchestration with webhook processing and idempotency |
