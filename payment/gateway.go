@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -33,6 +34,32 @@ const (
 // normalized into a WebhookStatus. It is a permanent condition (retrying the
 // same payload won't help), so callers should not signal the gateway to retry.
 var ErrUnsupportedWebhookStatus = errors.New("unsupported webhook status")
+
+// ErrWebhookVerificationFailed indicates a caller — either a real-time
+// validation request or an asynchronous webhook notification — could not be
+// verified as genuinely originating from the gateway it claims to be. No
+// transaction may be settled, and no presentment information may be
+// disclosed, on the strength of an unverified caller, so this must be
+// checked (and satisfied) before any gateway-specific parsing of the
+// request runs.
+var ErrWebhookVerificationFailed = errors.New("webhook verification failed")
+
+// NewWebhookVerificationError builds the error a VerifyWebhook implementation
+// should return once it has positively determined the caller is NOT
+// genuinely this gateway (see VerifyWebhook's error-classification contract
+// below). It wraps ErrWebhookVerificationFailed via %w, so
+// errors.Is(err, ErrWebhookVerificationFailed) succeeds and HTTPHandler maps
+// the response to 401.
+//
+// Using this instead of hand-rolling fmt.Errorf("%s: %w", reason,
+// ErrWebhookVerificationFailed) is entirely optional — any error that
+// already wraps ErrWebhookVerificationFailed some other way is equally
+// valid — but it gives gateway authors an easy, hard-to-get-wrong default,
+// reducing the risk of forgetting the %w and misclassifying a genuine
+// rejection as an operational failure.
+func NewWebhookVerificationError(reason string) error {
+	return fmt.Errorf("%s: %w", reason, ErrWebhookVerificationFailed)
+}
 
 type SessionRequest struct {
 	Amount             decimal.Decimal `json:"amount"`
@@ -97,6 +124,41 @@ type PaymentGateway interface {
 
 	// CreateSession initializes a payment session with the gateway.
 	CreateSession(ctx context.Context, req SessionRequest) (*SessionResponse, error)
+
+	// VerifyWebhook authenticates an inbound request — a real-time
+	// validation request or an asynchronous webhook notification — as
+	// genuinely originating from this gateway, using whatever scheme the
+	// gateway requires (e.g. an HMAC signature over body, a bearer token
+	// extracted from headers, an IP allowlist, or a server-side status
+	// check against the gateway's own API — not every scheme needs to be
+	// cryptographic). It is called before ExtractReferenceNumber and
+	// ParseWebhook, and a non-nil return blocks both: no reference lookup, no
+	// settlement, and no presentment info may reach an unverified caller.
+	// There is no default/no-op — every implementation must perform a real
+	// check.
+	//
+	// Error contract: return ErrWebhookVerificationFailed (wrapped via %w)
+	// only when verification has positively determined the caller is NOT
+	// genuinely this gateway (e.g. an invalid signature, an expired or
+	// unrecognized token). HTTPHandler maps that sentinel to 401. Return any
+	// other error for a failure to complete verification for an operational
+	// reason (a timeout reaching an upstream introspection/JWKS endpoint, a
+	// missing local configuration, a cancelled context) — those are NOT proof
+	// the caller is invalid and must not use this sentinel; they are treated
+	// as transient (mapped to 500, so the gateway's retry can re-drive it),
+	// exactly like an unclassified error from any of this interface's other
+	// methods. Forgetting to wrap the sentinel for a genuine rejection has a
+	// concrete cost: HTTPHandler responds 500 instead of 401, so the caller
+	// burns its retry budget retrying a request that can never succeed, and
+	// monitoring records it as a transient/internal failure rather than an
+	// auth rejection. See NewWebhookVerificationError for a helper that
+	// builds a correctly-wrapped rejection.
+	//
+	// For a scheme needing anything beyond body/headers — e.g. query
+	// parameters, HTTP method, request path, TLS connection state, or remote
+	// address — see RequestFromContext, which HTTPHandler populates with the
+	// full inbound *http.Request before this is invoked.
+	VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error
 
 	// ExtractReferenceNumber parses the gateway-specific validation request to extract the reference number.
 	ExtractReferenceNumber(ctx context.Context, reqData json.RawMessage) (string, error)

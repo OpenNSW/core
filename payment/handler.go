@@ -35,16 +35,25 @@ func (h *HTTPHandler) HandleValidateReference(w http.ResponseWriter, r *http.Req
 		http.Error(w, "request body too large or unreadable", http.StatusBadRequest)
 		return
 	}
+	ctx := ContextWithRequest(r.Context(), r)
 
-	resp, err := h.service.ValidateReference(r.Context(), gatewayID, body)
+	resp, err := h.service.ValidateReference(ctx, gatewayID, body, r.Header)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "failed to validate reference", "gateway", gatewayID, "error", err)
+		// Unverified caller: reject before any gateway-specific parsing or
+		// disclosure of presentment info. 401, not the generic 500 below —
+		// this is an authentication failure, not a transient/internal one.
+		if errors.Is(err, ErrWebhookVerificationFailed) {
+			slog.WarnContext(ctx, "validation request failed verification", "gateway", gatewayID, "error", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		slog.ErrorContext(ctx, "failed to validate reference", "gateway", gatewayID, "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	if resp == nil {
-		slog.ErrorContext(r.Context(), "validation response is nil", "gateway", gatewayID)
+		slog.ErrorContext(ctx, "validation response is nil", "gateway", gatewayID)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -52,7 +61,7 @@ func (h *HTTPHandler) HandleValidateReference(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.HTTPStatus)
 	if _, err := w.Write(resp.Payload); err != nil {
-		slog.ErrorContext(r.Context(), "failed to write response", "error", err)
+		slog.ErrorContext(ctx, "failed to write response", "error", err)
 	}
 }
 
@@ -71,37 +80,47 @@ func (h *HTTPHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request body too large or unreadable", http.StatusBadRequest)
 		return
 	}
+	ctx := ContextWithRequest(r.Context(), r)
 
-	resp, err := h.service.ProcessWebhook(r.Context(), gatewayID, body, r.Header)
+	resp, err := h.service.ProcessWebhook(ctx, gatewayID, body, r.Header)
 	if err != nil {
+		// Unverified caller: rejected before any parsing or settlement
+		// happened. 401 (see rationale on the validate handler above),
+		// distinct from the 404/400/422 business-logic cases and the
+		// transient-500 fallback below.
+		if errors.Is(err, ErrWebhookVerificationFailed) {
+			slog.WarnContext(ctx, "webhook failed verification", "gateway", gatewayID, "error", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		// An unknown reference is permanent; respond 404 so the gateway stops
 		// retrying instead of hammering us forever. Everything else is treated
 		// as transient (500) so the gateway's retry can re-drive it.
 		if errors.Is(err, ErrTransactionNotFound) {
-			slog.WarnContext(r.Context(), "webhook for unknown reference", "gateway", gatewayID, "error", err)
+			slog.WarnContext(ctx, "webhook for unknown reference", "gateway", gatewayID, "error", err)
 			http.Error(w, "unknown payment reference", http.StatusNotFound)
 			return
 		}
 		// Unsupported status is a permanent payload problem; 400 so the gateway
 		// stops retrying instead of hammering us with a body we can't process.
 		if errors.Is(err, ErrUnsupportedWebhookStatus) {
-			slog.WarnContext(r.Context(), "webhook with unsupported status", "gateway", gatewayID, "error", err)
+			slog.WarnContext(ctx, "webhook with unsupported status", "gateway", gatewayID, "error", err)
 			http.Error(w, "unsupported payment status", http.StatusBadRequest)
 			return
 		}
 		// Amount/currency mismatch: never mark paid, and don't retry.
 		if errors.Is(err, ErrAmountMismatch) {
-			slog.WarnContext(r.Context(), "webhook amount/currency mismatch", "gateway", gatewayID, "error", err)
+			slog.WarnContext(ctx, "webhook amount/currency mismatch", "gateway", gatewayID, "error", err)
 			http.Error(w, "payment amount mismatch", http.StatusUnprocessableEntity)
 			return
 		}
-		slog.ErrorContext(r.Context(), "webhook processing failed", "gateway", gatewayID, "error", err)
+		slog.ErrorContext(ctx, "webhook processing failed", "gateway", gatewayID, "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	if resp == nil {
-		slog.ErrorContext(r.Context(), "webhook response is nil", "gateway", gatewayID)
+		slog.ErrorContext(ctx, "webhook response is nil", "gateway", gatewayID)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -109,6 +128,6 @@ func (h *HTTPHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.HTTPStatus)
 	if _, err := w.Write(resp.Payload); err != nil {
-		slog.ErrorContext(r.Context(), "failed to write webhook response", "error", err)
+		slog.ErrorContext(ctx, "failed to write webhook response", "error", err)
 	}
 }

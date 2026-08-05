@@ -29,9 +29,11 @@ Each payment gateway requires a dedicated implementation of the `PaymentGateway`
 ```go
 type MyGateway struct {}
 
-func (g *MyGateway) ApplyConfig(config json.RawMessage) error {
-    // Inject gateway-specific settings from JSON
-    return nil
+// NewMyGateway is this gateway's Factory, called once by the registry at
+// init time with its raw config from payment_methods.json.
+func NewMyGateway(config json.RawMessage) (payment.PaymentGateway, error) {
+    // Unmarshal gateway-specific settings from JSON.
+    return &MyGateway{}, nil
 }
 
 func (g *MyGateway) GetFlowType() payment.InteractionType {
@@ -41,6 +43,30 @@ func (g *MyGateway) GetFlowType() payment.InteractionType {
 func (g *MyGateway) CreateSession(ctx context.Context, req payment.SessionRequest) (*payment.SessionResponse, error) {
     // Logic to initialize session with gateway
     return &payment.SessionResponse{...}, nil
+}
+
+// VerifyWebhook authenticates the caller — using whatever scheme this
+// gateway requires (HMAC signature, bearer token, IP allowlist, a
+// server-side status check, etc. — not every scheme needs to be
+// cryptographic) — before ExtractReferenceNumber or ParseWebhook ever runs.
+// There is no default: every gateway must implement a real check here, or
+// no transaction can ever be settled through it.
+func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
+    token := http.Header(headers).Get("Authorization")
+    valid, err := isValidBearerToken(ctx, token)
+    if err != nil {
+        // An operational failure to complete the check (e.g. a timeout
+        // reaching an upstream token-introspection endpoint) — NOT proof
+        // the caller is invalid. Return unwrapped so it's treated as
+        // transient — see "Verification error classification" below.
+        return fmt.Errorf("checking bearer token: %w", err)
+    }
+    if !valid {
+        // The check ran and determined the caller is invalid — this is
+        // what maps to 401.
+        return payment.NewWebhookVerificationError("invalid or missing bearer token")
+    }
+    return nil
 }
 
 func (g *MyGateway) ExtractReferenceNumber(ctx context.Context, reqData json.RawMessage) (string, error) {
@@ -53,9 +79,10 @@ func (g *MyGateway) HandleValidateReference(ctx context.Context, tx *payment.Val
     return &payment.ValidationResponse{...}, nil
 }
 
-func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*payment.WebhookPayload, error) {
-    // Logic to parse and validate gateway webhook
-    return &payment.WebhookPayload{...}, nil
+func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*payment.WebhookPayload, *payment.WebhookResponse, error) {
+    // Logic to parse the gateway webhook into a domain-neutral payload,
+    // plus the gateway-specific acknowledgement to relay back.
+    return &payment.WebhookPayload{...}, &payment.WebhookResponse{...}, nil
 }
 ```
 
@@ -88,12 +115,12 @@ The `payment_methods.json` file is the source of truth for available methods.
 The `GatewayRegistry` loads the configuration and maps each method ID to its implementation.
 
 ```go
-gateways := map[string]payment.PaymentGateway{
-    "lankapay": &lankapay.Gateway{},
-    "govpay":   &govpay.Gateway{},
+factories := map[string]payment.Factory{
+    "lankapay": lankapay.NewGateway,
+    "govpay":   govpay.NewGateway,
 }
 
-registry, err := payment.NewRegistry("configs/payment_methods.json", gateways)
+registry, err := payment.NewRegistry("configs/payment_methods.json", factories)
 ```
 
 ### 4. Setup the Orchestrator
@@ -113,13 +140,63 @@ handler := payment.NewHTTPHandler(service)
 The frontend calls `CreateCheckoutSession`. The Service generates an NSW reference, looks up the gateway implementation via the Registry, and delegates the session creation to that gateway.
 
 ### Real-Time Validation
-When a user enters a reference in a bank app, the gateway calls NSW. 
-1. The Service uses the Gateway to **Extract** the reference number.
-2. The Service fetches the transaction from the **Database**.
-3. The Service passes the record back to the Gateway to **Validate** and format the protocol-specific response.
+When a user enters a reference in a bank app, the gateway calls NSW.
+1. The Service looks up the Gateway via the Registry, then calls **VerifyWebhook** to authenticate the caller. A failure here stops the flow immediately — no reference lookup happens, and no presentment info is disclosed.
+2. The Service uses the Gateway to **Extract** the reference number.
+3. The Service fetches the transaction from the **Database**.
+4. The Service passes the record back to the Gateway to **Validate** and format the protocol-specific response.
 
 ### Webhook Processing
-Gateways notify the payment service of results. The Service looks up the gateway via the Registry, delegates the parsing, and then performs domain actions: updating status, persisting metadata, and firing internal events.
+Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing, and then performs domain actions: updating status, persisting metadata, and firing internal events.
+
+## Verification error classification
+
+`VerifyWebhook` implementations must distinguish two different kinds of failure:
+
+- **The caller is not genuinely this gateway** (an invalid or expired token, a signature that doesn't match): wrap `payment.ErrWebhookVerificationFailed` (via `%w`) when returning the error. `HTTPHandler` maps this to `401 Unauthorized`.
+- **Verification could not be completed for an operational reason** (a timeout reaching an upstream introspection/JWKS endpoint, a missing local configuration, a cancelled context): return any other error, unwrapped. This is NOT proof the caller is invalid, and is treated like any other unclassified error — a transient `500`, so the gateway's own retry can re-drive it.
+
+Conflating the two means an operational blip on your own side (not an attack) can permanently drop a legitimate webhook, since most providers treat a `401` as "credentials are bad, stop retrying" rather than something to retry.
+
+## Extending verification beyond body and headers
+
+`VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This covers header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) directly — but some schemes need more: a signature computed over the HTTP method and request path, a check against query parameters, an IP allowlist against the remote address, or an mTLS client-certificate check against the TLS connection state.
+
+Rather than changing `VerifyWebhook`'s signature every time a scheme needs a different dimension of the request — which would mean a coordinated breaking change across every implementer, every time — that data is available via context: `HTTPHandler` attaches the full inbound `*http.Request` to the context (via `payment.ContextWithRequest`) before ever calling into `PaymentService`, on every request, so a gateway's `VerifyWebhook` can retrieve it with `payment.RequestFromContext(ctx)` and read whatever dimension its own scheme requires, without `core/payment` ever having to anticipate which one that is:
+
+```go
+func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
+    req := payment.RequestFromContext(ctx)
+    if req == nil {
+        // Not available — e.g. PaymentService was invoked directly,
+        // bypassing HTTPHandler (a unit test, say). Fall back to whatever
+        // the explicit body/headers params allow, or fail closed if this
+        // scheme can't verify without the request.
+        return errors.New("request context unavailable: cannot verify without the inbound request")
+    }
+
+    // Pick whatever dimension(s) this scheme actually needs:
+    query := req.URL.Query()                 // signature/timestamp in query params
+    method, path := req.Method, req.URL.Path // method+path-bound signatures
+    tlsState := req.TLS                      // mTLS client-certificate checks
+    remoteAddr := req.RemoteAddr             // source-IP allowlisting
+
+    valid, err := isValid(ctx, query, method, path, tlsState, remoteAddr)
+    if err != nil {
+        // An operational failure to complete the check — NOT proof the
+        // caller is invalid. Return unwrapped so it's treated as transient.
+        return fmt.Errorf("verifying request: %w", err)
+    }
+    if !valid {
+        return payment.NewWebhookVerificationError("invalid signature")
+    }
+    return nil
+}
+```
+
+`req.Body` has already been drained by `HTTPHandler` by the time `VerifyWebhook` runs (to produce the `body` parameter above) — use the explicit `body` parameter for the payload, not `req.Body`. Treat a `nil` return from `RequestFromContext` as "not available" rather than a zero-value request, and never mutate the returned request — `HTTPHandler` is still using it to serve the response.
+
+If your scheme needs TLS state or the real client IP specifically: confirm with your infrastructure team where TLS actually terminates first. If a WAF/LB/ingress terminates TLS ahead of this process, `req.TLS` here is nil regardless of any code change — real mTLS requires the edge to verify the client certificate and forward the result via a trusted header, safe to trust only if network policy guarantees the edge is the sole path in. The same caveat applies to source-IP allowlisting via `X-Forwarded-For` vs. `req.RemoteAddr`. This is a deployment-topology decision, not something this package can resolve on its own.
 
 ## Exported Types and Functions
 
@@ -141,16 +218,23 @@ Gateways notify the payment service of results. The Service looks up the gateway
 
 ### Constructor Functions
 
-- `NewRegistry(configPath string, gateways map[string]PaymentGateway)`: Create a gateway registry
-- `NewPaymentService(repo PaymentRepository, registry *GatewayRegistry)`: Create payment service
+- `NewRegistry(configPath string, factories map[string]Factory)`: Create a gateway registry
+- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry)`: Create payment service
 - `NewPaymentRepository(db *gorm.DB)`: Create payment repository
 - `NewHTTPHandler(service PaymentService)`: Create HTTP handler
+
+### Context Helpers
+
+- `ContextWithRequest(ctx context.Context, r *http.Request) context.Context`: Attach the inbound request to a context — called by `HTTPHandler`
+- `RequestFromContext(ctx context.Context) *http.Request`: Retrieve it — see "Extending verification beyond body and headers" above
 
 ### Error Types
 
 - `ErrUnsupportedWebhookStatus`: Gateway status cannot be normalized
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
+- `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
+- `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
 
 ## Integration Example
 
@@ -164,13 +248,13 @@ import (
 )
 
 func setupPayments(db *gorm.DB) *payment.HTTPHandler {
-    // Create your gateway implementations
-    gateways := map[string]payment.PaymentGateway{
-        "your-gateway": &yourgateway.Gateway{},
+    // Wire your gateway Factories
+    factories := map[string]payment.Factory{
+        "your-gateway": yourgateway.NewGateway,
     }
     
     // Initialize registry
-    registry, err := payment.NewRegistry("path/to/config.json", gateways)
+    registry, err := payment.NewRegistry("path/to/config.json", factories)
     if err != nil {
         panic(err)
     }
