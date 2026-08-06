@@ -106,7 +106,7 @@ Used when the authentication type is `"oauth2"`.
 | `client_secret` | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)). |
 | `scopes`        | `[]string` | Optional list of requested scopes.                                                          |
 | `insecure_skip_tls_verify` | `bool` | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`. |
-| `endpoint_params` | `object` | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
+| `endpoint_params` | `object` | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings; `null` is rejected rather than sent as an empty parameter. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
 
 ```json
 {

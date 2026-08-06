@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -46,21 +47,63 @@ func (p *EndpointParams) UnmarshalJSON(data []byte) error {
 
 	out := make(EndpointParams, len(raw))
 	for key, value := range raw {
-		var single string
-		if err := json.Unmarshal(value, &single); err == nil {
-			out[key] = []string{single}
-			continue
+		values, err := decodeEndpointParamValue(value)
+		if err != nil {
+			return fmt.Errorf("endpoint_params: %q %w", key, err)
 		}
-
-		var multiple []string
-		if err := json.Unmarshal(value, &multiple); err != nil {
-			return fmt.Errorf("endpoint_params: %q must be a string or an array of strings", key)
-		}
-		out[key] = multiple
+		out[key] = values
 	}
 
 	*p = out
 	return nil
+}
+
+// errNotStringOrArray describes the only shapes an endpoint parameter value may take. It is
+// wrapped with the offending key, so it reads as `"resource" must be a string or …`.
+var errNotStringOrArray = fmt.Errorf("must be a string or an array of strings")
+
+// decodeEndpointParamValue reads one endpoint parameter value: a string, or an array of
+// strings.
+//
+// JSON null is rejected at both levels. encoding/json accepts it into a string and into an
+// array element, leaving the zero value behind, so `"resource": null` would otherwise decode
+// to a single empty string and be sent as a bare `resource=` — a parameter the caller never
+// asked for, in the position where an authorization server is most likely to reject the whole
+// request without saying which value was wrong.
+func decodeEndpointParamValue(value json.RawMessage) ([]string, error) {
+	if isJSONNull(value) {
+		return nil, fmt.Errorf("%w, not null", errNotStringOrArray)
+	}
+
+	var single string
+	if err := json.Unmarshal(value, &single); err == nil {
+		return []string{single}, nil
+	}
+
+	// Decoded element by element rather than straight into []string, so a null element can
+	// be told apart from an empty string.
+	var elements []json.RawMessage
+	if err := json.Unmarshal(value, &elements); err != nil {
+		return nil, errNotStringOrArray
+	}
+
+	multiple := make([]string, 0, len(elements))
+	for _, element := range elements {
+		var s string
+		if isJSONNull(element) {
+			return nil, fmt.Errorf("%w, not null", errNotStringOrArray)
+		}
+		if err := json.Unmarshal(element, &s); err != nil {
+			return nil, errNotStringOrArray
+		}
+		multiple = append(multiple, s)
+	}
+	return multiple, nil
+}
+
+// isJSONNull reports whether raw is the JSON null literal.
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 // validate rejects parameters the flow sets itself.

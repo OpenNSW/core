@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -350,6 +351,31 @@ func TestEndpointParams_UnmarshalJSON(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "must be a string or an array of strings")
 	})
+
+	// encoding/json would accept either of these into a string and leave the zero value
+	// behind, sending a bare `resource=` the caller never configured.
+	t.Run("rejects a null value", func(t *testing.T) {
+		var p EndpointParams
+		err := json.Unmarshal([]byte(`{"resource":null}`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"resource"`)
+		assert.Contains(t, err.Error(), "not null")
+	})
+
+	t.Run("rejects a null array element", func(t *testing.T) {
+		var p EndpointParams
+		err := json.Unmarshal([]byte(`{"resource":["a",null]}`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"resource"`)
+		assert.Contains(t, err.Error(), "not null")
+	})
+
+	// An explicitly null field is an absent field, not a malformed one.
+	t.Run("a null object is no parameters", func(t *testing.T) {
+		var c OAuth2Config
+		require.NoError(t, json.Unmarshal([]byte(`{"endpoint_params":null}`), &c))
+		assert.Empty(t, c.EndpointParams)
+	})
 }
 
 // TestOAuth2_ErrorResponse_IncludesOAuthError: a rejection must say why, not just how.
@@ -379,6 +405,29 @@ func TestOAuth2_ErrorResponse_IncludesOAuthError(t *testing.T) {
 		_, err := NewOAuth2(ts.URL, "", "", nil).getToken(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "status 500")
+	})
+
+	// A verbose or hostile authorization server must not decide how much of its response
+	// ends up in our error string. Only maxErrorBodyBytes is read, so anything past the cap
+	// — here a sentinel at the tail of an oversized error_description — cannot appear.
+	t.Run("detail is bounded and the status survives", func(t *testing.T) {
+		const sentinel = "PAST_THE_LIMIT"
+		body := `{"error":"invalid_target","error_description":"` +
+			strings.Repeat("A", maxErrorBodyBytes) + sentinel + `"}`
+		require.Greater(t, len(body), maxErrorBodyBytes, "body must exceed the cap to test it")
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(body))
+		}))
+		defer ts.Close()
+
+		_, err := NewOAuth2(ts.URL, "", "", nil).getToken(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status 400", "the status is reported whatever the body")
+		assert.NotContains(t, err.Error(), sentinel, "nothing past the cap is read")
+		assert.Less(t, len(err.Error()), maxErrorBodyBytes,
+			"the error message must not grow with the response body")
 	})
 }
 
