@@ -43,16 +43,24 @@ func (s *spaceDelimitedScope) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// tokenClaims is deliberately minimal: only claims the package's own
+// mechanics depend on (client_id/grant_type for principal-type dispatch and
+// client-id validation, scope for OAuth2 permission scoping, roles for the
+// authz seam both user and client principals rely on) plus the JWT
+// registered claims (sub/iss/aud/exp/...) needed for signature/expiry/issuer/
+// audience validation. Everything else (email, phone_number, ouId, ouHandle,
+// given_name, ...) is IdP/consumer-specific and flows through the
+// extra-claims mechanism (see extra_claims.go) instead of a dedicated field.
+//
+// Roles is captured shape-free (see rolesValue) so that WithRolesClaim can
+// genuinely move roles elsewhere; parseRolesClaim enforces the shape on
+// whichever claim is actually in force.
 type tokenClaims struct {
 	jwt.RegisteredClaims
-	ClientID    string              `json:"client_id"`
-	GrantType   AllowedGrantType    `json:"grant_type"`
-	Email       *string             `json:"email,omitempty"`
-	PhoneNumber *string             `json:"phone_number,omitempty"`
-	OUID        *string             `json:"ouId,omitempty"`
-	OUHandle    *string             `json:"ouHandle,omitempty"`
-	Roles       []string            `json:"roles,omitempty"`
-	Scopes      spaceDelimitedScope `json:"scope,omitempty"`
+	ClientID  string              `json:"client_id"`
+	GrantType AllowedGrantType    `json:"grant_type"`
+	Roles     rolesValue          `json:"roles"`
+	Scopes    spaceDelimitedScope `json:"scope,omitempty"`
 }
 
 type PrincipalType string
@@ -63,19 +71,20 @@ const (
 )
 
 type ClientPrincipal struct {
-	ClientID string   `json:"clientId"`
-	Roles    []string `json:"roles"`
-	Scopes   []string `json:"scopes"`
+	ClientID    string      `json:"clientId"`
+	Roles       []string    `json:"roles"`
+	Scopes      []string    `json:"scopes"`
+	ExtraClaims ExtraClaims `json:"extraClaims,omitempty"`
 }
 
 type UserPrincipal struct {
-	UserID      string   `json:"userId"`
-	Email       string   `json:"email"`
-	PhoneNumber *string  `json:"phone_number,omitempty"`
-	OUID        string   `json:"ouId"`
-	OUHandle    string   `json:"ouHandle"`
-	Roles       []string `json:"roles"`
-	Scopes      []string `json:"scopes"`
+	// Subject is the JWT "sub" claim: the identity provider's ID for the user.
+	// It is NOT the internally persisted user ID a UserProfileService returns
+	// — see UserContext, which carries both as ID and IDPUserID.
+	Subject     string      `json:"subject"`
+	Roles       []string    `json:"roles"`
+	Scopes      []string    `json:"scopes"`
+	ExtraClaims ExtraClaims `json:"extraClaims,omitempty"`
 }
 
 type Principal struct {
@@ -109,36 +118,39 @@ type TokenExtractor struct {
 	expClientIDs []string
 	httpClient   *http.Client
 
+	// userClaims / clientClaims are the raw declarations accumulated from
+	// WithUserClaims / WithClientClaims. They are validated and flattened into
+	// userExtraClaims / clientExtraClaims (name -> required) by validateConfig,
+	// so declaration order never affects the outcome.
+	userClaims        ClaimSpec
+	clientClaims      ClaimSpec
+	userExtraClaims   map[string]bool
+	clientExtraClaims map[string]bool
+
+	// rolesClaim is the claim name roles are read from; defaultRolesClaim
+	// unless overridden by WithRolesClaim.
+	rolesClaim string
+
 	cacheMu       sync.RWMutex
 	cachedJWKS    *jwksResponse
 	lastJWKSFetch time.Time
 	jwksCacheTTL  time.Duration
 }
 
-func NewTokenExtractor(jwksURL, issuer, audience string, expectedClientIDs []string) (*TokenExtractor, error) {
-	extractor := &TokenExtractor{
-		jwksURL:      strings.TrimSpace(jwksURL),
-		expIssuer:    strings.TrimSpace(issuer),
-		expAudience:  strings.TrimSpace(audience),
-		expClientIDs: expectedClientIDs,
-		jwksCacheTTL: defaultJWKSCacheTTL,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
-	}
-
-	if err := extractor.validateConfig(); err != nil {
-		return nil, err
-	}
-
-	return extractor, nil
+func NewTokenExtractor(jwksURL, issuer, audience string, expectedClientIDs []string, opts ...Option) (*TokenExtractor, error) {
+	return newExtractor(jwksURL, issuer, audience, expectedClientIDs, &http.Client{Timeout: 10 * time.Second}, opts...)
 }
 
-func NewTokenExtractorWithClient(jwksURL, issuer, audience string, expectedClientIDs []string, httpClient *http.Client) (*TokenExtractor, error) {
+func NewTokenExtractorWithClient(jwksURL, issuer, audience string, expectedClientIDs []string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
 	if httpClient == nil {
-		return NewTokenExtractor(jwksURL, issuer, audience, expectedClientIDs)
+		return NewTokenExtractor(jwksURL, issuer, audience, expectedClientIDs, opts...)
 	}
+	return newExtractor(jwksURL, issuer, audience, expectedClientIDs, httpClient, opts...)
+}
 
+// newExtractor is the single construction path, so a defaulted field
+// (rolesClaim) can only be forgotten in one place.
+func newExtractor(jwksURL, issuer, audience string, expectedClientIDs []string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
 	extractor := &TokenExtractor{
 		jwksURL:      strings.TrimSpace(jwksURL),
 		expIssuer:    strings.TrimSpace(issuer),
@@ -146,6 +158,11 @@ func NewTokenExtractorWithClient(jwksURL, issuer, audience string, expectedClien
 		expClientIDs: expectedClientIDs,
 		jwksCacheTTL: defaultJWKSCacheTTL,
 		httpClient:   httpClient,
+		rolesClaim:   defaultRolesClaim,
+	}
+
+	for _, opt := range opts {
+		opt(extractor)
 	}
 
 	if err := extractor.validateConfig(); err != nil {
@@ -171,6 +188,31 @@ func (te *TokenExtractor) validateConfig() error {
 	if te.httpClient == nil {
 		return fmt.Errorf("http client is not configured")
 	}
+
+	// Claim declarations are judged here rather than inside the options, so
+	// that WithRolesClaim and WithUserClaims/WithClientClaims produce the same
+	// result whichever order they were passed in.
+	if err := validateRolesClaimName(te.rolesClaim); err != nil {
+		return err
+	}
+	te.rolesClaim = strings.TrimSpace(te.rolesClaim)
+
+	for _, decl := range []struct {
+		what  string
+		names []string
+	}{
+		{"WithUserClaims optional", te.userClaims.Optional},
+		{"WithUserClaims required", te.userClaims.Required},
+		{"WithClientClaims optional", te.clientClaims.Optional},
+		{"WithClientClaims required", te.clientClaims.Required},
+	} {
+		if err := validateClaimNames(decl.what, decl.names, te.rolesClaim); err != nil {
+			return err
+		}
+	}
+
+	te.userExtraClaims = te.userClaims.resolve()
+	te.clientExtraClaims = te.clientClaims.resolve()
 
 	return nil
 }
@@ -219,7 +261,11 @@ func (te *TokenExtractor) ExtractPrincipalFromHeader(authHeader string) (*Princi
 
 	switch claims.GrantType {
 	case AuthorizationCodeGrant:
-		userPrincipal, err := te.userPrincipalFromClaims(claims)
+		extra, roles, err := te.resolveClaims(tokenString, claims, te.userExtraClaims)
+		if err != nil {
+			return nil, err
+		}
+		userPrincipal, err := te.userPrincipalFromClaims(claims, extra, roles)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +274,11 @@ func (te *TokenExtractor) ExtractPrincipalFromHeader(authHeader string) (*Princi
 			UserPrincipal: userPrincipal,
 		}, nil
 	case ClientCredentialsGrant:
-		clientPrincipal, err := te.clientPrincipalFromClaims(claims)
+		extra, roles, err := te.resolveClaims(tokenString, claims, te.clientExtraClaims)
+		if err != nil {
+			return nil, err
+		}
+		clientPrincipal, err := te.clientPrincipalFromClaims(claims, extra, roles)
 		if err != nil {
 			return nil, err
 		}
@@ -241,44 +291,28 @@ func (te *TokenExtractor) ExtractPrincipalFromHeader(authHeader string) (*Princi
 	}
 }
 
-func (te *TokenExtractor) userPrincipalFromClaims(claims *tokenClaims) (*UserPrincipal, error) {
+func (te *TokenExtractor) userPrincipalFromClaims(claims *tokenClaims, extra ExtraClaims, roles []string) (*UserPrincipal, error) {
 	if claims.Subject == "" {
 		return nil, fmt.Errorf("jwt missing sub claim for user principal")
 	}
-	if claims.Email == nil {
-		return nil, fmt.Errorf("jwt missing email claim for user principal")
-	}
-	if claims.OUID == nil {
-		return nil, fmt.Errorf("jwt missing ouId claim for user principal")
-	}
-	if claims.OUHandle == nil {
-		return nil, fmt.Errorf("jwt missing ouHandle claim for user principal")
-	}
-
-	// Phone number is optional as not all IdPs may provide it, but if it's present it should not be empty.
-	if claims.PhoneNumber != nil && strings.TrimSpace(*claims.PhoneNumber) == "" {
-		return nil, fmt.Errorf("jwt has empty phone_number claim for user principal")
-	}
 
 	return &UserPrincipal{
-		UserID:      claims.Subject,
-		Email:       *claims.Email,
-		PhoneNumber: claims.PhoneNumber,
-		OUID:        *claims.OUID,
-		OUHandle:    *claims.OUHandle,
-		Roles:       claims.Roles,
+		Subject:     claims.Subject,
+		Roles:       roles,
 		Scopes:      []string(claims.Scopes),
+		ExtraClaims: extra,
 	}, nil
 }
 
-func (te *TokenExtractor) clientPrincipalFromClaims(claims *tokenClaims) (*ClientPrincipal, error) {
+func (te *TokenExtractor) clientPrincipalFromClaims(claims *tokenClaims, extra ExtraClaims, roles []string) (*ClientPrincipal, error) {
 	if claims.ClientID == "" {
 		return nil, fmt.Errorf("jwt missing client_id claim for client principal")
 	}
 	return &ClientPrincipal{
-		ClientID: claims.ClientID,
-		Roles:    claims.Roles,
-		Scopes:   []string(claims.Scopes),
+		ClientID:    claims.ClientID,
+		Roles:       roles,
+		Scopes:      []string(claims.Scopes),
+		ExtraClaims: extra,
 	}, nil
 }
 

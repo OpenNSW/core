@@ -56,6 +56,7 @@ func NewManager(userProfileService UserProfileService, authConfig Config) (*Mana
 
 	tokenExtractor, err := NewTokenExtractorWithClient(
 		authConfig.JWKSURL, authConfig.Issuer, authConfig.Audience, authConfig.ClientIDs, httpClient,
+		buildClaimOptions(authConfig)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize token extractor: %w", err)
@@ -69,6 +70,25 @@ func NewManager(userProfileService UserProfileService, authConfig Config) (*Mana
 		tokenExtractor:     tokenExtractor,
 		middleware:         Middleware(userProfileService, tokenExtractor),
 	}, nil
+}
+
+// buildClaimOptions translates Config's claim fields into TokenExtractor
+// Options, so Config-driven (NewManager) and direct (NewTokenExtractor)
+// callers share identical claim semantics.
+func buildClaimOptions(cfg Config) []Option {
+	var opts []Option
+	if !cfg.UserClaims.isZero() {
+		opts = append(opts, WithUserClaims(cfg.UserClaims))
+	}
+	if !cfg.ClientClaims.isZero() {
+		opts = append(opts, WithClientClaims(cfg.ClientClaims))
+	}
+	// Only when set: WithRolesClaim("") would blank the extractor's default
+	// and be rejected by validateRolesClaimName.
+	if cfg.RolesClaim != "" {
+		opts = append(opts, WithRolesClaim(cfg.RolesClaim))
+	}
+	return opts
 }
 
 // Middleware returns the auth middleware function.
