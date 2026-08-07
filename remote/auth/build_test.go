@@ -40,6 +40,30 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		{
+			name:     "oauth2 with endpoint params",
+			authType: "oauth2",
+			options: map[string]any{
+				"token_url":     "http://auth",
+				"client_id":     "id",
+				"client_secret": "secret",
+				"endpoint_params": map[string]any{
+					"resource": "https://api.example",
+					"audience": []string{"a", "b"},
+				},
+			},
+		},
+		{
+			name:     "oauth2 rejects a reserved endpoint param",
+			authType: "oauth2",
+			options: map[string]any{
+				"token_url":       "http://auth",
+				"client_id":       "id",
+				"client_secret":   "secret",
+				"endpoint_params": map[string]any{"grant_type": "password"},
+			},
+			wantErr: true,
+		},
+		{
 			name:     "unsupported type",
 			authType: "biometric",
 			options:  map[string]string{"fingerprint": "xyz"},

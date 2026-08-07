@@ -5,8 +5,13 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,4 +226,216 @@ func TestOAuth2_ContextCancel(t *testing.T) {
 
 	_, err := auth.getToken(ctx)
 	assert.Error(t, err)
+}
+
+// TestOAuth2_EndpointParams asserts extra parameters reach the token request BODY, per
+// RFC 6749 §3.2.
+//
+// The body is read raw rather than via r.Form on purpose: r.Form merges the URL query into
+// the form, so an r.Form.Get("resource") assertion would also pass if the parameter were
+// appended to token_url as a query string — the practice this feature replaces. Only a
+// raw-body assertion tells the two apart.
+func TestOAuth2_EndpointParams(t *testing.T) {
+	var gotBody, gotRawQuery string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		gotBody = string(raw)
+		gotRawQuery = r.URL.RawQuery
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "bound-token", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth := NewOAuth2(ts.URL, "", "", []string{"read"}, WithEndpointParams(url.Values{
+		"resource": {"https://api.example"},
+		"audience": {"example-api"},
+	}))
+
+	token, err := auth.getToken(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "bound-token", token)
+
+	form, err := url.ParseQuery(gotBody)
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.example", form.Get("resource"))
+	assert.Equal(t, "example-api", form.Get("audience"))
+	// The flow's own parameters must survive alongside them.
+	assert.Equal(t, "client_credentials", form.Get("grant_type"))
+	assert.Equal(t, "read", form.Get("scope"))
+	assert.Empty(t, gotRawQuery, "parameters belong in the body, not on the token URL")
+}
+
+func TestOAuth2_EndpointParams_Repeated(t *testing.T) {
+	var gotBody string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "t", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth := NewOAuth2(ts.URL, "", "", nil, WithEndpointParams(url.Values{
+		"resource": {"https://a.example", "https://b.example"},
+	}))
+
+	_, err := auth.getToken(context.Background())
+	require.NoError(t, err)
+
+	form, err := url.ParseQuery(gotBody)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://a.example", "https://b.example"}, form["resource"])
+}
+
+func TestOAuth2_EndpointParams_OmittedByDefault(t *testing.T) {
+	var gotBody string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token": "t", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth := NewOAuth2(ts.URL, "", "", []string{"read"})
+
+	_, err := auth.getToken(context.Background())
+	require.NoError(t, err)
+
+	form, err := url.ParseQuery(gotBody)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"grant_type", "scope"}, sortedKeys(form))
+}
+
+func TestOAuth2_EndpointParams_RejectsReserved(t *testing.T) {
+	for _, key := range []string{"grant_type", "scope", "client_id", "client_secret"} {
+		t.Run(key, func(t *testing.T) {
+			// Programmatic path: rejected when the token request is built.
+			auth := NewOAuth2("https://idp.example/token", "", "", nil,
+				WithEndpointParams(url.Values{key: {"x"}}))
+			_, err := auth.getToken(context.Background())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), key)
+
+			// Config path: rejected at build time, before any request is made.
+			options := []byte(`{"token_url":"https://idp.example/token","client_id":"c",` +
+				`"client_secret":"s","endpoint_params":{"` + key + `":"x"}}`)
+			_, err = Build("oauth2", options)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), key)
+		})
+	}
+}
+
+func TestEndpointParams_UnmarshalJSON(t *testing.T) {
+	t.Run("scalar becomes a single-element slice", func(t *testing.T) {
+		var p EndpointParams
+		require.NoError(t, json.Unmarshal([]byte(`{"resource":"https://api.example"}`), &p))
+		assert.Equal(t, EndpointParams{"resource": {"https://api.example"}}, p)
+	})
+
+	t.Run("array is preserved", func(t *testing.T) {
+		var p EndpointParams
+		require.NoError(t, json.Unmarshal([]byte(`{"resource":["a","b"]}`), &p))
+		assert.Equal(t, EndpointParams{"resource": {"a", "b"}}, p)
+	})
+
+	t.Run("rejects a non-string value", func(t *testing.T) {
+		var p EndpointParams
+		err := json.Unmarshal([]byte(`{"resource":42}`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be a string or an array of strings")
+	})
+
+	// encoding/json would accept either of these into a string and leave the zero value
+	// behind, sending a bare `resource=` the caller never configured.
+	t.Run("rejects a null value", func(t *testing.T) {
+		var p EndpointParams
+		err := json.Unmarshal([]byte(`{"resource":null}`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"resource"`)
+		assert.Contains(t, err.Error(), "not null")
+	})
+
+	t.Run("rejects a null array element", func(t *testing.T) {
+		var p EndpointParams
+		err := json.Unmarshal([]byte(`{"resource":["a",null]}`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"resource"`)
+		assert.Contains(t, err.Error(), "not null")
+	})
+
+	// An explicitly null field is an absent field, not a malformed one.
+	t.Run("a null object is no parameters", func(t *testing.T) {
+		var c OAuth2Config
+		require.NoError(t, json.Unmarshal([]byte(`{"endpoint_params":null}`), &c))
+		assert.Empty(t, c.EndpointParams)
+	})
+}
+
+// TestOAuth2_ErrorResponse_IncludesOAuthError: a rejection must say why, not just how.
+func TestOAuth2_ErrorResponse_IncludesOAuthError(t *testing.T) {
+	t.Run("error and description", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_target",` +
+				`"error_description":"The resource parameter does not match any registered resource server"}`))
+		}))
+		defer ts.Close()
+
+		_, err := NewOAuth2(ts.URL, "", "", nil).getToken(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status 400")
+		assert.Contains(t, err.Error(), "invalid_target")
+		assert.Contains(t, err.Error(), "does not match any registered resource server")
+	})
+
+	t.Run("non-OAuth2 body still reports the status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<html>gateway error</html>`))
+		}))
+		defer ts.Close()
+
+		_, err := NewOAuth2(ts.URL, "", "", nil).getToken(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status 500")
+	})
+
+	// A verbose or hostile authorization server must not decide how much of its response
+	// ends up in our error string. Only maxErrorBodyBytes is read, so anything past the cap
+	// — here a sentinel at the tail of an oversized error_description — cannot appear.
+	t.Run("detail is bounded and the status survives", func(t *testing.T) {
+		const sentinel = "PAST_THE_LIMIT"
+		body := `{"error":"invalid_target","error_description":"` +
+			strings.Repeat("A", maxErrorBodyBytes) + sentinel + `"}`
+		require.Greater(t, len(body), maxErrorBodyBytes, "body must exceed the cap to test it")
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(body))
+		}))
+		defer ts.Close()
+
+		_, err := NewOAuth2(ts.URL, "", "", nil).getToken(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status 400", "the status is reported whatever the body")
+		assert.NotContains(t, err.Error(), sentinel, "nothing past the cap is read")
+		assert.Less(t, len(err.Error()), maxErrorBodyBytes,
+			"the error message must not grow with the response body")
+	})
+}
+
+func sortedKeys(v url.Values) []string {
+	keys := make([]string, 0, len(v))
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
