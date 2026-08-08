@@ -4,6 +4,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -31,9 +32,6 @@ var allowedContentTypes = map[string]struct{}{
 	"image/png":       {},
 	"image/gif":       {},
 	"image/webp":      {},
-	// .xlsx only: the OOXML spreadsheet format cannot carry VBA macros
-	// (macro-enabled workbooks use .xlsm), unlike legacy .xls which is a
-	// known malware vector and stays prohibited.
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
 }
 
@@ -42,12 +40,27 @@ func isAllowedContentType(ct string) bool {
 	return ok
 }
 
+type AccessValidator func(ctx context.Context, key string, authCtx *authn.AuthContext) (bool, error)
+type OnUploadHook func(ctx context.Context, metadata *FileMetadata, authCtx *authn.AuthContext) error
+
 type HTTPHandler struct {
-	Service *Service
+	Service         *Service
+	AccessValidator AccessValidator
+	OnUploadHook    OnUploadHook
 }
 
 func NewHTTPHandler(service *Service) *HTTPHandler {
 	return &HTTPHandler{Service: service}
+}
+
+func (h *HTTPHandler) WithAccessValidator(fn AccessValidator) *HTTPHandler {
+	h.AccessValidator = fn
+	return h
+}
+
+func (h *HTTPHandler) WithOnUploadHook(fn OnUploadHook) *HTTPHandler {
+	h.OnUploadHook = fn
+	return h
 }
 
 // writeJSONError sets Content-Type: application/json and writes a consistent JSON error body.
@@ -107,7 +120,17 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.OnUploadHook != nil {
+		if err := h.OnUploadHook(r.Context(), metadata, authn.GetAuthContext(r.Context())); err != nil {
+			slog.WarnContext(r.Context(), "OnUploadHook callback rejected upload", "key", metadata.Key, "error", err)
+			writeJSONError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	if err := json.NewEncoder(w).Encode(metadata); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
 	}
@@ -205,12 +228,11 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
-	// TODO: Uncomment when M2M AUTH Implemented.
-	//if authn.GetAuthContext(r.Context()) == nil {
-	//	slog.WarnContext(r.Context(), "authentication required but not provided for download")
-	//	writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-	//	return
-	//}
+	if authn.GetAuthContext(r.Context()) == nil {
+		slog.WarnContext(r.Context(), "authentication required but not provided for download")
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
 	key := r.PathValue("key")
 	if key == "" {
@@ -222,6 +244,20 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.AccessValidator != nil {
+		allowed, err := h.AccessValidator(r.Context(), key, authn.GetAuthContext(r.Context()))
+		if err != nil {
+			slog.ErrorContext(r.Context(), "Failed to validate access for key", "key", key, "error", err)
+			writeJSONError(w, http.StatusInternalServerError, "failed to validate access")
+			return
+		}
+		if !allowed {
+			slog.WarnContext(r.Context(), "Access denied by storage AccessValidator", "key", key)
+			writeJSONError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+	}
+
 	url, err := h.Service.GetDownloadURL(r.Context(), key)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "Failed to generate download URL", "key", key, "error", err)
@@ -230,6 +266,8 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"download_url": url,
 		"expires_at":   time.Now().Add(drivers.DefaultPresignTTL).Unix(),
@@ -248,6 +286,11 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 	driver, ok := h.Service.Driver.(*drivers.LocalFSDriver)
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -296,7 +339,6 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = body.Close() }()
 
 	w.Header().Set("Content-Type", contentType)
-	// Check if the body can report its size (standard for files/drivers)
 	w.Header().Set("Content-Disposition", "inline")
 	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
 		if fi, err := stater.Stat(); err == nil {
@@ -304,8 +346,6 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Ensure headers (including Content-Length) are written before the body so
-	// that browsers can correctly display download progress.
 	w.WriteHeader(http.StatusOK)
 
 	_, err = io.Copy(w, body)
