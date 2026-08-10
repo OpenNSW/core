@@ -161,6 +161,37 @@ func TestClient_BaseURL_Logic(t *testing.T) {
 		assert.Error(t, err2)
 		assert.Contains(t, err2.Error(), "does not match configured service host")
 	})
+
+	// An empty path addresses the service URL itself. Appending a separator
+	// would request a different resource, and some servers (the IPPC ePhyto
+	// Hub among them) answer the trailing form with 405.
+	t.Run("relative path joins without a trailing separator", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			basePath string
+			path     string
+			wantPath string
+		}{
+			{"empty path posts to the service URL itself", "/hub/DeliveryService", "", "/hub/DeliveryService"},
+			{"root path is treated as empty", "/hub/DeliveryService", "/", "/hub/DeliveryService"},
+			{"non-empty path is appended", "/hub", "DeliveryService", "/hub/DeliveryService"},
+			{"leading separator is not doubled", "/hub", "/DeliveryService", "/hub/DeliveryService"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var got string
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					got = r.URL.Path
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer server.Close()
+
+				client := NewClient(server.URL + tc.basePath)
+				err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: tc.path}, nil)
+				assert.NoError(t, err)
+				assert.Equal(t, tc.wantPath, got)
+			})
+		}
+	})
 }
 
 func TestClient_NoContentResponse(t *testing.T) {

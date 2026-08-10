@@ -181,7 +181,14 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
 		base := strings.TrimSuffix(c.baseURL, "/")
 		p := strings.TrimPrefix(path, "/")
-		finalURL = base + "/" + p
+		// An empty path addresses the service URL itself, so post to it
+		// verbatim: appending a separator would request a different resource
+		// ("/svc/" is not "/svc") and some servers reject the trailing form.
+		if p == "" {
+			finalURL = base
+		} else {
+			finalURL = base + "/" + p
+		}
 	}
 
 	var bodyReader io.Reader
