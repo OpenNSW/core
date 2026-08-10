@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
+
+	"github.com/OpenNSW/core/shared/maputil"
 )
 
 func TestNewTemporalManagerPanicsWithEmptyTaskQueue(t *testing.T) {
@@ -869,4 +871,253 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 		}
 	}
 	require.True(t, auditLogged, "expected signal failure to be logged to AuditTrail, got entries: %v", instance.AuditTrail)
+}
+
+// timerPollWorkflowJSON models the trader-free polling loop: poll, and while the
+// result is not delivered, wait on a TIMER and poll again — bounded by an
+// attempt cap so a never-delivered envelope cannot poll forever.
+//
+//	poll -> gw_poll -- delivered --------> end_delivered
+//	                \- not delivered ----> wait (TIMER) -> gw_cap -- under cap --> poll
+//	                                                              \- at cap ----> end_timeout
+const timerPollWorkflowJSON = `
+{
+  "workflow_id": "timer-poll-v1",
+  "name": "Timed polling loop",
+  "version": 1,
+  "edges":[
+    { "id": "e_start", "source_id": "start", "target_id": "poll" },
+    { "id": "e_poll_gw", "source_id": "poll", "target_id": "gw_poll" },
+    { "id": "e_delivered", "source_id": "gw_poll", "target_id": "end_delivered", "condition": "delivered == true" },
+    { "id": "e_not_delivered", "source_id": "gw_poll", "target_id": "wait", "condition": "delivered != true" },
+    { "id": "e_wait_cap", "source_id": "wait", "target_id": "gw_cap" },
+    { "id": "e_retry", "source_id": "gw_cap", "target_id": "poll", "condition": "poll.attempts < 3" },
+    { "id": "e_giveup", "source_id": "gw_cap", "target_id": "end_timeout", "condition": "poll.attempts >= 3" }
+  ],
+  "nodes":[
+    { "id": "start", "type": "START" },
+    { "id": "poll", "type": "TASK", "task_template_id": "POLL_HUB", "output_mapping": { "delivered": "delivered" } },
+    { "id": "gw_poll", "type": "GATEWAY", "gateway_type": "EXCLUSIVE_SPLIT" },
+    { "id": "wait", "type": "TIMER", "timer": { "duration": "1m", "counter_key": "poll.attempts" } },
+    { "id": "gw_cap", "type": "GATEWAY", "gateway_type": "EXCLUSIVE_SPLIT" },
+    { "id": "end_delivered", "type": "END" },
+    { "id": "end_timeout", "type": "END" }
+  ]
+}`
+
+func TestTimerNodeLoopsUntilDelivered(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(timerPollWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	// Not delivered twice, then delivered on the third poll.
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_HUB", mock.Anything).
+		Return(map[string]any{"delivered": false}, nil).Twice()
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_HUB", mock.Anything).
+		Return(map[string]any{"delivered": true}, nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	start := env.Now()
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+	require.Equal(t, true, instance.WorkflowVariables["delivered"])
+
+	// Two waits happened (after the two undelivered polls), so the counter is 2
+	// and the workflow clock advanced by two minutes rather than busy-looping.
+	attempts, ok := maputil.GetNestedKey(instance.WorkflowVariables, "poll.attempts")
+	require.True(t, ok, "timer should publish its fire count")
+	require.Equal(t, 2, asInt(attempts))
+	require.Equal(t, 2*time.Minute, env.Now().Sub(start))
+
+	env.AssertExpectations(t)
+}
+
+func TestTimerNodeStopsAtAttemptCap(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(timerPollWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	// Never delivered: the cap must stop the loop at exactly 3 polls.
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_HUB", mock.Anything).
+		Return(map[string]any{"delivered": false}, nil).Times(3)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+
+	attempts, ok := maputil.GetNestedKey(instance.WorkflowVariables, "poll.attempts")
+	require.True(t, ok)
+	require.Equal(t, 3, asInt(attempts), "loop must stop at the cap, not run forever")
+	require.Equal(t, NodeStatusCompleted, instance.NodeInfo["end_timeout"].Status)
+	require.Equal(t, NodeStatusNotStarted, instance.NodeInfo["end_delivered"].Status)
+
+	env.AssertExpectations(t)
+}
+
+func TestTimerNodeRejectsBadConfig(t *testing.T) {
+	for _, tc := range []struct{ name, timerJSON, wantErr string }{
+		{"missing timer config", `{ "id": "wait", "type": "TIMER" }`, "timer.duration is required"},
+		{"empty duration", `{ "id": "wait", "type": "TIMER", "timer": { "duration": "" } }`, "timer.duration is required"},
+		{"unparseable duration", `{ "id": "wait", "type": "TIMER", "timer": { "duration": "soon" } }`, "invalid timer.duration"},
+		{"zero duration", `{ "id": "wait", "type": "TIMER", "timer": { "duration": "0s" } }`, "must be positive"},
+		{"negative duration", `{ "id": "wait", "type": "TIMER", "timer": { "duration": "-1m" } }`, "must be positive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testSuite := &testsuite.WorkflowTestSuite{}
+			env := testSuite.NewTestWorkflowEnvironment()
+
+			defJSON := `{
+              "workflow_id": "timer-bad", "name": "bad timer", "version": 1,
+              "edges":[
+                { "id": "e1", "source_id": "start", "target_id": "wait" },
+                { "id": "e2", "source_id": "wait", "target_id": "end" }
+              ],
+              "nodes":[
+                { "id": "start", "type": "START" },
+                ` + tc.timerJSON + `,
+                { "id": "end", "type": "END" }
+              ]
+            }`
+
+			var def WorkflowDefinition
+			require.NoError(t, json.Unmarshal([]byte(defJSON), &def))
+
+			acts := &Activities{}
+			env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+			env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+			// A misconfigured node parks for admin rather than failing outright,
+			// so the config error surfaces as LastError on the parked node.
+			env.RegisterDelayedCallback(func() {
+				val, err := env.QueryWorkflow("GetStatus")
+				require.NoError(t, err)
+				var instance WorkflowInstance
+				require.NoError(t, val.Get(&instance))
+				require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
+				require.Contains(t, instance.NodeInfo["wait"].LastError, tc.wantErr)
+			}, time.Millisecond)
+
+			// Abort re-raises the original error so it also reaches the caller.
+			env.RegisterDelayedCallback(func() {
+				env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+					NodeID: "wait",
+					Action: AdminActionAbort,
+				})
+			}, 2*time.Millisecond)
+
+			env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+			require.True(t, env.IsWorkflowCompleted())
+			err := env.GetWorkflowError()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestTimerNodeRequiresExactlyOneOutgoingEdge(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	// Two outgoing edges: branching belongs to a gateway, not a timer.
+	defJSON := `{
+      "workflow_id": "timer-fanout", "name": "timer fanout", "version": 1,
+      "edges":[
+        { "id": "e1", "source_id": "start", "target_id": "wait" },
+        { "id": "e2", "source_id": "wait", "target_id": "end_a" },
+        { "id": "e3", "source_id": "wait", "target_id": "end_b" }
+      ],
+      "nodes":[
+        { "id": "start", "type": "START" },
+        { "id": "wait", "type": "TIMER", "timer": { "duration": "1m" } },
+        { "id": "end_a", "type": "END" },
+        { "id": "end_b", "type": "END" }
+      ]
+    }`
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(defJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "wait",
+			Action: AdminActionAbort,
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected exactly 1 outgoing edge, got 2")
+}
+
+func TestTimerNodeDefaultsCounterKeyToNodeID(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	defJSON := `{
+      "workflow_id": "timer-default-key", "name": "default counter key", "version": 1,
+      "edges":[
+        { "id": "e1", "source_id": "start", "target_id": "wait" },
+        { "id": "e2", "source_id": "wait", "target_id": "end" }
+      ],
+      "nodes":[
+        { "id": "start", "type": "START" },
+        { "id": "wait", "type": "TIMER", "timer": { "duration": "90s" } },
+        { "id": "end", "type": "END" }
+      ]
+    }`
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(defJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	start := env.Now()
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	got, ok := maputil.GetNestedKey(instance.WorkflowVariables, "wait.iterations")
+	require.True(t, ok, "counter should default to <node id>.iterations")
+	require.Equal(t, 1, asInt(got))
+	require.Equal(t, 90*time.Second, env.Now().Sub(start))
 }
