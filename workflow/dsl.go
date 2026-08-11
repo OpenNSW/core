@@ -13,6 +13,7 @@ const (
 	NodeTypeTask      NodeType = "TASK"
 	NodeTypeGateway   NodeType = "GATEWAY"
 	NodeTypeSplitTask NodeType = "SPLIT_TASK"
+	NodeTypeTimer     NodeType = "TIMER"
 )
 
 // SplitMode represents the split task dynamic fan-out mode.
@@ -104,6 +105,22 @@ type SplitTaskConfig struct {
 	IterationKey    string      `json:"iteration_key,omitempty"`    // Override key for sub-context namespace. Defaults to "_iter"
 }
 
+// TimerConfig defines how long a TIMER node waits before following its single
+// outgoing edge. The wait is a durable Temporal timer, so it survives worker
+// restarts and holds no activity or worker slot while it runs.
+type TimerConfig struct {
+	// Duration is how long to wait, as a Go duration string ("30s", "1m", "2h").
+	// Required, and must be positive.
+	Duration string `json:"duration"`
+
+	// CounterKey is the workflow-variable dot-path the node writes its fire
+	// count to, so a downstream gateway can bound a polling loop (for example
+	// "status.poll_attempts" against a condition of "< 60"). The count is
+	// written before the wait begins and starts at 1. Defaults to
+	// "<node id>.iterations".
+	CounterKey string `json:"counter_key,omitempty"`
+}
+
 // GatewayType represents the type of a gateway controlling execution flow.
 type GatewayType string
 
@@ -118,7 +135,7 @@ const (
 // Node represents a step in the workflow graph.
 type Node struct {
 	ID             string            `json:"id"`
-	Type           NodeType          `json:"type"`                       // START, END, TASK, GATEWAY, or SPLIT_TASK
+	Type           NodeType          `json:"type"`                       // See NodeType constants
 	GatewayType    GatewayType       `json:"gateway_type,omitempty"`     // See Gateway Types constants
 	TaskTemplateID string            `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	InputMapping   map[string]string `json:"input_mapping,omitempty"`    // Maps WorkflowVariables Key -> Task Input Key
@@ -126,6 +143,7 @@ type Node struct {
 
 	// Extensions
 	SplitTask *SplitTaskConfig `json:"split_task,omitempty"`
+	Timer     *TimerConfig     `json:"timer,omitempty"`
 }
 
 // Edge represents a directed connection between two nodes.
