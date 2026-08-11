@@ -239,10 +239,17 @@ func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeI
 // outgoing edge. The wait is a durable Temporal timer: it holds no activity and
 // no worker slot, and it resumes correctly after a worker restart.
 //
-// Before waiting it increments a fire count in the workflow variables so a
-// downstream gateway can bound a retry loop that would otherwise run forever
-// (see TimerConfig.CounterKey). The count is written before the wait, so a
-// gateway placed after the timer can always read it.
+// It increments a fire count in the workflow variables so a downstream gateway
+// can bound a retry loop that would otherwise run forever (see
+// TimerConfig.CounterKey).
+//
+// The count is written before the wait rather than after, which makes no
+// difference to a downstream gateway — execution is sequential, so nothing
+// after this node runs until the wait finishes either way. It matters to
+// observers of the instance while the wait is in progress: a GetStatus query
+// during the wait reports the attempt currently in flight, and an instance
+// cancelled or terminated mid-wait is left with a counter and audit trail that
+// account for the attempt it was on rather than lagging one behind.
 func (g *graphInterpreter) handleTimerNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	if node.Timer == nil || node.Timer.Duration == "" {
 		return fmt.Errorf("TIMER node %s: timer.duration is required", node.ID)

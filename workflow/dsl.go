@@ -115,7 +115,7 @@ type TimerConfig struct {
 
 	// CounterKey is the workflow-variable dot-path the node writes its fire
 	// count to, so a downstream gateway can bound a polling loop (for example
-	// "ephyto.poll_attempts" against a condition of "< 60"). The count is
+	// "status.poll_attempts" against a condition of "< 60"). The count is
 	// written before the wait begins and starts at 1. Defaults to
 	// "<node id>.iterations".
 	CounterKey string `json:"counter_key,omitempty"`
@@ -135,7 +135,7 @@ const (
 // Node represents a step in the workflow graph.
 type Node struct {
 	ID             string            `json:"id"`
-	Type           NodeType          `json:"type"`                       // START, END, TASK, GATEWAY, or SPLIT_TASK
+	Type           NodeType          `json:"type"`                       // See NodeType constants
 	GatewayType    GatewayType       `json:"gateway_type,omitempty"`     // See Gateway Types constants
 	TaskTemplateID string            `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	InputMapping   map[string]string `json:"input_mapping,omitempty"`    // Maps WorkflowVariables Key -> Task Input Key

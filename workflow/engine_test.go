@@ -873,9 +873,10 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 	require.True(t, auditLogged, "expected signal failure to be logged to AuditTrail, got entries: %v", instance.AuditTrail)
 }
 
-// timerPollWorkflowJSON models the trader-free polling loop: poll, and while the
-// result is not delivered, wait on a TIMER and poll again — bounded by an
-// attempt cap so a never-delivered envelope cannot poll forever.
+// timerPollWorkflowJSON models polling an external system that answers
+// asynchronously: poll, and while the result is not delivered, wait on a TIMER
+// and poll again — bounded by an attempt cap so a result that never arrives
+// cannot poll forever.
 //
 //	poll -> gw_poll -- delivered --------> end_delivered
 //	                \- not delivered ----> wait (TIMER) -> gw_cap -- under cap --> poll
@@ -896,7 +897,7 @@ const timerPollWorkflowJSON = `
   ],
   "nodes":[
     { "id": "start", "type": "START" },
-    { "id": "poll", "type": "TASK", "task_template_id": "POLL_HUB", "output_mapping": { "delivered": "delivered" } },
+    { "id": "poll", "type": "TASK", "task_template_id": "POLL_STATUS", "output_mapping": { "delivered": "delivered" } },
     { "id": "gw_poll", "type": "GATEWAY", "gateway_type": "EXCLUSIVE_SPLIT" },
     { "id": "wait", "type": "TIMER", "timer": { "duration": "1m", "counter_key": "poll.attempts" } },
     { "id": "gw_cap", "type": "GATEWAY", "gateway_type": "EXCLUSIVE_SPLIT" },
@@ -917,9 +918,9 @@ func TestTimerNodeLoopsUntilDelivered(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 
 	// Not delivered twice, then delivered on the third poll.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_HUB", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything).
 		Return(map[string]any{"delivered": false}, nil).Twice()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_HUB", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything).
 		Return(map[string]any{"delivered": true}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
@@ -957,7 +958,7 @@ func TestTimerNodeStopsAtAttemptCap(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 
 	// Never delivered: the cap must stop the loop at exactly 3 polls.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_HUB", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything).
 		Return(map[string]any{"delivered": false}, nil).Times(3)
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
