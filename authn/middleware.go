@@ -73,19 +73,12 @@ func Middleware(userProfileService UserProfileService, tokenExtractor *TokenExtr
 			authCtx := buildAuthContext(principal)
 			if principal.UserPrincipal != nil && userProfileService != nil {
 				user := principal.UserPrincipal
-				userID, err := userProfileService.GetOrCreateUser(
-					r.Context(),
-					user.UserID,
-					user.Email,
-					derefString(user.PhoneNumber),
-					user.OUID,
-					user.OUHandle,
-				)
+				userID, err := userProfileService.GetOrCreateUser(r.Context(), user)
 				if err != nil {
-					slog.ErrorContext(r.Context(), "failed to get or create user profile", "idp_user_id", user.UserID, "error", err)
+					slog.ErrorContext(r.Context(), "failed to get or create user profile", "idp_user_id", user.Subject, "error", err)
 				} else if userID != "" {
 					authCtx.User.ID = userID
-					slog.DebugContext(r.Context(), "resolved user profile", "idp_user_id", user.UserID, "user_id", userID)
+					slog.DebugContext(r.Context(), "resolved user profile", "idp_user_id", user.Subject, "user_id", userID)
 				}
 			}
 

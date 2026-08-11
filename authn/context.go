@@ -17,16 +17,24 @@ import (
 // 2. Systems that manage user profiles separately - implement this interface
 // 3. Systems that handle user creation elsewhere - pass nil
 //
+// The whole authenticated principal is passed rather than a list of named
+// identity values, because everything except the JWT "sub" claim (email, phone
+// number, organization/tenant identifiers, ...) is IdP/consumer-specific.
+// Naming those as parameters is what forced this interface to change once
+// already; passing the principal means adding a claim never changes the
+// signature again.
+//
 // Example implementation:
 //
 //	type MyUserService struct {
 //	    db *sql.DB
 //	}
 //
-//	func (s *MyUserService) GetOrCreateUser(ctx context.Context, idpUserID, email, phone, orgID, ouHandle string) (string, error) {
+//	func (s *MyUserService) GetOrCreateUser(ctx context.Context, principal *authn.UserPrincipal) (string, error) {
 //	    // Your implementation to create or fetch the user idempotently
+//	    email := principal.ExtraClaims.String("email")
 //	    persistedID := "generated-id"
-//	    if err := s.db.Exec("INSERT INTO users ...", idpUserID, email, phone, orgID).Error; err != nil {
+//	    if err := s.db.Exec("INSERT INTO users ...", principal.Subject, email).Error; err != nil {
 //	        return "", err
 //	    }
 //	    return persistedID, nil
@@ -35,20 +43,25 @@ import (
 //	authManager := auth.NewManager(myUserService, cfg.Auth)  // myUserService can be nil
 type UserProfileService interface {
 	// GetOrCreateUser creates or retrieves a user profile.
-	// Parameters:
-	//   - idpUserID: the unique user ID from the identity provider (required)
-	//   - email: user's email address (required)
-	//   - phone: user's phone number (can be empty)
-	//   - organizationID: organization/tenant identifier (required)
-	//   - ouHandle: organization unit handle from the identity provider (required)
+	//
+	// principal is never nil, and MUST NOT be mutated: the middleware has
+	// already built the request's AuthContext from it and shares the same
+	// ExtraClaims map, so writing to it would alter the live request context.
+	// (ExtraClaims is also nil unless claims were declared — nil maps read
+	// fine but panic on assignment.)
+	//
+	//   - principal.Subject is the identity provider's user ID (the JWT "sub"
+	//     claim), NOT the persisted ID this method returns.
+	//   - principal.ExtraClaims holds the claims declared via WithUserClaims /
+	//     Config.UserClaims; nil if none were declared.
 	//
 	// Implementation notes:
-	//   - Should be idempotent: calling multiple times with same idpUserID should be safe
+	//   - Should be idempotent: calling multiple times with the same subject should be safe
 	//   - Called during first login after token validation
 	//   - Errors are logged but don't block authentication
 	//   - Should not return error if user already exists
 	// Returns user ID of the created or existing user, or an error if the operation fails.
-	GetOrCreateUser(ctx context.Context, idpUserID, email, phone, orgID, ouHandle string) (string, error)
+	GetOrCreateUser(ctx context.Context, principal *UserPrincipal) (string, error)
 }
 
 // UserContext represents a user principal's runtime context injected into each request.
@@ -56,21 +69,19 @@ type UserProfileService interface {
 // Note: Per-request NSWData is not persisted here; services requiring user metadata
 // should call the user profile service on-demand.
 type UserContext struct {
-	ID          string   `json:"id"`
-	IDPUserID   string   `json:"idpUserId"`
-	Email       string   `json:"email"`
-	PhoneNumber string   `json:"phoneNumber"`
-	OUID        string   `json:"ouId"`
-	OUHandle    string   `json:"ouHandle"`
-	Roles       []string `json:"roles"`
-	Scopes      []string `json:"scopes"`
+	ID          string      `json:"id"`
+	IDPUserID   string      `json:"idpUserId"`
+	Roles       []string    `json:"roles"`
+	Scopes      []string    `json:"scopes"`
+	ExtraClaims ExtraClaims `json:"extraClaims,omitempty"`
 }
 
 // ClientContext represents a machine client's context.
 type ClientContext struct {
-	ClientID string   `json:"clientId"`
-	Roles    []string `json:"roles"`
-	Scopes   []string `json:"scopes"`
+	ClientID    string      `json:"clientId"`
+	Roles       []string    `json:"roles"`
+	Scopes      []string    `json:"scopes"`
+	ExtraClaims ExtraClaims `json:"extraClaims,omitempty"`
 }
 
 // AuthContext is the transient authentication context injected into each request
@@ -168,6 +179,25 @@ func (a *AuthContext) Scopes() []string {
 		return a.User.Scopes
 	case a.Client != nil:
 		return a.Client.Scopes
+	default:
+		return nil
+	}
+}
+
+// ExtraClaims returns the consumer-declared extra claims for the principal
+// (user or client), or nil. Nil-safe, and ExtraClaims' own methods are nil-safe
+// too, so authCtx.ExtraClaims().String("email") never panics.
+//
+// Like Roles and Scopes, this returns the live value rather than a copy — do
+// not mutate it.
+func (a *AuthContext) ExtraClaims() ExtraClaims {
+	switch {
+	case a == nil:
+		return nil
+	case a.User != nil:
+		return a.User.ExtraClaims
+	case a.Client != nil:
+		return a.Client.ExtraClaims
 	default:
 		return nil
 	}

@@ -16,26 +16,12 @@ type MockUserService struct {
 	getOrCreateID    string
 	getOrCreateErr   error
 	getOrCreateCalls int
-	lastArgs         getOrCreateArgs
+	lastPrincipal    *UserPrincipal
 }
 
-type getOrCreateArgs struct {
-	idpUserID string
-	email     string
-	phone     string
-	ouID      string
-	ouHandle  string
-}
-
-func (m *MockUserService) GetOrCreateUser(ctx context.Context, idpUserID, email, phone, orgID, ouHandle string) (string, error) {
+func (m *MockUserService) GetOrCreateUser(ctx context.Context, principal *UserPrincipal) (string, error) {
 	m.getOrCreateCalls++
-	m.lastArgs = getOrCreateArgs{
-		idpUserID: idpUserID,
-		email:     email,
-		phone:     phone,
-		ouID:      orgID,
-		ouHandle:  ouHandle,
-	}
+	m.lastPrincipal = principal
 	if m.getOrCreateErr != nil {
 		return "", m.getOrCreateErr
 	}
@@ -132,12 +118,14 @@ func TestBuildAuthContext_UserPrincipalOnly(t *testing.T) {
 	principal := &Principal{
 		Type: UserPrincipalType,
 		UserPrincipal: &UserPrincipal{
-			UserID:      testUserID,
-			Email:       testEmail,
-			PhoneNumber: strPtr(testPhone),
-			OUID:        testOUID,
-			OUHandle:    testOUHandle,
-			Roles:       []string{"exporter"},
+			Subject: testUserID,
+			Roles:   []string{"exporter"},
+			ExtraClaims: ExtraClaims{
+				"email":        testEmail,
+				"phone_number": testPhone,
+				"ouId":         testOUID,
+				"ouHandle":     testOUHandle,
+			},
 		},
 	}
 
@@ -149,17 +137,17 @@ func TestBuildAuthContext_UserPrincipalOnly(t *testing.T) {
 	if authCtx.User.ID != "" {
 		t.Fatalf("expected persisted user id to be empty for user principal only")
 	}
-	if authCtx.User.Email != testEmail {
-		t.Fatalf("expected email to be set, got %s", authCtx.User.Email)
+	if authCtx.User.ExtraClaims.String("email") != testEmail {
+		t.Fatalf("expected email to be set, got %s", authCtx.User.ExtraClaims.String("email"))
 	}
-	if authCtx.User.PhoneNumber != testPhone {
-		t.Fatalf("expected phone number to be set, got %s", authCtx.User.PhoneNumber)
+	if authCtx.User.ExtraClaims.String("phone_number") != testPhone {
+		t.Fatalf("expected phone number to be set, got %s", authCtx.User.ExtraClaims.String("phone_number"))
 	}
-	if authCtx.User.OUID != testOUID {
-		t.Fatalf("expected ou id to be set, got %s", authCtx.User.OUID)
+	if authCtx.User.ExtraClaims.String("ouId") != testOUID {
+		t.Fatalf("expected ou id to be set, got %s", authCtx.User.ExtraClaims.String("ouId"))
 	}
-	if authCtx.User.OUHandle != testOUHandle {
-		t.Fatalf("expected ou handle to be set, got %s", authCtx.User.OUHandle)
+	if authCtx.User.ExtraClaims.String("ouHandle") != testOUHandle {
+		t.Fatalf("expected ou handle to be set, got %s", authCtx.User.ExtraClaims.String("ouHandle"))
 	}
 	if authCtx.Client != nil {
 		t.Fatalf("expected client id to be nil when client principal is absent")
@@ -189,6 +177,7 @@ func TestBuildAuthContext_NilPrincipal(t *testing.T) {
 	authCtx := buildAuthContext(nil)
 	if authCtx == nil {
 		t.Fatalf("expected auth context")
+		return
 	}
 	if authCtx.User != nil || authCtx.Client != nil {
 		t.Fatalf("expected empty auth context, got %+v", authCtx)
@@ -200,6 +189,7 @@ func TestBuildAuthContext_UnknownType(t *testing.T) {
 	authCtx := buildAuthContext(principal)
 	if authCtx == nil {
 		t.Fatalf("expected auth context")
+		return
 	}
 	if authCtx.User != nil || authCtx.Client != nil {
 		t.Fatalf("expected empty auth context, got %+v", authCtx)
@@ -218,6 +208,7 @@ func TestAuthMiddleware_ValidClientCredentialsToken(t *testing.T) {
 		authCtx := GetAuthContext(r.Context())
 		if authCtx == nil {
 			t.Fatalf("expected auth context")
+			return
 		}
 		if authCtx.Client == nil || authCtx.Client.ClientID != "TRADER_PORTAL_APP" {
 			t.Fatalf("expected client id TRADER_PORTAL_APP, got %v", authCtx.Client)
@@ -262,8 +253,14 @@ func TestAuthMiddleware_UserPrincipal_NoUserProfileService(t *testing.T) {
 		if authCtx.User.ID != "" {
 			t.Fatalf("expected persisted user id to be empty, got %s", authCtx.User.ID)
 		}
-		if authCtx.User.Email != testEmail || authCtx.User.PhoneNumber != testPhone || authCtx.User.OUID != testOUID || authCtx.User.OUHandle != testOUHandle {
-			t.Fatalf("unexpected user details: %+v", authCtx.User)
+		if len(authCtx.User.Roles) != 1 || authCtx.User.Roles[0] != "exporter" {
+			t.Fatalf("expected roles [exporter], got %v", authCtx.User.Roles)
+		}
+		// email/phone_number/ouId/ouHandle are no longer part of the fixed
+		// schema. This extractor declared no extra claims, so none of them
+		// should be surfaced even though the signed token carries them.
+		if len(authCtx.User.ExtraClaims) != 0 {
+			t.Fatalf("expected no extra claims to be extracted, got %#v", authCtx.User.ExtraClaims)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -319,13 +316,17 @@ func TestAuthMiddleware_UserPrincipal_GetOrCreateUser(t *testing.T) {
 	if mockUserService.getOrCreateCalls != 1 {
 		t.Fatalf("expected GetOrCreateUser to be called once, got %d", mockUserService.getOrCreateCalls)
 	}
-	if mockUserService.lastArgs.idpUserID != testUserID {
-		t.Fatalf("expected GetOrCreateUser to be called with %s, got %s", testUserID, mockUserService.lastArgs.idpUserID)
+	if mockUserService.lastPrincipal.Subject != testUserID {
+		t.Fatalf("expected GetOrCreateUser to be called with %s, got %s", testUserID, mockUserService.lastPrincipal.Subject)
 	}
 }
 
 func TestAuthMiddleware_UserPrincipal_CreatesUser(t *testing.T) {
-	tokenExtractor, privateKey, cleanup := newTokenExtractor(t)
+	// This extractor declares email/phone_number/ouId/ouHandle as optional
+	// extra claims, so the principal's ExtraClaims are populated from the
+	// signed token as expected.
+	tokenExtractor, privateKey, cleanup := newTokenExtractorWithOptions(t,
+		WithUserClaims(ClaimSpec{Optional: []string{"email", "phone_number", "ouId", "ouHandle"}}))
 	defer cleanup()
 
 	signedToken := newUserToken(t, privateKey)
@@ -360,12 +361,45 @@ func TestAuthMiddleware_UserPrincipal_CreatesUser(t *testing.T) {
 	if mockUserService.getOrCreateCalls != 1 {
 		t.Fatalf("expected GetOrCreateUser to be called once, got %d", mockUserService.getOrCreateCalls)
 	}
-	if mockUserService.lastArgs.idpUserID != testUserID ||
-		mockUserService.lastArgs.email != testEmail ||
-		mockUserService.lastArgs.phone != testPhone ||
-		mockUserService.lastArgs.ouID != testOUID ||
-		mockUserService.lastArgs.ouHandle != testOUHandle {
-		t.Fatalf("unexpected GetOrCreateUser args: %+v", mockUserService.lastArgs)
+	got := mockUserService.lastPrincipal
+	if got.Subject != testUserID ||
+		got.ExtraClaims.String("email") != testEmail ||
+		got.ExtraClaims.String("phone_number") != testPhone ||
+		got.ExtraClaims.String("ouId") != testOUID ||
+		got.ExtraClaims.String("ouHandle") != testOUHandle {
+		t.Fatalf("unexpected GetOrCreateUser principal: %+v", got)
+	}
+}
+
+// TestAuthMiddleware_UserPrincipal_GetOrCreateUser_ExtraClaimsNotDeclared is a
+// regression test for a real footgun: a UserProfileService implementation that
+// depends on org/OU-like extra claims silently receives an empty ExtraClaims
+// map if the consumer never declared them via WithUserClaims — even though the
+// signed JWT carries them. This documents that behavior explicitly as
+// intentional, rather than leaving it as an unwritten trap.
+func TestAuthMiddleware_UserPrincipal_GetOrCreateUser_ExtraClaimsNotDeclared(t *testing.T) {
+	tokenExtractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
+
+	signedToken := newUserToken(t, privateKey)
+	mockUserService := &MockUserService{getOrCreateID: "created-user-id"}
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handlerWithMiddleware := Middleware(mockUserService, tokenExtractor)(testHandler)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req.Header.Set("Authorization", "Bearer "+signedToken)
+	recorder := httptest.NewRecorder()
+
+	handlerWithMiddleware.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if len(mockUserService.lastPrincipal.ExtraClaims) != 0 {
+		t.Fatalf("expected empty extra claims when none were declared, got %#v", mockUserService.lastPrincipal.ExtraClaims)
 	}
 }
 
