@@ -64,12 +64,12 @@ func TestMultipartRequest_SendsPartsAndDecodesResponse(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/api/declaration/v1", r.URL.Path)
+		assert.Equal(t, "/api/documents/v1", r.URL.Path)
 		got = readParts(t, r)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"edgId":"a14341a6","status":"RECEIVED"}`))
+		_, _ = w.Write([]byte(`{"id":"a14341a6","status":"ACCEPTED"}`))
 	}))
 	defer server.Close()
 
@@ -79,7 +79,7 @@ func TestMultipartRequest_SendsPartsAndDecodesResponse(t *testing.T) {
 	var resp map[string]any
 	err = NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
 		Method: http.MethodPost,
-		Path:   "/api/declaration/v1",
+		Path:   "/api/documents/v1",
 		Parts: []Part{
 			payload,
 			{Name: "fileinfo", Content: []byte("1")},
@@ -88,7 +88,7 @@ func TestMultipartRequest_SendsPartsAndDecodesResponse(t *testing.T) {
 	}, &resp)
 	require.NoError(t, err)
 
-	assert.Equal(t, map[string]any{"edgId": "a14341a6", "status": "RECEIVED"}, resp)
+	assert.Equal(t, map[string]any{"id": "a14341a6", "status": "ACCEPTED"}, resp)
 
 	require.Len(t, got, 3)
 
@@ -170,7 +170,7 @@ func TestMultipartRequest_AppendsQueryParameters(t *testing.T) {
 
 	err := NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
 		Method: http.MethodPost,
-		Path:   "/api/declaration/v1",
+		Path:   "/api/documents/v1",
 		Query:  map[string][]string{"mode": {"test"}},
 		Parts:  []Part{{Name: "fileinfo", Content: []byte("0")}},
 	}, nil)
