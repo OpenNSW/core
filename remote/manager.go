@@ -149,6 +149,18 @@ func (m *Manager) CallRaw(ctx context.Context, serviceID string, req RawRequest)
 	return client.RawRequest(ctx, req)
 }
 
+// CallMultipart sends a multipart/form-data request (e.g. a JSON payload part
+// alongside file uploads) to a registered service and decodes a JSON response
+// into response. See Client.MultipartRequest: unlike CallRaw, a non-2xx status
+// is returned as an error, after the body has been decoded into response.
+func (m *Manager) CallMultipart(ctx context.Context, serviceID string, req MultipartRequest, response any) error {
+	client, err := m.GetClient(serviceID)
+	if err != nil {
+		return err
+	}
+	return client.MultipartRequest(ctx, req, response)
+}
+
 func (m *Manager) GetClientByURL(rawURL string) (*Client, string, error) {
 	if !strings.HasPrefix(rawURL, "http") {
 		return nil, "", fmt.Errorf("remote: cannot resolve service from relative path: %s", rawURL)
