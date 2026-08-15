@@ -163,32 +163,95 @@ func TestClient_BaseURL_Logic(t *testing.T) {
 	})
 
 	// An empty path addresses the service URL itself. Appending a separator
-	// would request a different resource, and some servers (the IPPC ePhyto
-	// Hub among them) answer the trailing form with 405.
+	// would request a different resource, and some servers answer the trailing
+	// form with 405.
 	t.Run("relative path joins without a trailing separator", func(t *testing.T) {
 		for _, tc := range []struct {
-			name     string
-			basePath string
-			path     string
-			wantPath string
+			name      string
+			basePath  string
+			path      string
+			query     url.Values
+			wantPath  string
+			wantQuery string
 		}{
-			{"empty path posts to the service URL itself", "/hub/DeliveryService", "", "/hub/DeliveryService"},
-			{"root path is treated as empty", "/hub/DeliveryService", "/", "/hub/DeliveryService"},
-			{"non-empty path is appended", "/hub", "DeliveryService", "/hub/DeliveryService"},
-			{"leading separator is not doubled", "/hub", "/DeliveryService", "/hub/DeliveryService"},
+			{name: "empty path posts to the service URL itself", basePath: "/api/reports", path: "", wantPath: "/api/reports"},
+			{name: "root path is treated as empty", basePath: "/api/reports", path: "/", wantPath: "/api/reports"},
+			{name: "non-empty path is appended", basePath: "/api", path: "reports", wantPath: "/api/reports"},
+			{name: "leading separator is not doubled", basePath: "/api", path: "/reports", wantPath: "/api/reports"},
+
+			// Query parameters are appended to the path before it reaches the
+			// join, so the empty-path rule has to look past them: a path of
+			// "?a=1" still addresses the service URL itself.
+			{
+				name:      "empty path with query keeps the service URL itself",
+				basePath:  "/api/reports",
+				path:      "",
+				query:     url.Values{"id": {"42"}},
+				wantPath:  "/api/reports",
+				wantQuery: "id=42",
+			},
+			{
+				name:      "root path with query is treated as empty",
+				basePath:  "/api/reports",
+				path:      "/",
+				query:     url.Values{"id": {"42"}},
+				wantPath:  "/api/reports",
+				wantQuery: "id=42",
+			},
+			{
+				name:      "non-empty path with query is unaffected",
+				basePath:  "/api",
+				path:      "/reports",
+				query:     url.Values{"id": {"42"}},
+				wantPath:  "/api/reports",
+				wantQuery: "id=42",
+			},
+			{
+				name:      "query already in the path is preserved",
+				basePath:  "/api/reports",
+				path:      "?first=1",
+				query:     url.Values{"second": {"2"}},
+				wantPath:  "/api/reports",
+				wantQuery: "first=1&second=2",
+			},
+
+			// Resolution goes through net/url, so escaping and dot-segments
+			// follow the usual rules rather than whatever concatenation left.
+			{
+				name:     "an escaped separator is not turned into a real one",
+				basePath: "/api",
+				path:     "x%2Fy",
+				wantPath: "/api/x%2Fy",
+			},
+			{
+				name:     "a space in a segment is escaped",
+				basePath: "/api",
+				path:     "sp ace",
+				wantPath: "/api/sp%20ace",
+			},
+			{
+				name:     "dot segments are resolved before sending",
+				basePath: "/api/reports",
+				path:     "../other",
+				wantPath: "/api/other",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				var got string
+				var gotPath, gotQuery string
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					got = r.URL.Path
+					// EscapedPath, not Path: the difference between a literal
+					// separator and an escaped one is the point of two cases here.
+					gotPath = r.URL.EscapedPath()
+					gotQuery = r.URL.RawQuery
 					w.WriteHeader(http.StatusOK)
 				}))
 				defer server.Close()
 
 				client := NewClient(server.URL + tc.basePath)
-				err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: tc.path}, nil)
+				err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: tc.path, Query: tc.query}, nil)
 				assert.NoError(t, err)
-				assert.Equal(t, tc.wantPath, got)
+				assert.Equal(t, tc.wantPath, gotPath)
+				assert.Equal(t, tc.wantQuery, gotQuery)
 			})
 		}
 	})

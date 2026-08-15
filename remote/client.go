@@ -154,41 +154,81 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 	return lastResp, lastErr
 }
 
-func (c *Client) executeOnce(ctx context.Context, method, path string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
-	finalURL := path
-
-	// Handle URL construction and verification
+// resolveURL turns a caller-supplied path into the absolute URL to request.
+//
+// An absolute path is used verbatim once its scheme and host are checked
+// against the configured service. A relative one is resolved against the base
+// URL with net/url rather than string concatenation, so separators, escaping
+// and dot-segments follow the same rules the rest of the world uses.
+func (c *Client) resolveURL(path string) (string, error) {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		// Absolute URL validation
-		if c.baseURL != "" {
-			base, err := url.Parse(c.baseURL)
-			if err != nil {
-				return nil, fmt.Errorf("remote: invalid base URL: %w", err)
-			}
-
-			provided, err := url.Parse(path)
-			if err != nil {
-				return nil, fmt.Errorf("remote: invalid absolute URL: %w", err)
-			}
-
-			// Ensure Scheme and Host match to prevent SSRF or credential leakage
-			if base.Scheme != provided.Scheme || base.Host != provided.Host {
-				return nil, fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", provided.Host, base.Host)
-			}
+		if c.baseURL == "" {
+			return path, nil
 		}
-	} else {
-		// Relative path handling
-		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
-		base := strings.TrimSuffix(c.baseURL, "/")
-		p := strings.TrimPrefix(path, "/")
-		// An empty path addresses the service URL itself, so post to it
-		// verbatim: appending a separator would request a different resource
-		// ("/svc/" is not "/svc") and some servers reject the trailing form.
-		if p == "" {
-			finalURL = base
-		} else {
-			finalURL = base + "/" + p
+
+		base, err := url.Parse(c.baseURL)
+		if err != nil {
+			return "", fmt.Errorf("remote: invalid base URL: %w", err)
 		}
+		provided, err := url.Parse(path)
+		if err != nil {
+			return "", fmt.Errorf("remote: invalid absolute URL: %w", err)
+		}
+
+		// Ensure Scheme and Host match to prevent SSRF or credential leakage
+		if base.Scheme != provided.Scheme || base.Host != provided.Host {
+			return "", fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", provided.Host, base.Host)
+		}
+		return path, nil
+	}
+
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", fmt.Errorf("remote: invalid base URL: %w", err)
+	}
+	// Parsing splits the path from any query or fragment the caller appended to
+	// it (JSONRequest appends the encoded Query this way), so each part can be
+	// carried on the URL it belongs to instead of being spliced into a string.
+	ref, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("remote: invalid request path %q: %w", path, err)
+	}
+
+	// EscapedPath, not Path: joining the decoded form would turn an escaped
+	// separator ("x%2Fy") into a real one, silently addressing a different
+	// resource than the caller asked for.
+	p := ref.EscapedPath()
+
+	// JoinPath preserves a trailing separator, so a root-only path would
+	// produce "<base>/". That names a different resource than "<base>" and
+	// some servers reject it, and a caller reaching the service URL itself has
+	// no other way to say so — treat it as empty.
+	if p == "/" {
+		p = ""
+	}
+
+	u := base.JoinPath(p)
+
+	// A query on the base URL is unusual but not illegal, so merge rather than
+	// let either side silently win.
+	switch {
+	case ref.RawQuery == "":
+	case u.RawQuery == "":
+		u.RawQuery = ref.RawQuery
+	default:
+		u.RawQuery += "&" + ref.RawQuery
+	}
+	if ref.Fragment != "" {
+		u.Fragment = ref.Fragment
+	}
+
+	return u.String(), nil
+}
+
+func (c *Client) executeOnce(ctx context.Context, method, path string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
+	finalURL, err := c.resolveURL(path)
+	if err != nil {
+		return nil, err
 	}
 
 	var bodyReader io.Reader
