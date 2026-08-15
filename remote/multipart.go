@@ -16,11 +16,29 @@ import (
 	"strings"
 )
 
-// quoteEscaper escapes the two characters that would otherwise break out of a
-// quoted Content-Disposition parameter. It matches what mime/multipart does
-// internally for CreateFormFile, which this package cannot reuse because that
+// quoteEscaper neutralises the characters that would otherwise break out of a
+// quoted Content-Disposition parameter: a quote or backslash ends the quoted
+// string, and a CR or LF ends the header line itself, letting whatever follows
+// it be read as further headers or as a forged part. Callers routinely put
+// untrusted input in these fields — an end user's original upload filename is
+// the usual case — so escaping here is load-bearing, not cosmetic.
+//
+// The replacements match mime/multipart's own escapeQuotes exactly, including
+// its split treatment: backslash escaping for quotes, percent-encoding for
+// CR/LF. This package cannot reuse the stdlib's CreateFormFile because that
 // helper hardcodes a Content-Type of application/octet-stream.
-var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"", "\r", "%0D", "\n", "%0A")
+
+// hasControlChars reports whether v contains a character that must never reach
+// a MIME header line.
+//
+// mime/multipart writes header values verbatim, so this is what stops an
+// unescaped value from terminating its line early. It is for values that are
+// not quoted parameters, where percent-encoding would corrupt a legitimate
+// value rather than protect anything and rejection is the only honest option.
+func hasControlChars(v string) bool {
+	return strings.IndexFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+}
 
 // Part is one part of a multipart/form-data body.
 //
@@ -130,6 +148,12 @@ func buildMultipartBody(parts []Part) ([]byte, string, error) {
 	for i, p := range parts {
 		if p.Name == "" {
 			return nil, "", fmt.Errorf("remote: multipart part %d has no name", i)
+		}
+		// Name and FileName are quoted parameters, so quoteEscaper makes them
+		// safe. ContentType is written as a bare header value with nowhere to
+		// escape to, so it has to be refused instead.
+		if hasControlChars(p.ContentType) {
+			return nil, "", fmt.Errorf("remote: multipart part %q has a content type containing a control character", p.Name)
 		}
 
 		disposition := fmt.Sprintf(`form-data; name="%s"`, quoteEscaper.Replace(p.Name))

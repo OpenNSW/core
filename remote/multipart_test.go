@@ -4,6 +4,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -270,4 +271,76 @@ func TestJSONPart_MarshalsValue(t *testing.T) {
 	var decoded map[string]string
 	require.NoError(t, json.Unmarshal(p.Content, &decoded))
 	assert.Equal(t, map[string]string{"a": "b"}, decoded)
+}
+
+// A caller commonly forwards untrusted input into a part — an end user's
+// original upload filename is the obvious case. mime/multipart writes header
+// values verbatim, so a CR or LF reaching a header line would end it early and
+// let the remainder be read as further headers, or as a forged part.
+func TestMultipartRequest_NeutralisesHeaderInjectionInNameAndFileName(t *testing.T) {
+	const injection = "evil.pdf\"\r\nContent-Type: application/json\r\nX-Injected: yes\r\n\r\n--INJECTED\r\n"
+
+	for _, tc := range []struct {
+		name string
+		part Part
+	}{
+		{"via FileName", Part{Name: "file1", FileName: injection, ContentType: "application/pdf", Content: []byte("%PDF-1.4")}},
+		{"via Name", Part{Name: injection, Content: []byte("x")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, contentType, err := buildMultipartBody([]Part{tc.part})
+			require.NoError(t, err)
+
+			// The injected text may still appear as inert characters inside the
+			// quoted parameter. What must not survive is the CR/LF that would
+			// end the header line and promote the rest to headers of its own.
+			assert.NotContains(t, string(body), "\r\nX-Injected: yes", "must not become a header line")
+			assert.NotContains(t, string(body), "\r\n--INJECTED", "must not become a boundary delimiter")
+			assert.Contains(t, string(body), "%0D%0A", "CR/LF must be percent-encoded, as mime/multipart does")
+
+			// The receiver sees exactly one part carrying exactly the headers
+			// the caller set — the injected ones did not become real headers.
+			_, params, err := mime.ParseMediaType(contentType)
+			require.NoError(t, err)
+
+			mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+			p, err := mr.NextPart()
+			require.NoError(t, err)
+			assert.Empty(t, p.Header.Get("X-Injected"))
+
+			_, err = mr.NextPart()
+			assert.ErrorIs(t, err, io.EOF, "the forged boundary must not produce a second part")
+		})
+	}
+}
+
+// ContentType is written straight into a header value, where percent-encoding
+// would be meaningless — a control character there is rejected instead.
+func TestMultipartRequest_RejectsControlCharactersInContentType(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+	}{
+		{"CRLF", "application/pdf\r\nX-Injected: yes"},
+		{"bare LF", "application/pdf\nX-Injected: yes"},
+		{"bare CR", "application/pdf\rX-Injected: yes"},
+		{"NUL", "application/pdf\x00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := buildMultipartBody([]Part{
+				{Name: "file1", FileName: "invoice.pdf", ContentType: tc.contentType, Content: []byte("x")},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "file1")
+			assert.Contains(t, err.Error(), "control character")
+		})
+	}
+
+	t.Run("an ordinary content type with parameters is still accepted", func(t *testing.T) {
+		body, _, err := buildMultipartBody([]Part{
+			{Name: "payload", ContentType: "application/json; charset=UTF-8", Content: []byte("{}")},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), "application/json; charset=UTF-8")
+	})
 }
