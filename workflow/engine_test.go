@@ -698,11 +698,11 @@ func TestEmitSignalStandaloneWarns(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "emit",
-				"type": "TASK",
-				"task_template_id": "sys:emit_signal",
-				"input_mapping": {
-					"sig_name": "signal_name",
-					"sig_payload": "payload"
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "EMIT",
+					"signal_name": "my_signal",
+					"payload": { "key": "value" }
 				}
 			},
 			{ "id": "end", "type": "END" }
@@ -717,12 +717,8 @@ func TestEmitSignalStandaloneWarns(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-	initialVars := map[string]any{
-		"sig_name": "my_signal",
-		"sig_payload": map[string]any{
-			"key": "value",
-		},
-	}
+	// No _parent_workflow_id set, so the EMIT should warn and proceed without failing.
+	initialVars := map[string]any{}
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
 
@@ -739,10 +735,14 @@ func TestEmitSignalInvalidPayloadType(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
+	// SIGNALING nodes receive payload as a typed map[string]any directly from
+	// SignalingConfig.Payload — there is no InputMapping coercion that could
+	// introduce a wrong type at runtime. This test verifies that a SIGNALING
+	// node with a missing signal_name parks for admin rather than panicking.
 	emitSignalJSON := `
 	{
-		"workflow_id": "emit-signal-invalid-payload-test",
-		"name": "Emit Signal Invalid Payload Test",
+		"workflow_id": "emit-signal-missing-name-test",
+		"name": "Emit Signal Missing Name Test",
 		"version": 1,
 		"edges":[
 			{ "id": "e1", "source_id": "start", "target_id": "emit" },
@@ -752,11 +752,10 @@ func TestEmitSignalInvalidPayloadType(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "emit",
-				"type": "TASK",
-				"task_template_id": "sys:emit_signal",
-				"input_mapping": {
-					"sig_name": "signal_name",
-					"sig_payload": "payload"
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "EMIT",
+					"signal_name": ""
 				}
 			},
 			{ "id": "end", "type": "END" }
@@ -770,32 +769,27 @@ func TestEmitSignalInvalidPayloadType(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 
-	initialVars := map[string]any{
-		"sig_name":    "my_signal",
-		"sig_payload": "invalid-payload-string", // string is not map[string]any
-	}
-
-	// Verify that the node parks on the type mismatch error, then send Abort to fail the workflow
+	// Node parks on the missing signal_name error; abort it to fail the workflow.
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
 		require.NoError(t, err)
 		var instance WorkflowInstance
 		require.NoError(t, val.Get(&instance))
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["emit"].Status)
-		require.Contains(t, instance.NodeInfo["emit"].LastError, "emit_signal task payload must be a map[string]any, got string")
+		require.Contains(t, instance.NodeInfo["emit"].LastError, "signal_name is required")
 
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "emit",
 			Action: AdminActionAbort,
-			Reason: "failing on bad payload type",
+			Reason: "failing on missing signal_name",
 		})
 	}, time.Millisecond)
 
-	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
-	require.Contains(t, env.GetWorkflowError().Error(), "emit_signal task payload must be a map[string]any, got string")
+	require.Contains(t, env.GetWorkflowError().Error(), "signal_name is required")
 }
 
 func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
@@ -815,11 +809,11 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "emit",
-				"type": "TASK",
-				"task_template_id": "sys:emit_signal",
-				"input_mapping": {
-					"sig_name": "signal_name",
-					"sig_payload": "payload"
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "EMIT",
+					"signal_name": "my_signal",
+					"payload": { "key": "value" }
 				}
 			},
 			{ "id": "end", "type": "END" }
@@ -844,10 +838,6 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 	).Return(fmt.Errorf("workflow not found")).Once()
 
 	initialVars := map[string]any{
-		"sig_name": "my_signal",
-		"sig_payload": map[string]any{
-			"key": "value",
-		},
 		// Set _parent_workflow_id to a non-existent parent so the emission fails
 		"_parent_workflow_id": "non-existent-parent",
 	}
@@ -865,7 +855,7 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 	// Verify that the AuditTrail contains the signal sending failure log
 	auditLogged := false
 	for _, entry := range instance.AuditTrail {
-		if strings.Contains(entry, "emit_signal: failed to send signal to parent non-existent-parent:") {
+		if strings.Contains(entry, "SIGNALING EMIT: failed to send signal to parent non-existent-parent:") {
 			auditLogged = true
 			break
 		}
@@ -1121,4 +1111,87 @@ func TestTimerNodeDefaultsCounterKeyToNodeID(t *testing.T) {
 	require.True(t, ok, "counter should default to <node id>.iterations")
 	require.Equal(t, 1, asInt(got))
 	require.Equal(t, 90*time.Second, env.Now().Sub(start))
+}
+
+// signalingBadConfigWorkflowJSON returns a minimal workflow JSON with a SIGNALING node
+// whose signaling config is replaced by the provided snippet.
+func signalingTestWorkflow(nodeJSON string) string {
+	return `{
+		"workflow_id": "signaling-config-test", "name": "signaling config test", "version": 1,
+		"edges":[
+			{ "id": "e1", "source_id": "start", "target_id": "sig" },
+			{ "id": "e2", "source_id": "sig",   "target_id": "end" }
+		],
+		"nodes":[
+			{ "id": "start", "type": "START" },
+			` + nodeJSON + `,
+			{ "id": "end",   "type": "END" }
+		]
+	}`
+}
+
+func TestSignalingNodeRejectsBadConfig(t *testing.T) {
+	for _, tc := range []struct{ name, nodeJSON, wantErr string }{
+		{
+			"EMIT missing signaling config",
+			`{ "id": "sig", "type": "SIGNALING" }`,
+			"signaling config is required",
+		},
+		{
+			"EMIT empty signal_name",
+			`{ "id": "sig", "type": "SIGNALING", "signaling": { "type": "EMIT", "signal_name": "" } }`,
+			"signal_name is required",
+		},
+		{
+			"WAIT missing signaling config",
+			`{ "id": "sig", "type": "SIGNALING" }`,
+			"signaling config is required",
+		},
+		{
+			"WAIT empty signal_name",
+			`{ "id": "sig", "type": "SIGNALING", "signaling": { "type": "WAIT", "signal_name": "" } }`,
+			"signal_name is required",
+		},
+		{
+			"unknown signaling type",
+			`{ "id": "sig", "type": "SIGNALING", "signaling": { "type": "BROADCAST", "signal_name": "x" } }`,
+			"unknown signaling type",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testSuite := &testsuite.WorkflowTestSuite{}
+			env := testSuite.NewTestWorkflowEnvironment()
+
+			var def WorkflowDefinition
+			require.NoError(t, json.Unmarshal([]byte(signalingTestWorkflow(tc.nodeJSON)), &def))
+
+			acts := &Activities{}
+			env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+			env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+			// A misconfigured node parks for admin; verify the error, then abort.
+			env.RegisterDelayedCallback(func() {
+				val, err := env.QueryWorkflow("GetStatus")
+				require.NoError(t, err)
+				var instance WorkflowInstance
+				require.NoError(t, val.Get(&instance))
+				require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["sig"].Status)
+				require.Contains(t, instance.NodeInfo["sig"].LastError, tc.wantErr)
+			}, time.Millisecond)
+
+			env.RegisterDelayedCallback(func() {
+				env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+					NodeID: "sig",
+					Action: AdminActionAbort,
+				})
+			}, 2*time.Millisecond)
+
+			env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+			require.True(t, env.IsWorkflowCompleted())
+			err := env.GetWorkflowError()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }

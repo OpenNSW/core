@@ -14,6 +14,16 @@ const (
 	NodeTypeGateway   NodeType = "GATEWAY"
 	NodeTypeSplitTask NodeType = "SPLIT_TASK"
 	NodeTypeTimer     NodeType = "TIMER"
+	NodeTypeSignaling NodeType = "SIGNALING"
+)
+
+// SignalingType represents the sub-type of a SIGNALING node.
+type SignalingType string
+
+// Signaling sub-types.
+const (
+	SignalingTypeEmit SignalingType = "EMIT" // Emits a signal to sibling branches
+	SignalingTypeWait SignalingType = "WAIT" // Blocks until a named signal is received
 )
 
 // SplitMode represents the split task dynamic fan-out mode.
@@ -68,25 +78,6 @@ const (
 	IterBranchIDKey = "branch_id"
 	// IterInputKey is the sub-key pointing to the input payload mapped to this branch.
 	IterInputKey = "input"
-
-	// System task template IDs. SysTaskEmitSignal and SysTaskWaitForSignal let sibling
-	// branches spawned by the same SPLIT_TASK node coordinate: one hop up to the parent,
-	// one hop back down to that node's other children. They do not bubble further up an
-	// ancestor chain or cascade down into a sibling's own nested sub-splits — see the
-	// "System Task Templates" section in README.md for the full scope.
-	//
-	// SysTaskWaitForSignal is the template ID for the built-in system task that suspends
-	// the workflow until a specific signal is received from a sibling branch.
-	SysTaskWaitForSignal = "sys:wait_for_signal"
-	// SysTaskEmitSignal is the template ID for the built-in system task that publishes/emits
-	// a signal to be routed to sibling branches under the same SPLIT_TASK node.
-	SysTaskEmitSignal = "sys:emit_signal"
-
-	// Input keys for system tasks
-	// InputSignalName is the parameter key used to specify the target signal name in signal tasks.
-	InputSignalName = "signal_name"
-	// InputPayload is the parameter key used to specify the data payload in emit signal tasks.
-	InputPayload = "payload"
 )
 
 // BroadcastMessage defines a unified Message Wrapper for parent brokerage.
@@ -121,6 +112,20 @@ type TimerConfig struct {
 	CounterKey string `json:"counter_key,omitempty"`
 }
 
+// SignalingConfig defines the parameters for a SIGNALING node. SIGNALING nodes
+// let sibling branches spawned by the same SPLIT_TASK node coordinate with each
+// other: one hop up to the parent, one hop back down to that node's other children.
+// They do not bubble further up an ancestor chain or cascade down into a sibling's
+// own nested sub-splits — see the "Signaling Nodes" section in README.md.
+type SignalingConfig struct {
+	// Type is either EMIT or WAIT.
+	Type SignalingType `json:"type"`
+	// SignalName is the name of the signal channel. Required.
+	SignalName string `json:"signal_name"`
+	// Payload holds the data to emit (EMIT nodes only). Ignored for WAIT nodes.
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
 // GatewayType represents the type of a gateway controlling execution flow.
 type GatewayType string
 
@@ -144,6 +149,7 @@ type Node struct {
 	// Extensions
 	SplitTask *SplitTaskConfig `json:"split_task,omitempty"`
 	Timer     *TimerConfig     `json:"timer,omitempty"`
+	Signaling *SignalingConfig `json:"signaling,omitempty"`
 }
 
 // Edge represents a directed connection between two nodes.

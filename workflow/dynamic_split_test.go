@@ -422,12 +422,14 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 				OutputMapping:  map[string]string{"inspection_status": "phyto_status"},
 			},
 			{
-				ID:             "p_emit",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskEmitSignal,
+				ID:   "p_emit",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeEmit,
+					SignalName: "custom_iter.input.signal_to_emit",
+				},
 				InputMapping: map[string]string{
-					"custom_iter.input.signal_to_emit": InputSignalName,
-					"phyto_status":                     "payload.phyto_status",
+					"phyto_status": "phyto_status",
 				},
 			},
 			{ID: "p_end", Type: NodeTypeEnd},
@@ -445,11 +447,13 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 		Nodes: []Node{
 			{ID: "h_start", Type: NodeTypeStart},
 			{
-				ID:             "h_wait",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskWaitForSignal,
-				InputMapping:   map[string]string{"custom_iter.input.signal_to_wait": InputSignalName},
-				OutputMapping:  map[string]string{"phyto_status": "phyto_status"},
+				ID:   "h_wait",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeWait,
+					SignalName: "custom_iter.input.signal_to_wait",
+				},
+				OutputMapping: map[string]string{"phyto_status": "phyto_status"},
 			},
 			{
 				ID:             "h_verify_phyto",
@@ -574,12 +578,14 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 		Nodes: []Node{
 			{ID: "e_start", Type: NodeTypeStart},
 			{
-				ID:             "e_emit",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskEmitSignal,
+				ID:   "e_emit",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeEmit,
+					SignalName: "custom_iter.input.signal_to_emit",
+				},
 				InputMapping: map[string]string{
-					"custom_iter.input.signal_to_emit": InputSignalName,
-					"custom_iter.input.tag":            "payload.tag",
+					"custom_iter.input.tag": "tag",
 				},
 			},
 			{ID: "e_end", Type: NodeTypeEnd},
@@ -595,11 +601,13 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 		Nodes: []Node{
 			{ID: "w_start", Type: NodeTypeStart},
 			{
-				ID:             "w_wait",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskWaitForSignal,
-				InputMapping:   map[string]string{"custom_iter.input.signal_to_wait": InputSignalName},
-				OutputMapping:  map[string]string{"tag": "received_tag"},
+				ID:   "w_wait",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeWait,
+					SignalName: "custom_iter.input.signal_to_wait",
+				},
+				OutputMapping: map[string]string{"tag": "received_tag"},
 			},
 			{ID: "w_end", Type: NodeTypeEnd},
 		},

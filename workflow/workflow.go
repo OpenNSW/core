@@ -188,6 +188,8 @@ func (g *graphInterpreter) dispatchNodeHandler(ctx workflow.Context, nodeInfo *N
 		return g.handleSplitTaskNode(ctx, nodeInfo, node, outEdges)
 	case NodeTypeTimer:
 		return g.handleTimerNode(ctx, nodeInfo, node, outEdges)
+	case NodeTypeSignaling:
+		return g.handleSignalingNode(ctx, nodeInfo, node, outEdges)
 	case NodeTypeEnd:
 		return g.handleEndNode(ctx, nodeInfo)
 	default:
@@ -379,112 +381,24 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 
 	var result map[string]any
 
-	switch node.TaskTemplateID {
-	case SysTaskWaitForSignal:
-		signalName, _ := inputs[InputSignalName].(string)
-		if signalName == "" {
-			return fmt.Errorf("wait_for_signal task requires a non-empty signal_name input")
-		}
+	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		ActivityID:          nodeInfo.ID,
+		StartToCloseTimeout: 24 * time.Hour * 365,
+	})
 
-		var signalData map[string]any
-		if nodeInfo.CachedTaskResult != nil {
-			signalData = nodeInfo.CachedTaskResult
-		} else {
-			signalChan := workflow.GetSignalChannel(ctx, signalName)
-			selector := workflow.NewSelector(ctx)
-			var received bool
+	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs).Get(ctx, &result)
+	if err != nil {
+		return err
+	}
 
-			selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
-				c.Receive(ctx, &signalData)
-				received = true
-			})
-			selector.AddReceive(ctx.Done(), func(c workflow.ReceiveChannel, more bool) {
-				// unblocks when context is canceled
-			})
+	// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
+	// fails) can see the Activity already ran and what it returned, rather than blindly
+	// retrying and re-invoking it.
+	nodeInfo.CachedTaskResult = result
 
-			// Block execution until either a matching signal event is posted or context is canceled
-			selector.Select(ctx)
-
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-
-			if received {
-				// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
-				// fails) can see the signal data already arrived, and we don't block again on retry.
-				nodeInfo.CachedTaskResult = signalData
-			}
-		}
-
-		// Hydrate incoming broadcast state keys back into local execution variables using standard OutputMapping
-		err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, signalData)
-		if err != nil {
-			return err
-		}
-
-	case SysTaskEmitSignal:
-		signalName, _ := inputs[InputSignalName].(string)
-		if signalName == "" {
-			return fmt.Errorf("emit_signal task requires a non-empty signal_name input")
-		}
-
-		var payload map[string]any
-		if rawPayload, exists := inputs[InputPayload]; exists && rawPayload != nil {
-			var ok bool
-			payload, ok = rawPayload.(map[string]any)
-			if !ok {
-				return fmt.Errorf("emit_signal task payload must be a map[string]any, got %T", rawPayload)
-			}
-		}
-
-		parentWorkflowID, _ := g.instance.WorkflowVariables[VarParentWorkflowID].(string)
-
-		if parentWorkflowID != "" {
-			branchID, _ := g.instance.WorkflowVariables[VarBranchID].(string)
-			if branchID == "" {
-				workflow.GetLogger(ctx).Warn("emit_signal: _branch_id not set; signal will be unfiltered")
-			}
-			splitNodeID, _ := g.instance.WorkflowVariables[VarSplitNodeID].(string)
-			msg := BroadcastMessage{
-				SenderBranchID: branchID,
-				SignalName:     signalName,
-				Payload:        payload,
-			}
-			// Non-blocking fire-and-forget external signal delivery up to the parent, which
-			// rebroadcasts to this node's siblings only — one hop up, one hop back down. See
-			// the "System Task Templates" section in README.md for the scope.
-			future := workflow.SignalExternalWorkflow(ctx, parentWorkflowID, "", childBroadcastSignalName(splitNodeID), msg)
-			workflow.Go(ctx, func(ctx workflow.Context) {
-				if err := future.Get(ctx, nil); err != nil {
-					workflow.GetLogger(ctx).Error("emit_signal: failed to send signal to parent", "error", err)
-					g.instance.AuditTrail = append(g.instance.AuditTrail,
-						fmt.Sprintf("emit_signal: failed to send signal to parent %s: %s", parentWorkflowID, err.Error()))
-				}
-			})
-		} else {
-			workflow.GetLogger(ctx).Warn("emit_signal: parent_workflow_id not set; signal cannot be sent to parent")
-		}
-
-	default:
-		nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			ActivityID:          nodeInfo.ID,
-			StartToCloseTimeout: 24 * time.Hour * 365,
-		})
-
-		err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs).Get(ctx, &result)
-		if err != nil {
-			return err
-		}
-
-		// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
-		// fails) can see the Activity already ran and what it returned, rather than blindly
-		// retrying and re-invoking it.
-		nodeInfo.CachedTaskResult = result
-
-		err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, result)
-		if err != nil {
-			return err
-		}
+	err = g.mapTaskOutputs(g.instance.WorkflowVariables, node.OutputMapping, result)
+	if err != nil {
+		return err
 	}
 	nodeInfo.CachedTaskResult = nil
 

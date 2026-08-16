@@ -443,9 +443,9 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "wait",
-				"type": "TASK",
-				"task_template_id": "sys:wait_for_signal",
-				"input_mapping": {
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "WAIT",
 					"signal_name": "signal_name"
 				},
 				"output_mapping": {
@@ -524,9 +524,9 @@ func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "wait",
-				"type": "TASK",
-				"task_template_id": "sys:wait_for_signal",
-				"input_mapping": {
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "WAIT",
 					"signal_name": "signal_name"
 				}
 			},
