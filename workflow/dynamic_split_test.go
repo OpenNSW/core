@@ -426,7 +426,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 				Type: NodeTypeSignaling,
 				Signaling: &SignalingConfig{
 					Type:       SignalingTypeEmit,
-					SignalName: "custom_iter.input.signal_to_emit",
+					SignalName: "PHYTO_APPROVAL_EMITTED",
 				},
 				InputMapping: map[string]string{
 					"phyto_status": "phyto_status",
@@ -451,7 +451,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 				Type: NodeTypeSignaling,
 				Signaling: &SignalingConfig{
 					Type:       SignalingTypeWait,
-					SignalName: "custom_iter.input.signal_to_wait",
+					SignalName: "PHYTO_APPROVAL_EMITTED",
 				},
 				OutputMapping: map[string]string{"phyto_status": "phyto_status"},
 			},
@@ -518,16 +518,14 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 				"template_id": "oga_phyto_workflow",
 				"branch_id":   "oga-phyto",
 				"payload": map[string]any{
-					"container_id":   "CONT-4412",
-					"signal_to_emit": "PHYTO_APPROVAL_EMITTED",
+					"container_id": "CONT-4412",
 				},
 			},
 			{
 				"template_id": "oga_health_workflow",
 				"branch_id":   "oga-health",
 				"payload": map[string]any{
-					"container_id":   "CONT-4412",
-					"signal_to_wait": "PHYTO_APPROVAL_EMITTED",
+					"container_id": "CONT-4412",
 				},
 			},
 		},
@@ -582,7 +580,7 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 				Type: NodeTypeSignaling,
 				Signaling: &SignalingConfig{
 					Type:       SignalingTypeEmit,
-					SignalName: "custom_iter.input.signal_to_emit",
+					SignalName: "SYNC_SIGNAL",
 				},
 				InputMapping: map[string]string{
 					"custom_iter.input.tag": "tag",
@@ -605,7 +603,7 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 				Type: NodeTypeSignaling,
 				Signaling: &SignalingConfig{
 					Type:       SignalingTypeWait,
-					SignalName: "custom_iter.input.signal_to_wait",
+					SignalName: "SYNC_SIGNAL",
 				},
 				OutputMapping: map[string]string{"tag": "received_tag"},
 			},
@@ -669,24 +667,24 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 			{
 				"template_id": "signal_emitter",
 				"branch_id":   "a-emit",
-				"payload":     map[string]any{"signal_to_emit": "SIG_A", "tag": "A"},
+				"payload":     map[string]any{"tag": "A"},
 			},
 			{
 				"template_id": "signal_waiter",
 				"branch_id":   "a-wait",
-				"payload":     map[string]any{"signal_to_wait": "SIG_A"},
+				"payload":     map[string]any{},
 			},
 		},
 		"group_b_items": []map[string]any{
 			{
 				"template_id": "signal_emitter",
 				"branch_id":   "b-emit",
-				"payload":     map[string]any{"signal_to_emit": "SIG_B", "tag": "B"},
+				"payload":     map[string]any{"tag": "B"},
 			},
 			{
 				"template_id": "signal_waiter",
 				"branch_id":   "b-wait",
-				"payload":     map[string]any{"signal_to_wait": "SIG_B"},
+				"payload":     map[string]any{},
 			},
 		},
 	}

@@ -61,13 +61,10 @@ func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *N
 // with a warning — this lets EMIT nodes appear in top-level workflows without
 // causing failures.
 //
-// SignalName is first resolved as a dot-path against the current workflow variables
-// (e.g. "custom_iter.input.signal_to_emit"), falling back to the literal config value
-// if no matching variable exists. The configured Payload is used as-is; additional
-// payload fields can be injected by populating node.Signaling.Payload in the DSL.
+// The configured Payload is used as-is; additional payload fields can be injected
+// by populating node.InputMapping.
 func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, _ *NodeInfo, node *Node, cfg *SignalingConfig) error {
-	// Resolve signal name: treat as a workflow-variable dot-path with literal fallback.
-	signalName := resolveSignalName(g.instance.WorkflowVariables, cfg.SignalName)
+	signalName := cfg.SignalName
 
 	parentWorkflowID, _ := g.instance.WorkflowVariables[VarParentWorkflowID].(string)
 	if parentWorkflowID == "" {
@@ -128,13 +125,8 @@ func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, _ *NodeInfo
 // WorkflowVariables using the node's OutputMapping. The received data is cached
 // on NodeInfo so that if output mapping fails and the node parks for admin, a
 // subsequent retry does not re-block waiting for the signal again.
-//
-// SignalName is first resolved as a dot-path against the current workflow variables
-// (e.g. "custom_iter.input.signal_to_wait"), falling back to the literal config value
-// if no matching variable exists.
 func (g *graphInterpreter) handleSignalingWait(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, cfg *SignalingConfig) error {
-	// Resolve signal name: treat as a workflow-variable dot-path with literal fallback.
-	signalName := resolveSignalName(g.instance.WorkflowVariables, cfg.SignalName)
+	signalName := cfg.SignalName
 
 	var signalData map[string]any
 
@@ -172,16 +164,4 @@ func (g *graphInterpreter) handleSignalingWait(ctx workflow.Context, nodeInfo *N
 	}
 	nodeInfo.CachedTaskResult = nil
 	return nil
-}
-
-// resolveSignalName treats name as a workflow-variable dot-path and returns the
-// resolved string value. If no matching variable is found, or the resolved value
-// is not a string, the original name is returned unchanged (literal fallback).
-func resolveSignalName(vars map[string]any, name string) string {
-	if val, ok := maputil.GetNestedKey(vars, name); ok {
-		if s, ok := val.(string); ok && s != "" {
-			return s
-		}
-	}
-	return name
 }

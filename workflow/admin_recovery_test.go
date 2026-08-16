@@ -446,7 +446,7 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 				"type": "SIGNALING",
 				"signaling": {
 					"type": "WAIT",
-					"signal_name": "signal_name"
+					"signal_name": "my_test_signal"
 				},
 				"output_mapping": {
 					"missing_key": "global_target"
@@ -527,7 +527,7 @@ func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
 				"type": "SIGNALING",
 				"signaling": {
 					"type": "WAIT",
-					"signal_name": "signal_name"
+					"signal_name": "my_test_signal"
 				}
 			},
 			{ "id": "end", "type": "END" }
