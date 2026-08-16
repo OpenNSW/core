@@ -40,8 +40,22 @@ func (g *MyGateway) GetFlowType() payment.InteractionType {
     return payment.FlowTypeRedirect
 }
 
+// ValidateMetadata declares what this gateway cannot operate without. It
+// runs before a reference number is generated and before anything is
+// persisted, so a caller that omitted a required key fails immediately
+// rather than at callback time, when the configuration responsible is out
+// of reach. Presence checks on the request only — no I/O, no outside state.
+// A gateway with no requirements returns nil.
+func (g *MyGateway) ValidateMetadata(metadata map[string]string) error {
+    if strings.TrimSpace(metadata["my_merchant_id"]) == "" {
+        return errors.New("my_merchant_id is required")
+    }
+    return nil
+}
+
 func (g *MyGateway) CreateSession(ctx context.Context, req payment.SessionRequest) (*payment.SessionResponse, error) {
-    // Logic to initialize session with gateway
+    // Logic to initialize session with gateway. req.Metadata carries the
+    // checkout's pass-through metadata, already past ValidateMetadata.
     return &payment.SessionResponse{...}, nil
 }
 

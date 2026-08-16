@@ -18,6 +18,19 @@ import (
 // MockGateway is a mock implementation of PaymentGateway
 type MockGateway struct {
 	mock.Mock
+
+	// ValidateMetadataFn overrides ValidateMetadata for the tests that care
+	// about it. Left nil, the gateway declares no metadata requirements —
+	// the common case, and what keeps every other test free of an
+	// expectation for a call it does not exercise.
+	ValidateMetadataFn func(metadata map[string]string) error
+}
+
+func (m *MockGateway) ValidateMetadata(metadata map[string]string) error {
+	if m.ValidateMetadataFn == nil {
+		return nil
+	}
+	return m.ValidateMetadataFn(metadata)
 }
 
 func (m *MockGateway) GetFlowType() InteractionType {
