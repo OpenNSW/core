@@ -148,6 +148,14 @@ func (r *registry) Generate(ctx context.Context, issuer, idType string, params m
 
 	now := time.Now().UTC()
 
+	// 1. Validation pass: validate all segments before executing any side-effects (e.g. sequence counter increments)
+	for _, seg := range compiled.segments {
+		if err := seg.validate(params, now); err != nil {
+			return "", err
+		}
+	}
+
+	// 2. Render pass: execute rendering (sequence store increments happen here)
 	var sb strings.Builder
 	for _, seg := range compiled.segments {
 		part, err := seg.render(ctx, params, now)

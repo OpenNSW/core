@@ -20,6 +20,7 @@ import (
 //     segment, so every segment in one Generate call shares the same clock value
 //     and tests can inject a fixed time without global state.
 type segment interface {
+	validate(params map[string]string, now time.Time) error
 	render(ctx context.Context, params map[string]string, now time.Time) (string, error)
 }
 
@@ -30,6 +31,10 @@ type segment interface {
 // literalSegment emits a fixed string, unchanged.
 type literalSegment struct {
 	value string
+}
+
+func (s *literalSegment) validate(_ map[string]string, _ time.Time) error {
+	return nil
 }
 
 func (s *literalSegment) render(_ context.Context, _ map[string]string, _ time.Time) (string, error) {
@@ -54,15 +59,22 @@ type listSegment struct {
 	allowed  map[string]struct{} // set for O(1) lookup
 }
 
-func (s *listSegment) render(_ context.Context, params map[string]string, _ time.Time) (string, error) {
+func (s *listSegment) validate(params map[string]string, _ time.Time) error {
 	val, ok := params[s.paramKey]
 	if !ok || val == "" {
-		return "", fmt.Errorf("%w: param %q is required", ErrInvalidParam, s.paramKey)
+		return fmt.Errorf("%w: param %q is required", ErrInvalidParam, s.paramKey)
 	}
 	if _, valid := s.allowed[val]; !valid {
-		return "", fmt.Errorf("%w: value %q for param %q is not in the allowed list", ErrInvalidParam, val, s.paramKey)
+		return fmt.Errorf("%w: value %q for param %q is not in the allowed list", ErrInvalidParam, val, s.paramKey)
 	}
-	return val, nil
+	return nil
+}
+
+func (s *listSegment) render(_ context.Context, params map[string]string, now time.Time) (string, error) {
+	if err := s.validate(params, now); err != nil {
+		return "", err
+	}
+	return params[s.paramKey], nil
 }
 
 // newListSegment constructs a list segment from config and the resolved allowed values.
@@ -87,6 +99,10 @@ func newListSegment(cfg SegmentConfig, values []string) (*listSegment, error) {
 // dateSegment formats the current time using a Go reference-date layout string.
 type dateSegment struct {
 	layout string
+}
+
+func (s *dateSegment) validate(_ map[string]string, _ time.Time) error {
+	return nil
 }
 
 func (s *dateSegment) render(_ context.Context, _ map[string]string, now time.Time) (string, error) {
@@ -125,6 +141,10 @@ type sequenceSegment struct {
 	scopeKeyTmpl string
 	padding      int
 	store        SequenceStore
+}
+
+func (s *sequenceSegment) validate(_ map[string]string, _ time.Time) error {
+	return nil
 }
 
 func (s *sequenceSegment) render(ctx context.Context, params map[string]string, now time.Time) (string, error) {

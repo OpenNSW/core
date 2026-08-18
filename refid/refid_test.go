@@ -337,6 +337,39 @@ func TestGenerate_InvalidListValue(t *testing.T) {
 	}
 }
 
+func TestGenerate_ValidationPreventsSideEffects(t *testing.T) {
+	store := newMemStore()
+	// Config with sequence segment BEFORE list segment
+	cfg := refid.Config{
+		Lists: map[string][]string{"office_location": {"COL"}},
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "seq_before_list",
+				Segments: []refid.SegmentConfig{
+					{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: 4},
+					{Type: "list", List: "office_location", Param: "officeCode"},
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Call with missing officeCode param (list segment will fail validation)
+	_, err = reg.Generate(context.Background(), "TEST", "seq_before_list", nil)
+	if !errors.Is(err, refid.ErrInvalidParam) {
+		t.Fatalf("expected ErrInvalidParam, got %v", err)
+	}
+
+	// Assert store was NEVER mutated during the failed call
+	if len(store.counters) != 0 {
+		t.Errorf("expected 0 counters in store after validation failure, got %d", len(store.counters))
+	}
+}
+
 func TestGenerate_CounterOverflow(t *testing.T) {
 	// padding:2 → max counter = 99; store returns 100 → overflow
 	store := &fixedStore{value: 100}
