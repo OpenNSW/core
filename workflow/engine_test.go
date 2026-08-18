@@ -842,15 +842,32 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 		"_parent_workflow_id": "non-existent-parent",
 	}
 
+	// Register delayed callback to verify node parks for admin intervention on emission failure, then abort.
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["emit"].Status)
+		require.Contains(t, instance.NodeInfo["emit"].LastError, "failed to send signal to parent")
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "emit",
+			Action: AdminActionAbort,
+			Reason: "failing on signal emit error",
+		})
+	}, time.Millisecond)
+
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
 
 	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
+	require.Error(t, env.GetWorkflowError())
+	require.Contains(t, env.GetWorkflowError().Error(), "failed to send signal to parent")
 
+	val, queryErr := env.QueryWorkflow("GetStatus")
+	require.NoError(t, queryErr)
 	var instance WorkflowInstance
-	err = env.GetWorkflowResult(&instance)
-	require.NoError(t, err)
-	require.Equal(t, StatusCompleted, instance.Status)
+	require.NoError(t, val.Get(&instance))
 
 	// Verify that the AuditTrail contains the signal sending failure log
 	auditLogged := false

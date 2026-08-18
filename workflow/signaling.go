@@ -106,17 +106,14 @@ func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, _ *NodeInfo
 		Payload:        payload,
 	}
 
-	// Non-blocking fire-and-forget: signal delivery up to the parent, which rebroadcasts
-	// to this node's siblings only — one hop up, one hop back down. See README.md.
 	future := workflow.SignalExternalWorkflow(ctx, parentWorkflowID, "", childBroadcastSignalName(splitNodeID), msg)
-	workflow.Go(ctx, func(ctx workflow.Context) {
-		if err := future.Get(ctx, nil); err != nil {
-			workflow.GetLogger(ctx).Error("SIGNALING EMIT: failed to send signal to parent",
-				"node", node.ID, "parent", parentWorkflowID, "error", err)
-			g.instance.AuditTrail = append(g.instance.AuditTrail,
-				fmt.Sprintf("SIGNALING EMIT: failed to send signal to parent %s: %s", parentWorkflowID, err.Error()))
-		}
-	})
+	if err := future.Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("SIGNALING EMIT: failed to send signal to parent",
+			"node", node.ID, "parent", parentWorkflowID, "error", err)
+		g.instance.AuditTrail = append(g.instance.AuditTrail,
+			fmt.Sprintf("SIGNALING EMIT: failed to send signal to parent %s: %s", parentWorkflowID, err.Error()))
+		return fmt.Errorf("SIGNALING EMIT node %s: failed to send signal to parent %s: %w", node.ID, parentWorkflowID, err)
+	}
 	return nil
 }
 
@@ -148,14 +145,15 @@ func (g *graphInterpreter) handleSignalingWait(ctx workflow.Context, nodeInfo *N
 
 		selector.Select(ctx)
 
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if received {
+			// Cache immediately so consumed signal data is preserved even if context was canceled,
+			// and so an admin reviewing a parked node (if output mapping fails) can see the signal
+			// already arrived and won't block again on retry.
+			nodeInfo.CachedTaskResult = signalData
 		}
 
-		if received {
-			// Cache so an admin reviewing a parked node (if output mapping fails) can
-			// see the signal already arrived and we won't block again on retry.
-			nodeInfo.CachedTaskResult = signalData
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 	}
 
