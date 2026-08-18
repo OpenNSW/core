@@ -49,10 +49,10 @@ func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *N
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
 
-	if len(outEdges) > 0 {
-		return g.transitionTo(ctx, outEdges[0])
+	if len(outEdges) != 1 {
+		return fmt.Errorf("SIGNALING node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges))
 	}
-	return nil
+	return g.transitionTo(ctx, outEdges[0])
 }
 
 // handleSignalingEmit fires a signal from this child workflow up to its parent,
