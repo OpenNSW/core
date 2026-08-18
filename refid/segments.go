@@ -125,18 +125,15 @@ func newDateSegment(cfg SegmentConfig) (*dateSegment, error) {
 //
 // The scope key template may contain any of the following placeholders:
 //
-//	{issuer}       — the issuer string for this format
-//	{idType}       — the idType string for this format
-//	{yyyy}         — four-digit year derived from now
-//	{yyyyMM}       — year + month derived from now
-//	{yyyyMMdd}     — year + month + day derived from now
-//	{yyyy-MM}      — year-month derived from now
-//	{yyyy-MM-dd}   — year-month-day derived from now
-//	{<param>}      — any caller-supplied param key not already claimed above
+//	{issuer}    — the issuer string for this format
+//	{idType}    — the idType string for this format
+//	{yyyy}      — four-digit year derived from now
+//	{yyyyMM}    — year + month derived from now
+//	{yyyyMMdd}  — year + month + day derived from now
+//	{<param>}   — any caller-supplied param key not already claimed above
 //
-// The resolution order above is also the precedence order: reserved
-// placeholders ({issuer}, {idType}, date tokens) always win over a caller
-// param of the same name.
+// Reserved placeholders always take precedence over a caller param of the
+// same name.
 type sequenceSegment struct {
 	issuer       string
 	idType       string
@@ -202,14 +199,11 @@ func newSequenceSegment(cfg SegmentConfig, issuer, idType string, store Sequence
 // scopeKey template resolution
 // -----------------------------------------------------------------------
 
-// reservedPlaceholders are resolved from context, not from caller params.
-var reservedPlaceholders = []string{"issuer", "idType", "yyyy", "yyyyMM", "yyyyMMdd"}
-
 // resolveScopeKey substitutes all {placeholder} tokens in tmpl and returns
 // ErrInvalidParam if any un-substituted placeholder remains in the key.
-// Precedence: reserved tokens > caller params.
+// Precedence: reserved tokens ({issuer}, {idType}, date tokens) > caller params.
 func resolveScopeKey(tmpl, issuer, idType string, params map[string]string, now time.Time) (string, error) {
-	replacements := make([]string, 0, (len(reservedPlaceholders)+len(params))*2)
+	var replacements []string
 
 	// Reserved placeholders (highest precedence; added first so strings.NewReplacer
 	// picks these before any identically-named param).

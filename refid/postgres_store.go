@@ -38,8 +38,8 @@ func WithTableName(name string) PostgresOption {
 // postgresStore is the default SequenceStore backed by PostgreSQL.
 // It uses an upsert-and-increment query that is atomic at the database level.
 type postgresStore struct {
-	db        *gorm.DB
-	tableName string
+	db    *gorm.DB
+	query string // built once at construction time from the table name
 }
 
 // NewPostgresStore returns a SequenceStore backed by PostgreSQL.
@@ -50,10 +50,15 @@ func NewPostgresStore(db *gorm.DB, opts ...PostgresOption) SequenceStore {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	return &postgresStore{
-		db:        db,
-		tableName: cfg.tableName,
-	}
+	t := cfg.tableName
+	query := fmt.Sprintf(`
+INSERT INTO %s (scope_key, counter, updated_at)
+VALUES (?, 1, now())
+ON CONFLICT (scope_key) DO UPDATE
+  SET counter    = %s.counter + 1,
+      updated_at = now()
+RETURNING counter`, t, t)
+	return &postgresStore{db: db, query: query}
 }
 
 // AutoMigrate creates the sequences table if it does not already exist.
@@ -79,16 +84,8 @@ CREATE TABLE IF NOT EXISTS %s (
 
 // Next atomically increments the counter for scopeKey and returns the new value.
 func (s *postgresStore) Next(ctx context.Context, scopeKey string) (int64, error) {
-	query := fmt.Sprintf(`
-INSERT INTO %s (scope_key, counter, updated_at)
-VALUES (?, 1, now())
-ON CONFLICT (scope_key) DO UPDATE
-  SET counter    = %s.counter + 1,
-      updated_at = now()
-RETURNING counter`, s.tableName, s.tableName)
-
 	var counter int64
-	if err := s.db.WithContext(ctx).Raw(query, scopeKey).Scan(&counter).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(s.query, scopeKey).Scan(&counter).Error; err != nil {
 		return 0, fmt.Errorf("refid: sequence increment failed for scope %q: %w", scopeKey, err)
 	}
 	return counter, nil
