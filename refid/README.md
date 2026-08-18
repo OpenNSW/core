@@ -111,6 +111,13 @@ CREATE TABLE IF NOT EXISTS refid_sequences (
 
 You can initialize the table automatically via `refid.AutoMigrate(db)`.
 
+To use a custom table name:
+
+```go
+store := refid.NewPostgresStore(db, refid.WithTableName("custom_sequences"))
+err := refid.AutoMigrate(db, refid.WithTableName("custom_sequences"))
+```
+
 ---
 
 ## Error Handling
