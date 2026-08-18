@@ -134,6 +134,13 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		return nil, fmt.Errorf("failed to get gateway %s: %w", req.GatewayID, err)
 	}
 
+	// Let the gateway reject metadata it cannot operate without before any
+	// state is created: no reference is burned and no PENDING row has to be
+	// walked back to FAILED for what is purely a configuration error.
+	if err := gateway.ValidateMetadata(req.Metadata); err != nil {
+		return nil, fmt.Errorf("gateway %s rejected checkout metadata: %w", req.GatewayID, err)
+	}
+
 	taskID := req.Metadata["task_id"] // presence validated above
 
 	// 1. Generate a unique NSW ReferenceNumber, retrying on the rare collision.
@@ -178,6 +185,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		Currency:           req.Currency,
 		SuccessRedirectURL: req.SuccessRedirectURL,
 		CancelRedirectURL:  req.CancelRedirectURL,
+		Metadata:           req.Metadata,
 	}
 	sessionResp, err := gateway.CreateSession(ctx, sessionReq)
 	if err != nil {

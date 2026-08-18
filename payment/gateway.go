@@ -66,6 +66,13 @@ type SessionRequest struct {
 	Currency           string          `json:"currency"`
 	SuccessRedirectURL string          `json:"success_redirect_url"`
 	CancelRedirectURL  string          `json:"cancel_redirect_url"`
+
+	// Metadata is the checkout request's pass-through metadata, forwarded
+	// verbatim so a gateway can read whatever it declared as required in
+	// ValidateMetadata. It is the same map persisted on the transaction as
+	// GatewayMetadata, so anything readable here is recoverable later by
+	// reference number.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type SessionResponse struct {
@@ -121,6 +128,25 @@ type Factory func(config json.RawMessage) (PaymentGateway, error)
 type PaymentGateway interface {
 	// GetFlowType returns the flow type of the gateway (REDIRECT or INSTRUCTION).
 	GetFlowType() InteractionType
+
+	// ValidateMetadata checks that a checkout request's pass-through metadata
+	// carries whatever this gateway cannot operate without.
+	//
+	// It is called once per checkout, before a reference number is generated
+	// and before anything is persisted, so a caller that omitted a required
+	// key fails immediately — while the configuration responsible is still
+	// nameable in the error — instead of surfacing much later as an opaque
+	// callback failure against a transaction nobody can trace back.
+	//
+	// This is a presence/well-formedness check on the request only; it must
+	// not perform I/O and must not depend on any state outside metadata.
+	// Deciding whether the declared values are the *correct* ones for a given
+	// transaction belongs on the callback paths, not here.
+	//
+	// A gateway with no metadata requirements returns nil. The method is
+	// required rather than optional so that every gateway author has to make
+	// that choice deliberately instead of silently forgetting to opt in.
+	ValidateMetadata(metadata map[string]string) error
 
 	// CreateSession initializes a payment session with the gateway.
 	CreateSession(ctx context.Context, req SessionRequest) (*SessionResponse, error)

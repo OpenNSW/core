@@ -197,6 +197,41 @@ func TestCreateCheckoutSession_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestCreateCheckoutSession_MetadataForwardedToGateway(t *testing.T) {
+	repo := newMockRepo()
+	gw := new(MockGateway)
+	var seen map[string]string
+	gw.On("CreateSession", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			seen = args.Get(1).(SessionRequest).Metadata
+		}).
+		Return(&SessionResponse{}, nil)
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+
+	req := validCheckoutReq()
+	req.Metadata["fee_scheme_id"] = "SCHEME-7"
+
+	_, err := svc.CreateCheckoutSession(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, "SCHEME-7", seen["fee_scheme_id"],
+		"the gateway must see the checkout metadata, not an empty map")
+}
+
+func TestCreateCheckoutSession_MetadataRejected_NothingPersisted(t *testing.T) {
+	repo := newMockRepo()
+	gw := new(MockGateway)
+	sentinel := errors.New("missing fee_scheme_id")
+	gw.ValidateMetadataFn = func(map[string]string) error { return sentinel }
+	// No CreateSession expectation: reaching the gateway at all is the failure.
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+
+	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
+	require.ErrorIs(t, err, sentinel)
+	assert.Empty(t, repo.txs, "a rejected checkout must not burn a reference or leave a row behind")
+	assert.Zero(t, repo.getCount, "validation must run before reference generation")
+	gw.AssertNotCalled(t, "CreateSession", mock.Anything, mock.Anything)
+}
+
 func TestCreateCheckoutSession_GatewayNotFound(t *testing.T) {
 	repo := newMockRepo()
 	svc := NewPaymentService(repo, &mockRegistry{getErr: errors.New("not registered")})
