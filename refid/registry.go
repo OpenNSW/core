@@ -28,8 +28,9 @@
 //
 // # Scope key placeholders
 //
-// Sequence segments use a scopeKey template to determine counter scope. The
-// following placeholders are resolved at generation time (in precedence order):
+// Sequence segments use a scopeKey template to determine counter scope.
+// Curly braces '{' and '}' are reserved in scopeKey templates for placeholder
+// delimiters. The following placeholders are resolved at generation time:
 //
 //	{issuer}    — the issuer identifier for this format
 //	{idType}    — the ID type identifier for this format

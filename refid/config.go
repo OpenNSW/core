@@ -68,8 +68,9 @@ type SegmentConfig struct {
 	Layout string `yaml:"layout,omitempty"`
 
 	// ScopeKey is a template string for sequence segments. Placeholders are
-	// resolved at generation time. See the Registry documentation for the full
-	// placeholder reference.
+	// resolved at generation time. Curly braces '{' and '}' are reserved as
+	// placeholder delimiters in scope keys. See the Registry documentation for
+	// the full placeholder reference.
 	ScopeKey string `yaml:"scopeKey,omitempty"`
 
 	// Padding is the minimum number of digits for a sequence segment's counter.

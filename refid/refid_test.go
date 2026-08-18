@@ -370,6 +370,62 @@ func TestGenerate_ValidationPreventsSideEffects(t *testing.T) {
 	}
 }
 
+func TestGenerate_UnresolvedScopeKeyParam(t *testing.T) {
+	// A format with sequence segment using {officeCode} in scopeKey, but NO list segment.
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "custom",
+				Segments: []refid.SegmentConfig{
+					{Type: "literal", Value: "PREFIX-"},
+					{Type: "sequence", ScopeKey: "{issuer}:{idType}:{officeCode}", Padding: 4},
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg, newMemStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Call without officeCode in params -> must fail with ErrInvalidParam
+	_, err = reg.Generate(context.Background(), "TEST", "custom", nil)
+	if !errors.Is(err, refid.ErrInvalidParam) {
+		t.Errorf("expected ErrInvalidParam for unresolved scopeKey placeholder, got %v", err)
+	}
+}
+
+func TestSegment_DatePlaceholderVariants(t *testing.T) {
+	store := newMemStore()
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "date_variants",
+				Segments: []refid.SegmentConfig{
+					{Type: "sequence", ScopeKey: "{issuer}:{idType}:{yyyy}:{yyyyMM}:{yyyyMMdd}", Padding: 4},
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := reg.Generate(context.Background(), "TEST", "date_variants", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "0001" {
+		t.Errorf("expected 0001, got %q", id)
+	}
+	if len(store.counters) != 1 {
+		t.Errorf("expected 1 scope key in store, got %d", len(store.counters))
+	}
+}
+
 func TestGenerate_CounterOverflow(t *testing.T) {
 	// padding:2 → max counter = 99; store returns 100 → overflow
 	store := &fixedStore{value: 100}

@@ -125,16 +125,18 @@ func newDateSegment(cfg SegmentConfig) (*dateSegment, error) {
 //
 // The scope key template may contain any of the following placeholders:
 //
-//	{issuer}    — the issuer string for this format
-//	{idType}    — the idType string for this format
-//	{yyyy}      — four-digit year derived from now
-//	{yyyyMM}    — year + month derived from now
-//	{yyyyMMdd}  — year + month + day derived from now
-//	{<param>}   — any caller-supplied param key not already claimed above
+//	{issuer}       — the issuer string for this format
+//	{idType}       — the idType string for this format
+//	{yyyy}         — four-digit year derived from now
+//	{yyyyMM}       — year + month derived from now
+//	{yyyyMMdd}     — year + month + day derived from now
+//	{yyyy-MM}      — year-month derived from now
+//	{yyyy-MM-dd}   — year-month-day derived from now
+//	{<param>}      — any caller-supplied param key not already claimed above
 //
 // The resolution order above is also the precedence order: reserved
-// placeholders ({issuer}, {idType}, {yyyy}, {yyyyMM}, {yyyyMMdd}) always
-// win over a caller param of the same name.
+// placeholders ({issuer}, {idType}, date tokens) always win over a caller
+// param of the same name.
 type sequenceSegment struct {
 	issuer       string
 	idType       string
@@ -143,12 +145,16 @@ type sequenceSegment struct {
 	store        SequenceStore
 }
 
-func (s *sequenceSegment) validate(_ map[string]string, _ time.Time) error {
-	return nil
+func (s *sequenceSegment) validate(params map[string]string, now time.Time) error {
+	_, err := resolveScopeKey(s.scopeKeyTmpl, s.issuer, s.idType, params, now)
+	return err
 }
 
 func (s *sequenceSegment) render(ctx context.Context, params map[string]string, now time.Time) (string, error) {
-	key := resolveScopeKey(s.scopeKeyTmpl, s.issuer, s.idType, params, now)
+	key, err := resolveScopeKey(s.scopeKeyTmpl, s.issuer, s.idType, params, now)
+	if err != nil {
+		return "", err
+	}
 
 	counter, err := s.store.Next(ctx, key)
 	if err != nil {
@@ -197,12 +203,12 @@ func newSequenceSegment(cfg SegmentConfig, issuer, idType string, store Sequence
 // -----------------------------------------------------------------------
 
 // reservedPlaceholders are resolved from context, not from caller params.
-// They are listed here so the registry can warn if a caller param shadows them.
 var reservedPlaceholders = []string{"issuer", "idType", "yyyy", "yyyyMM", "yyyyMMdd"}
 
-// resolveScopeKey substitutes all {placeholder} tokens in tmpl.
+// resolveScopeKey substitutes all {placeholder} tokens in tmpl and returns
+// ErrInvalidParam if any un-substituted placeholder remains in the key.
 // Precedence: reserved tokens > caller params.
-func resolveScopeKey(tmpl, issuer, idType string, params map[string]string, now time.Time) string {
+func resolveScopeKey(tmpl, issuer, idType string, params map[string]string, now time.Time) (string, error) {
 	replacements := make([]string, 0, (len(reservedPlaceholders)+len(params))*2)
 
 	// Reserved placeholders (highest precedence; added first so strings.NewReplacer
@@ -220,5 +226,14 @@ func resolveScopeKey(tmpl, issuer, idType string, params map[string]string, now 
 		replacements = append(replacements, "{"+k+"}", v)
 	}
 
-	return strings.NewReplacer(replacements...).Replace(tmpl)
+	key := strings.NewReplacer(replacements...).Replace(tmpl)
+
+	if open := strings.IndexByte(key, '{'); open != -1 {
+		if closeIdx := strings.IndexByte(key[open:], '}'); closeIdx > 1 {
+			return "", fmt.Errorf("%w: scope key %q contains unresolved placeholder %q",
+				ErrInvalidParam, key, key[open:open+closeIdx+1])
+		}
+	}
+
+	return key, nil
 }
