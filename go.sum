@@ -6,8 +6,8 @@ github.com/OpenNSW/core/secret v0.2.0 h1:7kxJYbVNJhN9X9/YyTUci4bv9oYKcm0nT/wBVrx
 github.com/OpenNSW/core/secret v0.2.0/go.mod h1:MEkX9vnlPRVTn+JQQsb192PoY6p3hbFSOIV+FxIMrc0=
 github.com/OpenNSW/core/shared v0.3.0 h1:HcWcXyMdwzMfsVvo1HG2OTBYaQTRipTpLI0AFx/5Wgs=
 github.com/OpenNSW/core/shared v0.3.0/go.mod h1:Lgh13h6agGl6WFR9i1W0iaUUky7wC0uLJrVc+FRRtMU=
-github.com/OpenNSW/core/uiprojector v0.2.0 h1:1nooVc97oXXkFhYCQrsjDVdr/WqtVxnfvkMl0h5HUI8=
-github.com/OpenNSW/core/uiprojector v0.2.0/go.mod h1:wWmdAkD71gPcDwaPyH/9BY0IbbqWFXoR/UkgssSxwh0=
+github.com/OpenNSW/core/uiprojector v0.3.0 h1:TRp0+TCcq+9eGMU0KPf0a2idHVE/xjVoFgy5Nf/pqZM=
+github.com/OpenNSW/core/uiprojector v0.3.0/go.mod h1:wWmdAkD71gPcDwaPyH/9BY0IbbqWFXoR/UkgssSxwh0=
 github.com/aws/aws-sdk-go-v2 v1.43.4 h1:b9FTvbRwy+JCsfp2Wp6wV/KbOx3Aj7nkoFb2cRX0IhE=
 github.com/aws/aws-sdk-go-v2 v1.43.4/go.mod h1:70vwSy16txshwG+g55WkpgPKDIByzHI8ccBsOteo3bQ=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.16 h1:aiuaKlDweRC5qExJondpWjOgyzMHpofpwspGXUtwn4c=
