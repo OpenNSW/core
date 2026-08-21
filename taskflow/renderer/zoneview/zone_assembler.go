@@ -26,10 +26,17 @@ func NewZoneViewAssembler(inner *TaskRenderer) *ZoneViewAssembler {
 	return &ZoneViewAssembler{inner: inner}
 }
 
-func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecord) (ZoneView, error) {
+// Assemble renders record for one caller. claims are the authorization
+// decisions that caller resolved beforehand (see tfrenderer.Facts.Claims): the
+// assembler forwards them to the projector and makes no policy decision of its
+// own. Pass nil when the render config gates nothing on a claim. Because a
+// hidden section is absent from the projector's output, its handles are dropped
+// with it — mergeView only decorates slots the projector actually emitted.
+func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecord, claims map[string]bool) (ZoneView, error) {
 	viewBytes, err := a.inner.Render(ctx, record.RenderConfig, tfrenderer.Facts{
-		State: record.State,
-		Data:  record.Data,
+		State:  record.State,
+		Data:   record.Data,
+		Claims: claims,
 	})
 	if err != nil {
 		return ZoneView{}, fmt.Errorf("zone assembler: render: %w", err)
