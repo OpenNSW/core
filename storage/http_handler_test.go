@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/OpenNSW/core/authn"
 	"github.com/OpenNSW/core/storage/drivers"
 )
 
@@ -25,7 +24,7 @@ func TestDownloadContent_LocalDriver_Success(t *testing.T) {
 	tempDir := t.TempDir()
 	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
 	service := NewService(driver)
-	handler := NewHTTPHandler(service)
+	handler := mustHTTPHandler(t, service, authenticatedAs("trader-1"))
 
 	ctx := context.Background()
 	key := "550e8400-e29b-41d4-a716-446655440000.pdf"
@@ -65,20 +64,32 @@ func TestDownloadContent_LocalDriver_Success(t *testing.T) {
 	}
 }
 
-// withAuthContext returns a context with the given AuthContext injected.
-func withAuthContext(ctx context.Context, ac *authn.AuthContext) context.Context {
-	return context.WithValue(ctx, authn.AuthContextKey, ac)
+type fakePrincipal struct{ subject string }
+
+func (f fakePrincipal) Subject() string { return f.subject }
+
+func authenticatedAs(subject string) Extractor {
+	return func(context.Context) (Principal, bool) { return fakePrincipal{subject}, true }
+}
+
+func unauthenticated() Extractor {
+	return func(context.Context) (Principal, bool) { return nil, false }
+}
+
+func mustHTTPHandler(t *testing.T, service *Service, extract Extractor) *HTTPHandler {
+	t.Helper()
+	h, err := NewHTTPHandler(service, extract)
+	if err != nil {
+		t.Fatalf("NewHTTPHandler: %v", err)
+	}
+	return h
 }
 
 func TestDownload_MissingKey(t *testing.T) {
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
+	handler := mustHTTPHandler(t, NewService(&MockDriver{}), authenticatedAs("trader-1"))
 
 	req := httptest.NewRequest(http.MethodGet, "/files/", nil)
 	// Auth present, but no path value for "key".
-	ctx := withAuthContext(req.Context(), &authn.AuthContext{
-		User: &authn.UserContext{ID: "trader-1"},
-	})
-	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	handler.Download(rec, req)
@@ -90,17 +101,13 @@ func TestDownload_MissingKey(t *testing.T) {
 
 func TestDownload_Success(t *testing.T) {
 	mock := &MockDriver{}
-	handler := NewHTTPHandler(NewService(mock))
+	handler := mustHTTPHandler(t, NewService(mock), authenticatedAs("trader-1"))
 
-	// Build request with auth context and path value.
+	// Build request with path value.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /files/{key}", handler.Download)
 
 	req := httptest.NewRequest(http.MethodGet, "/files/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
-	ctx := withAuthContext(req.Context(), &authn.AuthContext{
-		User: &authn.UserContext{ID: "trader-1"},
-	})
-	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -131,16 +138,12 @@ func TestDownload_GenerateURLError(t *testing.T) {
 	mock := &MockDriver{
 		GenerateURLErr: errors.New("presign failure"),
 	}
-	handler := NewHTTPHandler(NewService(mock))
+	handler := mustHTTPHandler(t, NewService(mock), authenticatedAs("trader-1"))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /files/{key}", handler.Download)
 
 	req := httptest.NewRequest(http.MethodGet, "/files/550e8400-e29b-41d4-a716-446655440000", nil)
-	ctx := withAuthContext(req.Context(), &authn.AuthContext{
-		User: &authn.UserContext{ID: "trader-1"},
-	})
-	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -156,17 +159,13 @@ func TestDownload_GenerateURLError(t *testing.T) {
 }
 
 func TestDownload_InvalidKeyFormat(t *testing.T) {
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
+	handler := mustHTTPHandler(t, NewService(&MockDriver{}), authenticatedAs("trader-1"))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /files/{key}", handler.Download)
 
 	// Key that is not UUID or UUID.ext (validStorageKey rejects it)
 	req := httptest.NewRequest(http.MethodGet, "/files/invalid-key-format", nil)
-	ctx := withAuthContext(req.Context(), &authn.AuthContext{
-		User: &authn.UserContext{ID: "trader-1"},
-	})
-	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -177,7 +176,7 @@ func TestDownload_InvalidKeyFormat(t *testing.T) {
 }
 
 func TestUpload_Unauthorized(t *testing.T) {
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
+	handler := mustHTTPHandler(t, NewService(&MockDriver{}), unauthenticated())
 
 	body := map[string]any{
 		"filename":  "test.pdf",
@@ -211,7 +210,7 @@ func TestUpload_ContentTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHTTPHandler(NewService(&MockDriver{}))
+			handler := mustHTTPHandler(t, NewService(&MockDriver{}), authenticatedAs("trader-1"))
 
 			body := map[string]any{
 				"filename":  tt.filename,
@@ -222,10 +221,6 @@ func TestUpload_ContentTypes(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
 			req.Header.Set("Content-Type", "application/json")
-			ctx := withAuthContext(req.Context(), &authn.AuthContext{
-				User: &authn.UserContext{ID: "trader-1"},
-			})
-			req = req.WithContext(ctx)
 			rec := httptest.NewRecorder()
 
 			handler.Upload(rec, req)
@@ -239,7 +234,7 @@ func TestUpload_ContentTypes(t *testing.T) {
 
 func TestUpload_Success(t *testing.T) {
 	mock := &MockDriver{}
-	handler := NewHTTPHandler(NewService(mock))
+	handler := mustHTTPHandler(t, NewService(mock), authenticatedAs("trader-1"))
 
 	body := map[string]any{
 		"filename":  "test.pdf",
@@ -250,10 +245,6 @@ func TestUpload_Success(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := withAuthContext(req.Context(), &authn.AuthContext{
-		User: &authn.UserContext{ID: "trader-1"},
-	})
-	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	handler.Upload(rec, req)
@@ -279,7 +270,7 @@ func TestUploadContentLocal_Success(t *testing.T) {
 	tempDir := t.TempDir()
 	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
 	service := NewService(driver)
-	handler := NewHTTPHandler(service)
+	handler := mustHTTPHandler(t, service, authenticatedAs("trader-1"))
 
 	key := "550e8400-e29b-41d4-a716-446655440000.pdf"
 	content := []byte("pdf content")
@@ -325,7 +316,7 @@ func TestUploadContentLocal_Success(t *testing.T) {
 }
 
 func TestDelete_Unauthorized(t *testing.T) {
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
+	handler := mustHTTPHandler(t, NewService(&MockDriver{}), unauthenticated())
 
 	req := httptest.NewRequest(http.MethodDelete, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
 	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
@@ -340,7 +331,7 @@ func TestDelete_Unauthorized(t *testing.T) {
 
 func TestDownloadContent_NonLocalDriver_NotFound(t *testing.T) {
 	// For non-local drivers, DownloadContent should be disabled and return 404
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
+	handler := mustHTTPHandler(t, NewService(&MockDriver{}), authenticatedAs("trader-1"))
 
 	req := httptest.NewRequest(http.MethodGet, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf/content", nil)
 	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
