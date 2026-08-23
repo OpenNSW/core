@@ -220,9 +220,19 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 		return nil, fmt.Errorf("[StartSubTask] unregistered plugin for task type %s (required for template: %s)", subTemplate.TaskType, payload.TaskTemplateID)
 	}
 
-	// 3. Execute the plugin
+	// 3. Execute the plugin.
+	//
+	// Inputs may name request headers for whatever outbound call the plugin
+	// makes (see HeadersInputKey). They ride on the context because the plugins
+	// that make such calls are generic and model only a body, so a header
+	// resolved from a workflow variable has nowhere else to travel.
+	pluginContext, err := ContextWithInputHeaders(ctx, payload.Inputs)
+	if err != nil {
+		return nil, fmt.Errorf("[StartSubTask] task template %q: %w", payload.TaskTemplateID, err)
+	}
+
 	pluginCtx := plugins.PluginContext{
-		Context:         ctx,
+		Context:         pluginContext,
 		Record:          &record,
 		Inputs:          payload.Inputs,
 		OutputNamespace: subTemplate.OutputNamespace,

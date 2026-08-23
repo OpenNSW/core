@@ -140,6 +140,30 @@ If you're authoring these by hand, you'll typically:
 1. Load the JSON in your registry: `registry.RegisterWorkflow(def)`.
 2. Reference the workflow's `id` from a `TaskTemplate.workflow_id`.
 
+### Reserved input: `_headers`
+
+A subtask input named `_headers` is not passed to the plugin as data: the
+orchestrator turns it into request headers for whatever outbound call the plugin
+makes. Map a workflow variable onto a header name:
+
+```json
+"input_mapping": {
+  "userform": "payload",
+  "company.data.partner_client_key?": "_headers.x-partner-client-key"
+}
+```
+
+This is for a header whose value belongs to the case rather than the service — an
+identifier a provider issued for the organisation a submission is filed under, a
+reference resolved earlier in the flow. It needs no plugin or interpreter change:
+mapping the variable is the whole of it.
+
+The mapping is usually optional (`?`): a value that resolves to blank is dropped
+and the call still goes out. A value that is present but not a string fails the
+subtask, because a header the engine cannot pass is a wiring mistake worth
+finding before the provider rejects the call. Authentication is always applied
+last, so a `_headers` entry cannot displace it.
+
 ---
 
 ## Render config
