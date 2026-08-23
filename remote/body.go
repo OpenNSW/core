@@ -52,3 +52,19 @@ type FormBody struct {
 func (b FormBody) Encode() ([]byte, string, error) {
 	return []byte(b.Values.Encode()), "application/x-www-form-urlencoded", nil
 }
+
+// MultipartBody encodes Parts as a multipart/form-data request body. Encode
+// generates a fresh boundary on every call, so its Content-Type return must
+// be used verbatim — it cannot be precomputed or cached. Parts are buffered
+// in memory, which keeps the body replayable across retries — size uploads
+// with that in mind. See multipart.go for Part and the encoding itself.
+type MultipartBody struct {
+	Parts []Part
+}
+
+func (b MultipartBody) Encode() ([]byte, string, error) {
+	if len(b.Parts) == 0 {
+		return nil, "", fmt.Errorf("remote: multipart body requires at least one part")
+	}
+	return buildMultipartBody(b.Parts)
+}

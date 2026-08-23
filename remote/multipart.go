@@ -20,10 +20,9 @@ import (
 // untrusted input in these fields — an end user's original upload filename is
 // the usual case — so escaping here is load-bearing, not cosmetic.
 //
-// The replacements match mime/multipart's own escapeQuotes exactly, including
-// its split treatment: backslash escaping for quotes, percent-encoding for
-// CR/LF. This package cannot reuse the stdlib's CreateFormFile because that
-// helper hardcodes a Content-Type of application/octet-stream.
+// This is only needed for a plain field's `name`-only disposition:
+// multipart.FileContentDisposition does the same escaping for the filename
+// case, but always appends a filename parameter, so it can't be used here.
 var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"", "\r", "%0D", "\n", "%0A")
 
 // hasControlChars reports whether v contains a character that must never reach
@@ -62,22 +61,6 @@ func JSONPart(name string, v any) (Part, error) {
 	return Part{Name: name, ContentType: "application/json; charset=UTF-8", Content: data}, nil
 }
 
-// MultipartBody encodes Parts as a multipart/form-data request body. Encode
-// generates a fresh boundary on every call, so its Content-Type return must
-// be used verbatim — it cannot be precomputed or cached. Parts are buffered
-// in memory, which keeps the body replayable across retries — size uploads
-// with that in mind.
-type MultipartBody struct {
-	Parts []Part
-}
-
-func (b MultipartBody) Encode() ([]byte, string, error) {
-	if len(b.Parts) == 0 {
-		return nil, "", fmt.Errorf("remote: multipart body requires at least one part")
-	}
-	return buildMultipartBody(b.Parts)
-}
-
 // buildMultipartBody writes parts into a multipart body and returns it with
 // the matching Content-Type (which carries the generated boundary).
 func buildMultipartBody(parts []Part) ([]byte, string, error) {
@@ -88,16 +71,19 @@ func buildMultipartBody(parts []Part) ([]byte, string, error) {
 		if p.Name == "" {
 			return nil, "", fmt.Errorf("remote: multipart part %d has no name", i)
 		}
-		// Name and FileName are quoted parameters, so quoteEscaper makes them
-		// safe. ContentType is written as a bare header value with nowhere to
-		// escape to, so it has to be refused instead.
+		// Name and FileName are quoted parameters, escaped below (via
+		// quoteEscaper or multipart.FileContentDisposition). ContentType is
+		// written as a bare header value with nowhere to escape to, so it has
+		// to be refused instead.
 		if hasControlChars(p.ContentType) {
 			return nil, "", fmt.Errorf("remote: multipart part %q has a content type containing a control character", p.Name)
 		}
 
-		disposition := fmt.Sprintf(`form-data; name="%s"`, quoteEscaper.Replace(p.Name))
+		var disposition string
 		if p.FileName != "" {
-			disposition += fmt.Sprintf(`; filename="%s"`, quoteEscaper.Replace(p.FileName))
+			disposition = multipart.FileContentDisposition(p.Name, p.FileName)
+		} else {
+			disposition = fmt.Sprintf(`form-data; name="%s"`, quoteEscaper.Replace(p.Name))
 		}
 
 		header := make(textproto.MIMEHeader, 2)
