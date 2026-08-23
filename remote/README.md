@@ -17,7 +17,7 @@ var result MyResponseType
 err := manager.Call(ctx, "npqs-api", remote.Request{
     Method: http.MethodPost,
     Path:   "/v1/applications",
-    Body:   myPayload,
+    Body:   remote.JSONBody{V: myPayload},
 }, &result)
 ```
 
@@ -71,13 +71,25 @@ See [`remote/auth`](auth/README.md) for the full reference. Supported types:
 
 ## Request bodies
 
-`Call` marshals `Request.Body` to JSON and decodes a JSON response. Two other body shapes are available for services that need them:
+`Request.Body` is a `remote.Body` — an interface that encodes itself into wire bytes plus the `Content-Type` header describing them. Built-in implementations:
 
-| Call | Body | Non-2xx |
-|---|---|---|
-| `Call` / `Client.JSONRequest` | JSON-marshalled `Body` | returned as an error, after decoding into `response` |
-| `CallRaw` / `Client.RawRequest` | `Body` bytes sent verbatim (SOAP/XML) | returned in the response, **not** as an error |
-| `CallMultipart` / `Client.MultipartRequest` | `multipart/form-data` parts | returned as an error, after decoding into `response` |
+| Body                         | Encodes as                                               |
+|------------------------------|----------------------------------------------------------|
+| `JSONBody{V}`                | JSON-marshalled `V`                                      |
+| `RawBody{Data, ContentType}` | `Data` sent verbatim under `ContentType` (e.g. SOAP/XML) |
+| `FormBody{Values}`           | `application/x-www-form-urlencoded`                      |
+| `MultipartBody{Parts}`       | `multipart/form-data`                                    |
+
+A nil `Body` sends no request body at all (e.g. a plain `GET`).
+
+Two calls consume a `Request`, differing only in how they treat the response:
+
+| Call                            | Response handling                                                                        |
+|---------------------------------|------------------------------------------------------------------------------------------|
+| `Call` / `Client.Request`       | decodes a JSON response into `response`; non-2xx is returned as an error, after decoding |
+| `CallRaw` / `Client.RawRequest` | returns the raw, undecoded response; non-2xx is **not** an error                         |
+
+`MultipartBody` decodes and errors the same way `JSONBody` does, so multipart calls go through `Call` / `Client.Request` too — there is no separate multipart call.
 
 ### multipart/form-data
 
@@ -93,14 +105,14 @@ var ack struct {
     ID     string `json:"id"`
     Status string `json:"status"`
 }
-err = manager.CallMultipart(ctx, "document-registry", remote.MultipartRequest{
+err = manager.Call(ctx, "document-registry", remote.Request{
     Method: http.MethodPost,
     Path:   "/api/documents/v1",
-    Parts: []remote.Part{
+    Body: remote.MultipartBody{Parts: []remote.Part{
         payload,
         {Name: "fileinfo", Content: []byte("1")},
         {Name: "file1", FileName: "invoice.pdf", ContentType: "application/pdf", Content: pdf},
-    },
+    }},
 }, &ack)
 ```
 
@@ -113,8 +125,8 @@ The request `Content-Type` (including the generated boundary) is set by the clie
 ```go
 client, err := manager.GetClient("npqs-api")
 
-// Execute a pre-built *http.Request directly
-resp, err := client.Do(req)
+var result MyResponseType
+err = client.Request(ctx, remote.Request{Method: http.MethodGet, Path: "/v1/applications/123"}, &result)
 ```
 
 ## Listing registered services

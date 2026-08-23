@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClient_JSONRequest_Success(t *testing.T) {
+func TestClient_Request_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/test-path", r.URL.Path)
@@ -44,12 +44,12 @@ func TestClient_JSONRequest_Success(t *testing.T) {
 		Method:  http.MethodPost,
 		Path:    "/test-path",
 		Query:   query,
-		Body:    map[string]string{"hello": "world"},
+		Body:    JSONBody{V: map[string]string{"hello": "world"}},
 		Headers: map[string]string{"X-Custom-Header": "custom-value"},
 	}
 
 	var resp map[string]string
-	err := client.JSONRequest(context.Background(), req, &resp)
+	err := client.Request(context.Background(), req, &resp)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "ok", resp["status"])
@@ -85,7 +85,7 @@ func TestClient_RetryLogic(t *testing.T) {
 	}
 
 	var resp map[string]string
-	err := client.JSONRequest(context.Background(), req, &resp)
+	err := client.Request(context.Background(), req, &resp)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
@@ -113,7 +113,7 @@ func TestClient_RetryExhausted(t *testing.T) {
 		Retry:  &retryCfg,
 	}
 
-	err := client.JSONRequest(context.Background(), req, nil)
+	err := client.Request(context.Background(), req, nil)
 	assert.Error(t, err)
 }
 
@@ -133,7 +133,7 @@ func TestClient_ContextCancellation(t *testing.T) {
 		Path:   "/timeout",
 	}
 
-	err := client.JSONRequest(ctx, req, nil)
+	err := client.Request(ctx, req, nil)
 	assert.ErrorIs(t, err, ErrTimeout)
 }
 
@@ -152,12 +152,12 @@ func TestClient_BaseURL_Logic(t *testing.T) {
 
 		// Should PASS if it matches
 		client := NewClient(server.URL)
-		err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: server.URL + "/foo"}, nil)
+		err := client.Request(context.Background(), Request{Method: "GET", Path: server.URL + "/foo"}, nil)
 		assert.NoError(t, err)
 
 		// Should FAIL if it doesn't match
 		client2 := NewClient("http://wrong-base.local")
-		err2 := client2.JSONRequest(context.Background(), Request{Method: "GET", Path: server.URL}, nil)
+		err2 := client2.Request(context.Background(), Request{Method: "GET", Path: server.URL}, nil)
 		assert.Error(t, err2)
 		assert.Contains(t, err2.Error(), "does not match configured service host")
 	})
@@ -171,7 +171,7 @@ func TestClient_NoContentResponse(t *testing.T) {
 
 	client := NewClient(server.URL)
 	var resp map[string]any
-	err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: "/"}, &resp)
+	err := client.Request(context.Background(), Request{Method: "GET", Path: "/"}, &resp)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 }
@@ -182,11 +182,11 @@ func TestClient_MarshalError(t *testing.T) {
 	req := Request{
 		Method: "POST",
 		Path:   "/",
-		Body:   make(chan int),
+		Body:   JSONBody{V: make(chan int)},
 	}
-	err := client.JSONRequest(context.Background(), req, nil)
+	err := client.Request(context.Background(), req, nil)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "marshal payload")
+	assert.Contains(t, err.Error(), "failed to marshal JSON body")
 }
 
 func TestClient_HttpErrors(t *testing.T) {
@@ -208,7 +208,7 @@ func TestClient_HttpErrors(t *testing.T) {
 		}))
 
 		client := NewClient(server.URL)
-		err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: "/"}, nil)
+		err := client.Request(context.Background(), Request{Method: "GET", Path: "/"}, nil)
 		assert.ErrorIs(t, err, tt.err)
 		server.Close()
 	}
@@ -223,7 +223,7 @@ func TestClient_DecodeError(t *testing.T) {
 
 	client := NewClient(server.URL)
 	var resp map[string]any
-	err := client.JSONRequest(context.Background(), Request{Method: "GET", Path: "/"}, &resp)
+	err := client.Request(context.Background(), Request{Method: "GET", Path: "/"}, &resp)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to decode response")
 }

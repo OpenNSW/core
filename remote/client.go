@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,7 +47,7 @@ type Request struct {
 	Method  string
 	Path    string
 	Query   url.Values
-	Body    any
+	Body    Body
 	Headers map[string]string
 	Retry   *RetryConfig // If nil, no retries will be performed
 }
@@ -78,18 +80,38 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	return c
 }
 
-func (c *Client) Do(ctx context.Context, method, path string, body io.Reader, extraHeaders map[string]string, retry *RetryConfig) (*http.Response, error) {
-	// Re-usable body for retries
-	var bodyBytes []byte
-	if body != nil {
-		var err error
-		bodyBytes, err = io.ReadAll(body)
-		if err != nil {
-			return nil, fmt.Errorf("remote: failed to read body for possible retries: %w", err)
+// execute builds the full path (query string included) and the body/
+// Content-Type pair from req.Body, then sends the request with retries.
+func (c *Client) execute(ctx context.Context, req Request) (*http.Response, error) {
+	fullPath := req.Path
+	if len(req.Query) > 0 {
+		if strings.Contains(req.Path, "?") {
+			fullPath += "&" + req.Query.Encode()
+		} else {
+			fullPath += "?" + req.Query.Encode()
 		}
 	}
 
-	return c.executeWithRetry(ctx, method, path, bodyBytes, extraHeaders, retry)
+	var data []byte
+	var contentType string
+	if req.Body != nil {
+		var err error
+		data, contentType, err = req.Body.Encode()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	headers := make(map[string]string, len(req.Headers)+1)
+	maps.Copy(headers, req.Headers)
+	if contentType != "" {
+		// The body's own Content-Type (e.g. a multipart boundary) always wins:
+		// it describes exactly what Encode produced, and an override here
+		// would desync the two.
+		headers["Content-Type"] = contentType
+	}
+
+	return c.executeWithRetry(ctx, req.Method, fullPath, data, headers, req.Retry)
 }
 
 func (c *Client) executeWithRetry(ctx context.Context, method, path string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
@@ -113,11 +135,8 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 			// Always retry on network errors (e.g., timeouts, connection refused)
 			shouldRetry = true
 		} else if lastResp != nil {
-			for _, status := range retry.RetryableStatus {
-				if lastResp.StatusCode == status {
-					shouldRetry = true
-					break
-				}
+			if slices.Contains(retry.RetryableStatus, lastResp.StatusCode) {
+				shouldRetry = true
 			}
 		}
 
@@ -194,11 +213,6 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		return nil, fmt.Errorf("remote: failed to create request: %w", err)
 	}
 
-	// Apply JSON Content-Type if body is present
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
@@ -228,29 +242,11 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 	return resp, nil
 }
 
-func (c *Client) JSONRequest(ctx context.Context, req Request, response interface{}) error {
-	// Handle Query Parameters
-	fullPath := req.Path
-	if len(req.Query) > 0 {
-		if strings.Contains(req.Path, "?") {
-			fullPath += "&" + req.Query.Encode()
-		} else {
-			fullPath += "?" + req.Query.Encode()
-		}
-	}
-
-	// Handle Body
-	var bodyReader io.Reader
-	if req.Body != nil {
-		data, err := json.Marshal(req.Body)
-		if err != nil {
-			return fmt.Errorf("remote: failed to marshal payload: %w", err)
-		}
-		bodyReader = bytes.NewBuffer(data)
-	}
-
-	// Use the Do method which handles Auth and BaseURL injection
-	resp, err := c.Do(ctx, req.Method, fullPath, bodyReader, req.Headers, req.Retry)
+// Request sends req and decodes a JSON response into response (pass nil to
+// discard it). A non-2xx status is returned as an error, after the body has
+// been decoded into response — see RawRequest for pass-through semantics.
+func (c *Client) Request(ctx context.Context, req Request, response any) error {
+	resp, err := c.execute(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -278,17 +274,6 @@ func (c *Client) JSONRequest(ctx context.Context, req Request, response interfac
 // so an unexpectedly large or runaway payload cannot exhaust memory.
 const maxRawResponseBytes = 10 * 1024 * 1024 // 10 MiB
 
-// RawRequest bundles the caller-provided parts of an outbound call whose body
-// is sent verbatim — no JSON marshalling — e.g. a SOAP/XML envelope.
-type RawRequest struct {
-	Method      string
-	Path        string
-	ContentType string // sent as Content-Type when Body is non-empty
-	Body        []byte
-	Headers     map[string]string
-	Retry       *RetryConfig // If nil, no retries will be performed
-}
-
 // RawResponse is the undecoded outcome of a RawRequest.
 type RawResponse struct {
 	StatusCode int
@@ -296,30 +281,14 @@ type RawResponse struct {
 	Body       []byte
 }
 
-// RawRequest sends req.Body verbatim and returns the raw response. Unlike
-// JSONRequest, a non-2xx status is NOT an error: protocols like SOAP deliver
+// RawRequest sends req and returns the raw response, uninterpreted. Unlike
+// Request, a non-2xx status is NOT an error: protocols like SOAP deliver
 // faults as HTTP 500 with a meaningful body, so the caller interprets the
 // status and body together. The returned error is transport-level only
-// (connection, timeout, auth application). The response body read is capped
-// at maxRawResponseBytes.
-func (c *Client) RawRequest(ctx context.Context, req RawRequest) (*RawResponse, error) {
-	headers := make(map[string]string, len(req.Headers)+1)
-	if req.ContentType != "" {
-		headers["Content-Type"] = req.ContentType
-	}
-	for k, v := range req.Headers {
-		headers[k] = v
-	}
-
-	// The body is already a []byte, so go straight to executeWithRetry rather
-	// than through Do, which would wrap it in a reader only to io.ReadAll it
-	// back out. Normalize empty to nil so no Content-Type is set without a body.
-	var bodyBytes []byte
-	if len(req.Body) > 0 {
-		bodyBytes = req.Body
-	}
-
-	resp, err := c.executeWithRetry(ctx, req.Method, req.Path, bodyBytes, headers, req.Retry)
+// (connection, timeout, auth application, body encoding). The response body
+// read is capped at maxRawResponseBytes.
+func (c *Client) RawRequest(ctx context.Context, req Request) (*RawResponse, error) {
+	resp, err := c.execute(ctx, req)
 	if err != nil {
 		return nil, err
 	}
