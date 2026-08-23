@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/OpenNSW/core/authn"
 	"github.com/OpenNSW/core/storage/drivers"
 )
 
@@ -43,11 +42,15 @@ func isAllowedContentType(ct string) bool {
 }
 
 type HTTPHandler struct {
-	Service *Service
+	Service     *Service
+	authExtract Extractor
 }
 
-func NewHTTPHandler(service *Service) *HTTPHandler {
-	return &HTTPHandler{Service: service}
+func NewHTTPHandler(service *Service, authExtract Extractor) (*HTTPHandler, error) {
+	if authExtract == nil {
+		return nil, errors.New("storage: NewHTTPHandler requires a non-nil Extractor")
+	}
+	return &HTTPHandler{Service: service, authExtract: authExtract}, nil
 }
 
 // writeJSONError sets Content-Type: application/json and writes a consistent JSON error body.
@@ -58,7 +61,7 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 }
 
 func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
-	if authn.GetAuthContext(r.Context()) == nil {
+	if _, ok := h.authExtract(r.Context()); !ok {
 		slog.WarnContext(r.Context(), "authentication required but not provided for upload")
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
@@ -206,7 +209,7 @@ func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request)
 
 func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	// TODO: Uncomment when M2M AUTH Implemented.
-	//if authn.GetAuthContext(r.Context()) == nil {
+	//if _, ok := h.authExtract(r.Context()); !ok {
 	//	slog.WarnContext(r.Context(), "authentication required but not provided for download")
 	//	writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 	//	return
@@ -315,7 +318,7 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if authn.GetAuthContext(r.Context()) == nil {
+	if _, ok := h.authExtract(r.Context()); !ok {
 		slog.WarnContext(r.Context(), "authentication required but not provided for delete")
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return

@@ -50,6 +50,31 @@ meta, err := svc.GetDownloadURL(ctx, fileKey)
 err := svc.Delete(ctx, fileKey)
 ```
 
+## HTTP handler & authentication
+
+`HTTPHandler` wraps a `Service` with ready-made upload/download/delete endpoints. It gates
+`Upload` and `Delete` behind an authenticated caller, but stays decoupled from any specific
+authentication library — you supply an `Extractor` that resolves the caller from the
+request context:
+
+```go
+import "github.com/OpenNSW/core/authn"
+
+extract := func(ctx context.Context) (storage.Principal, bool) {
+    ac := authn.GetAuthContext(ctx)
+    if ac == nil {
+        return nil, false
+    }
+    return ac, true // *authn.AuthContext satisfies storage.Principal structurally
+}
+
+handler, err := storage.NewHTTPHandler(svc, extract)
+```
+
+`storage.Principal` only requires a `Subject() string` method, so any authentication
+context type that exposes one can be wired in directly, without `storage` importing that
+package.
+
 ## Implementing a custom driver
 
 ```go
