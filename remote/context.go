@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 )
 
 // headersContextKey is the private key the request headers travel under.
@@ -35,12 +36,18 @@ func ContextWithHeaders(ctx context.Context, headers map[string]string) context.
 	// rather than replacing what an outer one put there. The map is copied so
 	// that a later mutation by the caller cannot change what a request already
 	// in flight sends.
+	//
+	// Names are canonicalized on the way in, because header names are
+	// case-insensitive but map keys are not: without this an inner "x-tenant"
+	// and an outer "X-Tenant" are two entries, and which one http.Header.Set
+	// applies last is map iteration order. What is already on the context was
+	// canonicalized when it was stored.
 	merged := make(map[string]string, len(headers))
 	for k, v := range headersFromContext(ctx) {
 		merged[k] = v
 	}
 	for k, v := range headers {
-		merged[k] = v
+		merged[http.CanonicalHeaderKey(k)] = v
 	}
 	return context.WithValue(ctx, headersContextKey{}, merged)
 }
@@ -79,7 +86,16 @@ func headerValues(ctx context.Context, values map[string]any) (map[string]string
 			slog.WarnContext(ctx, "remote: dropping a header whose value is empty", "header", name)
 			continue
 		}
-		headers[name] = str
+
+		// Two spellings of one header in the same map is the same ambiguity the
+		// merge avoids, except here it cannot be resolved by precedence: nothing
+		// says which the caller meant. Map keys are unique, so a collision after
+		// canonicalizing always means the name was written twice.
+		canonical := http.CanonicalHeaderKey(name)
+		if _, duplicated := headers[canonical]; duplicated {
+			return nil, fmt.Errorf("header %q is named more than once, under different spellings", canonical)
+		}
+		headers[canonical] = str
 	}
 	return headers, nil
 }

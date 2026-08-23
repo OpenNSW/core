@@ -117,6 +117,19 @@ func TestContextWithHeaders_MergesAndCopies(t *testing.T) {
 		assert.Equal(t, base, ContextWithHeaders(base, map[string]string{}))
 	})
 
+	// Header names are case-insensitive, so a nested caller overrides an outer
+	// one whatever spelling either used. Before names were canonicalized these
+	// were two map entries and http.Header.Set applied them in map iteration
+	// order, so the inner value won only sometimes.
+	t.Run("a nested caller overrides whatever the spelling", func(t *testing.T) {
+		ctx := ContextWithHeaders(context.Background(), map[string]string{"X-Tenant": "outer"})
+		ctx = ContextWithHeaders(ctx, map[string]string{"x-tenant": "inner"})
+
+		carried := headersFromContext(ctx)
+		assert.Len(t, carried, 1, "one header, not one per spelling")
+		assert.Equal(t, "inner", carried["X-Tenant"])
+	})
+
 	t.Run("the caller's map is copied", func(t *testing.T) {
 		headers := map[string]string{"A": "1"}
 		ctx := ContextWithHeaders(context.Background(), headers)
@@ -145,6 +158,19 @@ func TestContextWithHeaders_AbsentChangesNothing(t *testing.T) {
 
 // ContextWithHeaderValues is the seam for a caller whose values arrive untyped —
 // decoded from JSON, or assembled by an engine from a template.
+// The symptom the canonicalizing merge prevents, at the wire.
+func TestContextWithHeaders_NestedOverrideReachesTheService(t *testing.T) {
+	server, seen := headerEchoServer(t)
+	client := NewClient(server.URL)
+
+	ctx := ContextWithHeaders(context.Background(), map[string]string{"X-Tenant": "outer"})
+	ctx = ContextWithHeaders(ctx, map[string]string{"x-tenant": "inner"})
+
+	require.NoError(t, client.Request(ctx, Request{Method: "GET", Path: "/ping"}, nil))
+	assert.Equal(t, "inner", seen.Get("X-Tenant"))
+	assert.Len(t, seen.Values("X-Tenant"), 1)
+}
+
 func TestContextWithHeaderValues(t *testing.T) {
 	t.Run("string values are carried", func(t *testing.T) {
 		ctx, err := ContextWithHeaderValues(context.Background(), map[string]any{
@@ -174,6 +200,21 @@ func TestContextWithHeaderValues(t *testing.T) {
 		_, err := ContextWithHeaderValues(context.Background(), map[string]any{"X-Count": 7})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `header "X-Count" must be a string, got int`)
+	})
+
+	t.Run("one header named twice under different spellings is an error", func(t *testing.T) {
+		_, err := ContextWithHeaderValues(context.Background(), map[string]any{
+			"X-Tenant": "a",
+			"x-tenant": "b",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `header "X-Tenant" is named more than once`)
+	})
+
+	t.Run("a mixed-case name is carried canonically", func(t *testing.T) {
+		ctx, err := ContextWithHeaderValues(context.Background(), map[string]any{"x-tenant": "v"})
+		require.NoError(t, err)
+		assert.Equal(t, "v", headersFromContext(ctx)["X-Tenant"])
 	})
 
 	t.Run("an empty header name is an error", func(t *testing.T) {
