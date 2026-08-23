@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // headersContextKey is the private key the request headers travel under.
@@ -56,10 +57,10 @@ func ContextWithHeaders(ctx context.Context, headers map[string]string) context.
 // has not typed — a map decoded from JSON, or one an engine assembled from a
 // template — rather than strings it already checked.
 //
-// A value that is not a string, or an empty header name, is an error rather than
-// a skipped header: whatever produced the map named a header this package cannot
-// send, and learning that from the service's rejection is worse than failing
-// here. A value that is present but empty is the exception, dropped with a
+// A value that is not a string, or a name net/http could not send, is an error
+// rather than a skipped header: whatever produced the map named a header this
+// package cannot send, and an invalid name fails the whole request from inside
+// the transport, quoting nothing the caller would recognise. A value that is present but empty is the exception, dropped with a
 // warning, so a caller whose source was optional and resolved to blank still
 // makes its call.
 func ContextWithHeaderValues(ctx context.Context, values map[string]any) (context.Context, error) {
@@ -76,6 +77,9 @@ func headerValues(ctx context.Context, values map[string]any) (map[string]string
 	for name, value := range values {
 		if name == "" {
 			return nil, fmt.Errorf("a header name is empty")
+		}
+		if !validHeaderName(name) {
+			return nil, fmt.Errorf("header name %q is not a valid HTTP header name", name)
 		}
 
 		str, ok := value.(string)
@@ -98,6 +102,32 @@ func headerValues(ctx context.Context, values map[string]any) (map[string]string
 		headers[canonical] = str
 	}
 	return headers, nil
+}
+
+// validHeaderName reports whether name is a token, the rule net/http enforces
+// when it writes the request.
+//
+// Checking here rather than letting the request fail turns "invalid header field
+// name" — raised deep in the transport, naming nothing the caller wrote — into an
+// error that quotes the offending name. It catches a name that is only
+// whitespace, and equally one with a space or a colon inside it.
+func validHeaderName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if !isTokenChar(name[i]) {
+			return false
+		}
+	}
+	return name != ""
+}
+
+// isTokenChar reports whether c may appear in a header field name (RFC 9110).
+func isTokenChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	default:
+		return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+	}
 }
 
 // headersFromContext returns the headers carried by ctx, or nil.

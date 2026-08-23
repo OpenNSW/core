@@ -217,6 +217,27 @@ func TestContextWithHeaderValues(t *testing.T) {
 		assert.Equal(t, "v", headersFromContext(ctx)["X-Tenant"])
 	})
 
+	// A name net/http would refuse fails here instead, where the error can quote
+	// it. Whitespace-only is the easy case; a space or colon inside is just as
+	// invalid and just as unhelpful to discover from the transport.
+	t.Run("an unsendable header name is an error", func(t *testing.T) {
+		for _, name := range []string{"   ", "X Tenant", "X-Tenant:", "X\tTenant"} {
+			t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+				_, err := ContextWithHeaderValues(context.Background(), map[string]any{name: "v"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "is not a valid HTTP header name")
+			})
+		}
+	})
+
+	// Underscore and dot are legal token characters, so a name using them is
+	// accepted — and canonicalized like any other.
+	t.Run("an unusual but legal name is accepted", func(t *testing.T) {
+		ctx, err := ContextWithHeaderValues(context.Background(), map[string]any{"X-Tenant_Id.v2": "v"})
+		require.NoError(t, err)
+		assert.Equal(t, "v", headersFromContext(ctx)[http.CanonicalHeaderKey("X-Tenant_Id.v2")])
+	})
+
 	t.Run("an empty header name is an error", func(t *testing.T) {
 		_, err := ContextWithHeaderValues(context.Background(), map[string]any{"": "v"})
 		require.Error(t, err)

@@ -82,9 +82,10 @@ engine from a template — hands them over as they are:
 ctx, err := remote.ContextWithHeaderValues(ctx, values) // map[string]any
 ```
 
-A value that is not a string, or an empty header name, is an error: whatever built
-the map named a header that cannot be sent, and hearing that from the service is
-worse. A value that is present but empty is dropped with a warning instead, so an
+A value that is not a string, or a name `net/http` could not send — empty, or
+holding a space or colon — is an error: whatever built the map named a header that
+cannot be sent, and an invalid name fails the whole request from inside the
+transport rather than just dropping that header. A value that is present but empty is dropped with a warning instead, so an
 optional source that resolved to blank still makes its call.
 
 ## Authentication strategies
