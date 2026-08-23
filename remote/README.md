@@ -59,6 +59,34 @@ err := manager.Call(ctx, "npqs-api", remote.Request{
 }
 ```
 
+## Headers a caller resolves per call
+
+`Request.Headers` covers a call that knows its own headers. When the code holding
+the value is not the code building the request — a generic plugin assembling a
+request from a template, an identifier looked up for the case being processed —
+put them on the context instead:
+
+```go
+ctx = remote.ContextWithHeaders(ctx, map[string]string{"X-Filed-For": orgID})
+```
+
+Every request made with that context carries them, whatever body it sends.
+Precedence, weakest first: context headers, `Request.Headers`, then the
+authenticator. So a call that does model its headers still wins, and no context
+value can displace authentication.
+
+A caller whose values arrive untyped — decoded from JSON, or assembled by an
+engine from a template — hands them over as they are:
+
+```go
+ctx, err := remote.ContextWithHeaderValues(ctx, values) // map[string]any
+```
+
+A value that is not a string, or an empty header name, is an error: whatever built
+the map named a header that cannot be sent, and hearing that from the service is
+worse. A value that is present but empty is dropped with a warning instead, so an
+optional source that resolved to blank still makes its call.
+
 ## Authentication strategies
 
 See [`remote/auth`](auth/README.md) for the full reference. Supported types:

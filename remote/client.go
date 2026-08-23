@@ -225,6 +225,13 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
+	// Then the context's, for a caller that resolves a header but does not build
+	// the request (see ContextWithHeaders). This call's own headers are applied
+	// after, and the authenticator after that, so a request can override what the
+	// context asked for and nothing can shadow authentication.
+	for k, v := range headersFromContext(ctx) {
+		req.Header.Set(k, v)
+	}
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
 	}
