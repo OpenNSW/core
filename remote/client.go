@@ -107,7 +107,16 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 	if contentType != "" {
 		// The body's own Content-Type (e.g. a multipart boundary) always wins:
 		// it describes exactly what Encode produced, and an override here
-		// would desync the two.
+		// would desync the two. headers is a plain map, not the
+		// case-insensitive http.Header, so a caller-supplied key differing
+		// only in case (e.g. "content-type") must be removed explicitly —
+		// otherwise both keys survive into executeOnce's req.Header.Set calls,
+		// and which one wins depends on Go's randomized map iteration order.
+		for k := range headers {
+			if strings.EqualFold(k, "Content-Type") {
+				delete(headers, k)
+			}
+		}
 		headers["Content-Type"] = contentType
 	}
 

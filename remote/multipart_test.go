@@ -254,6 +254,32 @@ func TestMultipartRequest_ClientSetsContentTypeOverCallerHeader(t *testing.T) {
 	assert.Contains(t, gotContentType, "multipart/form-data; boundary=")
 }
 
+func TestMultipartRequest_ClientSetsContentTypeOverCallerHeaderRegardlessOfCase(t *testing.T) {
+	var gotContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		_ = readParts(t, r)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	// headers is a plain map, not the case-insensitive http.Header, so a
+	// lowercase caller key survives alongside the generated "Content-Type"
+	// unless it is stripped case-insensitively. Repeat to defeat Go's
+	// randomized map iteration order, which only sometimes picked the wrong
+	// key.
+	for range 20 {
+		err := NewClient(server.URL).Request(context.Background(), Request{
+			Method:  http.MethodPost,
+			Body:    MultipartBody{Parts: []Part{{Name: "payload", Content: []byte("{}")}}},
+			Headers: map[string]string{"content-type": "application/json", "X-Trace": "abc"},
+		}, nil)
+		require.NoError(t, err)
+		assert.Contains(t, gotContentType, "multipart/form-data; boundary=")
+	}
+}
+
 func TestJSONPart_ReportsMarshalFailure(t *testing.T) {
 	_, err := JSONPart("payload", make(chan int))
 
