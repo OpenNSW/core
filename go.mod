@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/OpenNSW/core/authn v0.2.0
-	github.com/OpenNSW/core/remote v0.6.0
+	github.com/OpenNSW/core/remote v0.8.0
 	github.com/OpenNSW/core/secret v0.2.0
 	github.com/OpenNSW/core/shared v0.3.0
 	github.com/OpenNSW/core/uiprojector v0.3.0
