@@ -71,16 +71,16 @@ func (s *SMSProvider) Send(ctx context.Context, req notification.Request) error 
 	if s.client == nil {
 		return errors.New("sms provider not configured")
 	}
-	if err := s.client.JSONRequest(ctx, remote.Request{
+	if err := s.client.Request(ctx, remote.Request{
 		Method: http.MethodPost,
 		Path:   "/send",
-		Body: SMSRequest{
+		Body: remote.JSONBody{V: SMSRequest{
 			Data:        req.Body,
 			PhoneNumber: req.To,
 			SIDCode:     s.cfg.SIDCode,
 			UserName:    s.cfg.UserName,
 			Password:    s.cfg.Password,
-		},
+		}},
 	}, nil); err != nil {
 		return fmt.Errorf("govsms send: %w", err)
 	}

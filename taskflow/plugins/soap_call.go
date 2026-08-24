@@ -79,12 +79,14 @@ func (p *SOAPCallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) e
 	var resp *remote.RawResponse
 	envelope, callErr := p.interpreter.BuildEnvelope(cfg.Operation, ctx.Inputs)
 	if callErr == nil {
-		req := remote.RawRequest{
-			Method:      "POST",
-			Path:        cfg.Path,
-			ContentType: "text/xml; charset=utf-8",
-			Body:        []byte(envelope),
-			Headers:     map[string]string{"SOAPAction": quoteSOAPAction(cfg.SOAPAction)},
+		req := remote.Request{
+			Method: "POST",
+			Path:   cfg.Path,
+			Body: remote.RawBody{
+				Data:        []byte(envelope),
+				ContentType: "text/xml; charset=utf-8",
+			},
+			Headers: map[string]string{"SOAPAction": quoteSOAPAction(cfg.SOAPAction)},
 		}
 		resp, callErr = p.manager.CallRaw(ctx.Context, cfg.ServiceID, req)
 	}
