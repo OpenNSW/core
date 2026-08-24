@@ -1,5 +1,5 @@
-github.com/OpenNSW/core/remote v0.7.0 h1:gNHyGKnp7wzXbdVIEMPlBQ+abzT4+wnt6WBrlsvPYgI=
-github.com/OpenNSW/core/remote v0.7.0/go.mod h1:BzfC7ppzEAd5fUQmIsgeR2lZ6LzygNU4prNjvDpDH+4=
+github.com/OpenNSW/core/remote v0.8.0 h1:Ot44DtkEtzqKffy77EI0S6BCH1xDspQ2y2lSFKcZpPg=
+github.com/OpenNSW/core/remote v0.8.0/go.mod h1:BzfC7ppzEAd5fUQmIsgeR2lZ6LzygNU4prNjvDpDH+4=
 github.com/OpenNSW/core/secret v0.2.0 h1:7kxJYbVNJhN9X9/YyTUci4bv9oYKcm0nT/wBVrxBChQ=
 github.com/OpenNSW/core/secret v0.2.0/go.mod h1:MEkX9vnlPRVTn+JQQsb192PoY6p3hbFSOIV+FxIMrc0=
 github.com/OpenNSW/core/shared v0.3.0 h1:HcWcXyMdwzMfsVvo1HG2OTBYaQTRipTpLI0AFx/5Wgs=

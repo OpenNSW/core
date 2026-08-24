@@ -66,15 +66,15 @@ func (e *EmailProvider) Send(ctx context.Context, req notification.Request) erro
 	if e.client == nil {
 		return errors.New("email provider not configured")
 	}
-	if err := e.client.JSONRequest(ctx, remote.Request{
+	if err := e.client.Request(ctx, remote.Request{
 		Method: http.MethodPost,
 		Path:   "/send",
-		Body: emailRequest{
+		Body: remote.JSONBody{V: emailRequest{
 			To:       req.To,
 			Subject:  req.Subject,
 			Body:     req.Body,
 			HTMLBody: req.HTMLBody,
-		},
+		}},
 	}, nil); err != nil {
 		return fmt.Errorf("email send: %w", err)
 	}
