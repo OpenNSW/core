@@ -37,6 +37,7 @@ func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string
 	return m.webhookResp, m.webhookErr
 }
 func (m *mockService) SetTaskCompleter(TaskCompleter) {}
+func (m *mockService) SetAuditor(Auditor)             {}
 
 // serve routes a webhook POST through a mux so PathValue("gatewayId") resolves.
 func serveWebhook(svc PaymentService) *httptest.ResponseRecorder {
