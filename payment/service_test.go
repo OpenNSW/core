@@ -127,6 +127,14 @@ func (m *mockTaskCompleter) CompleteTaskStep(_ context.Context, taskID string, p
 	return m.err
 }
 
+type mockAuditor struct {
+	events []AuditEvent
+}
+
+func (m *mockAuditor) AuditPayment(_ context.Context, e AuditEvent) {
+	m.events = append(m.events, e)
+}
+
 func validCheckoutReq() CreateCheckoutRequest {
 	return CreateCheckoutRequest{
 		GatewayID: "govpay",
@@ -565,6 +573,360 @@ func TestProcessWebhook_CompleterErrorPropagates(t *testing.T) {
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
 	assert.Equal(t, PaymentStatusSuccess, repo.txs["TNSW1"].Status, "status is committed before the advance call")
+}
+
+func TestProcessWebhook_Idempotent_AuditRecordsStatus(t *testing.T) {
+	repo := newMockRepo()
+	settled := pendingTx()
+	settled.Status = PaymentStatusSuccess
+	repo.txs["TNSW1"] = settled
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "TNSW1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1500.00"),
+		Currency:        "LKR",
+	})
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+	assert.Equal(t, "govpay", auditor.events[0].GatewayID)
+	assert.Equal(t, "TNSW1", auditor.events[0].Reference)
+	assert.Equal(t, "SUCCESS", auditor.events[0].Status)
+	assert.False(t, auditor.events[0].Failure)
+}
+
+func TestProcessWebhook_CompleterError_AuditsFailure(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "TNSW1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1500.00"),
+		Currency:        "LKR",
+	})
+	tc := &mockTaskCompleter{err: errors.New("task engine down")}
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+	svc.SetTaskCompleter(tc)
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.Error(t, err)
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+	assert.Equal(t, "govpay", auditor.events[0].GatewayID)
+	assert.Equal(t, "TNSW1", auditor.events[0].Reference)
+	assert.Equal(t, "SUCCESS", auditor.events[0].Status)
+	assert.True(t, auditor.events[0].Failure)
+	assert.Contains(t, auditor.events[0].Error, "task engine down")
+}
+
+func TestProcessWebhook_Success_AuditsSuccess(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "TNSW1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1500.00"),
+		Currency:        "LKR",
+	})
+	tc := &mockTaskCompleter{}
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+	svc.SetTaskCompleter(tc)
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+	assert.Equal(t, "govpay", auditor.events[0].GatewayID)
+	assert.Equal(t, "TNSW1", auditor.events[0].Reference)
+	assert.Equal(t, "SUCCESS", auditor.events[0].Status)
+	assert.False(t, auditor.events[0].Failure)
+}
+
+func TestValidateReference_Success_AuditsStatus(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = &PaymentTransaction{
+		ReferenceNumber: "TNSW1",
+		GatewayID:       "govpay",
+		Status:          PaymentStatusPending,
+		Amount:          decimal.RequireFromString("100"),
+		Currency:        "LKR",
+		ExpiryDate:      time.Now().Add(time.Hour),
+	}
+	gw := validateGateway("TNSW1")
+	gw.On("HandleValidateReference", mock.Anything, mock.Anything, true, mock.Anything).
+		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+	assert.Equal(t, "govpay", auditor.events[0].GatewayID)
+	assert.Equal(t, "TNSW1", auditor.events[0].Reference)
+	assert.Equal(t, "PENDING", auditor.events[0].Status)
+	assert.False(t, auditor.events[0].Failure)
+}
+
+func TestValidateReference_UnknownReference_AuditsEmptyStatus(t *testing.T) {
+	gw := validateGateway("NOPE")
+	gw.On("HandleValidateReference", mock.Anything,
+		mock.MatchedBy(func(tx *ValidationTransaction) bool { return tx == nil }),
+		false, mock.Anything).
+		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+	assert.Equal(t, "NOPE", auditor.events[0].Reference)
+	assert.Empty(t, auditor.events[0].Status)
+	assert.False(t, auditor.events[0].Failure)
+}
+
+func TestValidateReference_NilResponse_AuditsFailure(t *testing.T) {
+	gw := validateGateway("TNSW1")
+	gw.On("HandleValidateReference", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, nil)
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil validation response")
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+	assert.True(t, auditor.events[0].Failure)
+	assert.Contains(t, auditor.events[0].Error, "nil validation response")
+	assert.Empty(t, auditor.events[0].Status)
+}
+
+func TestValidateReference_NilResponse_MatchingTx_AuditsStatus(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = &PaymentTransaction{
+		ReferenceNumber: "TNSW1",
+		GatewayID:       "govpay",
+		Status:          PaymentStatusPending,
+		Amount:          decimal.RequireFromString("100"),
+		Currency:        "LKR",
+		ExpiryDate:      time.Now().Add(time.Hour),
+	}
+	gw := validateGateway("TNSW1")
+	gw.On("HandleValidateReference", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, nil)
+	auditor := &mockAuditor{}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+	svc.SetAuditor(auditor)
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil validation response")
+	require.Len(t, auditor.events, 1)
+	assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+	assert.True(t, auditor.events[0].Failure)
+	assert.Equal(t, "PENDING", auditor.events[0].Status)
+}
+
+func TestValidateReference_FailurePaths_Audit(t *testing.T) {
+	t.Run("gateway lookup", func(t *testing.T) {
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{getErr: errors.New("nope")})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+		assert.Equal(t, "govpay", auditor.events[0].GatewayID)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "nope")
+	})
+
+	t.Run("verification", func(t *testing.T) {
+		gw := new(MockGateway)
+		gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).
+			Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+		require.ErrorIs(t, err, ErrWebhookVerificationFailed)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "bad signature")
+	})
+
+	t.Run("extract", func(t *testing.T) {
+		gw := new(MockGateway)
+		gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		gw.On("ExtractReferenceNumber", mock.Anything, mock.Anything).Return("", errors.New("bad body"))
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "bad body")
+	})
+
+	t.Run("repository", func(t *testing.T) {
+		repo := newMockRepo()
+		repo.getErr = errors.New("db down")
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(repo, &mockRegistry{gw: validateGateway("TNSW1")})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+		assert.Equal(t, "TNSW1", auditor.events[0].Reference)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "db down")
+	})
+
+	t.Run("handle validate", func(t *testing.T) {
+		gw := validateGateway("TNSW1")
+		gw.On("HandleValidateReference", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil, errors.New("gateway format error"))
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "gateway format error")
+		assert.Empty(t, auditor.events[0].Status)
+	})
+
+	t.Run("handle validate with matching tx", func(t *testing.T) {
+		repo := newMockRepo()
+		repo.txs["TNSW1"] = &PaymentTransaction{
+			ReferenceNumber: "TNSW1",
+			GatewayID:       "govpay",
+			Status:          PaymentStatusPending,
+			Amount:          decimal.RequireFromString("100"),
+			Currency:        "LKR",
+			ExpiryDate:      time.Now().Add(time.Hour),
+		}
+		gw := validateGateway("TNSW1")
+		gw.On("HandleValidateReference", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil, errors.New("gateway format error"))
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(repo, &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionValidate, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "gateway format error")
+		assert.Equal(t, "PENDING", auditor.events[0].Status)
+	})
+}
+
+func TestProcessWebhook_FailurePaths_Audit(t *testing.T) {
+	t.Run("gateway lookup", func(t *testing.T) {
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{getErr: errors.New("nope")})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "nope")
+	})
+
+	t.Run("verification", func(t *testing.T) {
+		gw := new(MockGateway)
+		gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).
+			Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+		require.ErrorIs(t, err, ErrWebhookVerificationFailed)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "bad signature")
+	})
+
+	t.Run("parse", func(t *testing.T) {
+		gw := new(MockGateway)
+		gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		gw.On("ParseWebhook", mock.Anything, mock.Anything, mock.Anything).
+			Return(nil, nil, errors.New("bad payload"))
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "bad payload")
+	})
+
+	t.Run("nil payload", func(t *testing.T) {
+		gw := new(MockGateway)
+		gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		gw.On("ParseWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, nil)
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+		require.Error(t, err)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+		assert.True(t, auditor.events[0].Failure)
+		assert.Contains(t, auditor.events[0].Error, "nil webhook payload")
+	})
+
+	t.Run("status mapping", func(t *testing.T) {
+		gw := webhookGateway(&WebhookPayload{
+			ReferenceNumber: "TNSW1",
+			Status:          WebhookStatus("WEIRD"),
+		})
+		auditor := &mockAuditor{}
+		svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw})
+		svc.SetAuditor(auditor)
+
+		_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+		require.ErrorIs(t, err, ErrUnsupportedWebhookStatus)
+		require.Len(t, auditor.events, 1)
+		assert.Equal(t, AuditActionWebhook, auditor.events[0].Action)
+		assert.Equal(t, "TNSW1", auditor.events[0].Reference)
+		assert.True(t, auditor.events[0].Failure)
+	})
 }
 
 func TestProcessWebhook_VerificationFailure_NeverParses(t *testing.T) {
