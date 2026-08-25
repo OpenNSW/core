@@ -41,12 +41,14 @@ func TestClient_RawRequest_SendsBodyVerbatimWithContentType(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL)
-	resp, err := client.RawRequest(context.Background(), RawRequest{
-		Method:      "POST",
-		Path:        "/soap",
-		ContentType: "text/xml; charset=utf-8",
-		Body:        []byte("<Envelope/>"),
-		Headers:     map[string]string{"SOAPAction": `""`},
+	resp, err := client.RawRequest(context.Background(), Request{
+		Method: "POST",
+		Path:   "/soap",
+		Body: RawBody{
+			Data:        []byte("<Envelope/>"),
+			ContentType: "text/xml; charset=utf-8",
+		},
+		Headers: map[string]string{"SOAPAction": `""`},
 	})
 	require.NoError(t, err)
 
@@ -71,7 +73,7 @@ func TestClient_RawRequest_Non2xxIsNotAnError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL)
-	resp, err := client.RawRequest(context.Background(), RawRequest{Method: "POST", Path: "/", Body: []byte("<x/>")})
+	resp, err := client.RawRequest(context.Background(), Request{Method: "POST", Path: "/", Body: RawBody{Data: []byte("<x/>")}})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Equal(t, fault, string(resp.Body))
@@ -87,7 +89,7 @@ func TestClient_RawRequest_CapsResponseBody(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL)
-	resp, err := client.RawRequest(context.Background(), RawRequest{Method: "GET", Path: "/"})
+	resp, err := client.RawRequest(context.Background(), Request{Method: "GET", Path: "/"})
 	require.NoError(t, err)
 	assert.Len(t, resp.Body, maxRawResponseBytes)
 }
@@ -165,7 +167,7 @@ func TestManager_LoadServices_MTLSPresentsClientCertificate(t *testing.T) {
 	pool.AddCert(server.Certificate())
 	client.httpClient.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
 
-	resp, err := manager.CallRaw(context.Background(), "svc", RawRequest{Method: "POST", Path: "/", Body: []byte("<x/>")})
+	resp, err := manager.CallRaw(context.Background(), "svc", Request{Method: "POST", Path: "/", Body: RawBody{Data: []byte("<x/>")}})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "test-nppo", gotClientCert)
@@ -192,7 +194,7 @@ func TestManager_MissingCertFileFailsPerCallNotAtBoot(t *testing.T) {
 	pool.AddCert(server.Certificate())
 	client.httpClient.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
 
-	_, err = manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
+	_, err = manager.CallRaw(context.Background(), "svc", Request{Method: "GET", Path: "/"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading client certificate")
 }
@@ -224,7 +226,7 @@ func TestManager_CertRotationPickedUpWithoutRestart(t *testing.T) {
 	transport := client.httpClient.Transport.(*http.Transport)
 	transport.TLSClientConfig.RootCAs = pool
 
-	_, err = manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
+	_, err = manager.CallRaw(context.Background(), "svc", Request{Method: "GET", Path: "/"})
 	require.NoError(t, err)
 
 	// Rotate the material on disk and force a fresh connection (a real rotation
@@ -232,7 +234,7 @@ func TestManager_CertRotationPickedUpWithoutRestart(t *testing.T) {
 	writeClientCertPairInto(t, dir, "after-rotation")
 	transport.CloseIdleConnections()
 
-	_, err = manager.CallRaw(context.Background(), "svc", RawRequest{Method: "GET", Path: "/"})
+	_, err = manager.CallRaw(context.Background(), "svc", Request{Method: "GET", Path: "/"})
 	require.NoError(t, err)
 
 	mu.Lock()
@@ -287,7 +289,7 @@ func TestManager_LoadServices_TLSRequiresBothFiles(t *testing.T) {
 
 func TestManager_CallRaw_UnknownService(t *testing.T) {
 	manager := NewManager()
-	_, err := manager.CallRaw(context.Background(), "ghost", RawRequest{Method: "GET", Path: "/"})
+	_, err := manager.CallRaw(context.Background(), "ghost", Request{Method: "GET", Path: "/"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `service "ghost" not found`)
 }

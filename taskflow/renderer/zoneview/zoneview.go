@@ -21,6 +21,10 @@ type Action struct {
 // the user-facing text; Element is a free-form identifier owned by the
 // section's renderer (e.g. "primary_action", "secondary_action" for a FORM
 // projector) — the data layer does not interpret it.
+//
+// "Claim" here means a section laying claim to a command. It is unrelated to
+// the authorization claims in renderer.Facts.Claims, which decide whether a
+// section is rendered at all.
 type HandleClaim struct {
 	Command string `json:"command"`
 	Label   string `json:"label"`

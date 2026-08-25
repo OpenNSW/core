@@ -77,14 +77,14 @@ func TestMultipartRequest_SendsPartsAndDecodesResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	var resp map[string]any
-	err = NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
+	err = NewClient(server.URL).Request(context.Background(), Request{
 		Method: http.MethodPost,
 		Path:   "/api/documents/v1",
-		Parts: []Part{
+		Body: MultipartBody{Parts: []Part{
 			payload,
 			{Name: "fileinfo", Content: []byte("1")},
 			{Name: "file1", FileName: "invoice.pdf", ContentType: "application/pdf", Content: []byte("%PDF-1.4")},
-		},
+		}},
 	}, &resp)
 	require.NoError(t, err)
 
@@ -123,14 +123,14 @@ func TestMultipartRequest_PreservesPartOrder(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient(server.URL).Request(context.Background(), Request{
 		Method: http.MethodPost,
-		Parts: []Part{
+		Body: MultipartBody{Parts: []Part{
 			{Name: "payload", Content: []byte("{}")},
 			{Name: "fileinfo", Content: []byte("2")},
 			{Name: "file1", FileName: "a.pdf", Content: []byte("a")},
 			{Name: "file2", FileName: "b.pdf", Content: []byte("b")},
-		},
+		}},
 	}, nil)
 	require.NoError(t, err)
 
@@ -148,9 +148,9 @@ func TestMultipartRequest_DecodesBodyOnErrorStatus(t *testing.T) {
 	defer server.Close()
 
 	var resp map[string]any
-	err := NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient(server.URL).Request(context.Background(), Request{
 		Method: http.MethodPost,
-		Parts:  []Part{{Name: "fileinfo", Content: []byte("0")}},
+		Body:   MultipartBody{Parts: []Part{{Name: "fileinfo", Content: []byte("0")}}},
 	}, &resp)
 
 	// A rejection is an error, but the caller still gets the service's reason:
@@ -168,11 +168,11 @@ func TestMultipartRequest_AppendsQueryParameters(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient(server.URL).Request(context.Background(), Request{
 		Method: http.MethodPost,
 		Path:   "/api/documents/v1",
 		Query:  map[string][]string{"mode": {"test"}},
-		Parts:  []Part{{Name: "fileinfo", Content: []byte("0")}},
+		Body:   MultipartBody{Parts: []Part{{Name: "fileinfo", Content: []byte("0")}}},
 	}, nil)
 	require.NoError(t, err)
 
@@ -195,9 +195,9 @@ func TestMultipartRequest_ReplaysBodyOnRetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient(server.URL).Request(context.Background(), Request{
 		Method: http.MethodPost,
-		Parts:  []Part{{Name: "payload", Content: []byte("{}")}},
+		Body:   MultipartBody{Parts: []Part{{Name: "payload", Content: []byte("{}")}}},
 		Retry: &RetryConfig{
 			MaxRetries:      1,
 			InitialBackoff:  time.Millisecond,
@@ -213,9 +213,9 @@ func TestMultipartRequest_ReplaysBodyOnRetry(t *testing.T) {
 }
 
 func TestMultipartRequest_RejectsEmptyParts(t *testing.T) {
-	err := NewClient("http://example.invalid").MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient("http://example.invalid").Request(context.Background(), Request{
 		Method: http.MethodPost,
-		Parts:  nil,
+		Body:   MultipartBody{Parts: nil},
 	}, nil)
 
 	require.Error(t, err)
@@ -223,9 +223,9 @@ func TestMultipartRequest_RejectsEmptyParts(t *testing.T) {
 }
 
 func TestMultipartRequest_RejectsUnnamedPart(t *testing.T) {
-	err := NewClient("http://example.invalid").MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient("http://example.invalid").Request(context.Background(), Request{
 		Method: http.MethodPost,
-		Parts:  []Part{{Content: []byte("x")}},
+		Body:   MultipartBody{Parts: []Part{{Content: []byte("x")}}},
 	}, nil)
 
 	require.Error(t, err)
@@ -242,9 +242,9 @@ func TestMultipartRequest_ClientSetsContentTypeOverCallerHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := NewClient(server.URL).MultipartRequest(context.Background(), MultipartRequest{
+	err := NewClient(server.URL).Request(context.Background(), Request{
 		Method:  http.MethodPost,
-		Parts:   []Part{{Name: "payload", Content: []byte("{}")}},
+		Body:    MultipartBody{Parts: []Part{{Name: "payload", Content: []byte("{}")}}},
 		Headers: map[string]string{"Content-Type": "application/json", "X-Trace": "abc"},
 	}, nil)
 	require.NoError(t, err)
@@ -252,6 +252,32 @@ func TestMultipartRequest_ClientSetsContentTypeOverCallerHeader(t *testing.T) {
 	// A caller-supplied Content-Type would strip the boundary and make the body
 	// unparseable, so the generated one wins.
 	assert.Contains(t, gotContentType, "multipart/form-data; boundary=")
+}
+
+func TestMultipartRequest_ClientSetsContentTypeOverCallerHeaderRegardlessOfCase(t *testing.T) {
+	var gotContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		_ = readParts(t, r)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	// headers is a plain map, not the case-insensitive http.Header, so a
+	// lowercase caller key survives alongside the generated "Content-Type"
+	// unless it is stripped case-insensitively. Repeat to defeat Go's
+	// randomized map iteration order, which only sometimes picked the wrong
+	// key.
+	for range 20 {
+		err := NewClient(server.URL).Request(context.Background(), Request{
+			Method:  http.MethodPost,
+			Body:    MultipartBody{Parts: []Part{{Name: "payload", Content: []byte("{}")}}},
+			Headers: map[string]string{"content-type": "application/json", "X-Trace": "abc"},
+		}, nil)
+		require.NoError(t, err)
+		assert.Contains(t, gotContentType, "multipart/form-data; boundary=")
+	}
 }
 
 func TestJSONPart_ReportsMarshalFailure(t *testing.T) {
