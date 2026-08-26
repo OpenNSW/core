@@ -516,6 +516,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: refid_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: refid
@@ -542,6 +555,8 @@ jobs:
           working-directory: refid
 
       - name: Run Tests (includes build)
+        env:
+          POSTGRES_TEST_DSN: "host=localhost port=5432 user=postgres password=postgres dbname=refid_test sslmode=disable"
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
   # STAGE 3: Parallel security + vuln scans.
