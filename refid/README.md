@@ -25,8 +25,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/OpenNSW/core/database"
 	"github.com/OpenNSW/core/refid"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -39,7 +40,8 @@ func main() {
 	}
 
 	// 2. Connect DB and auto-migrate sequence table
-	db, err := database.New(dbConfig)
+	dsn := "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("failed to connect db: %v", err)
 	}
