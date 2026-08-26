@@ -153,21 +153,15 @@ func (s *sequenceSegment) render(ctx context.Context, params map[string]string, 
 		return "", err
 	}
 
-	counter, err := s.store.Next(ctx, key)
-	if err != nil {
-		return "", fmt.Errorf("refid: sequence store error for scope %q: %w", key, err)
-	}
-
-	// Enforce padding: if the counter value needs more digits than padding allows,
-	// return ErrCounterOverflow rather than silently producing a longer-than-expected ID.
 	padding := s.padding
 	if padding < 1 {
 		padding = 1
 	}
 	maxValue := int64(math.Pow10(padding)) - 1
-	if counter > maxValue {
-		return "", fmt.Errorf("%w: scope %q counter %d exceeds max %d for padding %d",
-			ErrCounterOverflow, key, counter, maxValue, padding)
+
+	counter, err := s.store.Next(ctx, key, maxValue)
+	if err != nil {
+		return "", err
 	}
 
 	return fmt.Sprintf("%0*d", padding, counter), nil

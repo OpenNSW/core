@@ -29,9 +29,12 @@ func newMemStore() *memStore {
 	return &memStore{counters: make(map[string]int64)}
 }
 
-func (m *memStore) Next(_ context.Context, scopeKey string) (int64, error) {
+func (m *memStore) Next(_ context.Context, scopeKey string, max int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.counters[scopeKey] >= max {
+		return 0, refid.ErrCounterOverflow
+	}
 	m.counters[scopeKey]++
 	return m.counters[scopeKey], nil
 }
@@ -42,7 +45,10 @@ type fixedStore struct {
 	value int64
 }
 
-func (f *fixedStore) Next(_ context.Context, _ string) (int64, error) {
+func (f *fixedStore) Next(_ context.Context, _ string, max int64) (int64, error) {
+	if f.value > max {
+		return 0, refid.ErrCounterOverflow
+	}
 	return f.value, nil
 }
 
@@ -447,6 +453,55 @@ func TestGenerate_CounterOverflow(t *testing.T) {
 	_, err = reg.Generate(context.Background(), "TEST", "seq", nil)
 	if !errors.Is(err, refid.ErrCounterOverflow) {
 		t.Errorf("expected ErrCounterOverflow, got %v", err)
+	}
+}
+
+func TestGenerate_CounterDoesNotAdvanceOnOverflow(t *testing.T) {
+	store := newMemStore()
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "seq",
+				Segments: []refid.SegmentConfig{
+					{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: 1}, // max counter = 9
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	// Increment counter up to max (9)
+	for i := 1; i <= 9; i++ {
+		_, err := reg.Generate(ctx, "TEST", "seq", nil)
+		if err != nil {
+			t.Fatalf("call %d: unexpected error: %v", i, err)
+		}
+	}
+
+	// 10th call should fail with ErrCounterOverflow
+	_, err = reg.Generate(ctx, "TEST", "seq", nil)
+	if !errors.Is(err, refid.ErrCounterOverflow) {
+		t.Fatalf("expected ErrCounterOverflow, got %v", err)
+	}
+
+	// Counter in store must stay frozen at 9
+	key := "TEST:seq"
+	if store.counters[key] != 9 {
+		t.Errorf("expected counter in store to remain frozen at 9, got %d", store.counters[key])
+	}
+
+	// Subsequent calls must also fail and counter must remain 9
+	_, err = reg.Generate(ctx, "TEST", "seq", nil)
+	if !errors.Is(err, refid.ErrCounterOverflow) {
+		t.Fatalf("expected ErrCounterOverflow on retry, got %v", err)
+	}
+	if store.counters[key] != 9 {
+		t.Errorf("expected counter in store to remain 9 after second overflow attempt, got %d", store.counters[key])
 	}
 }
 

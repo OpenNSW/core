@@ -5,6 +5,7 @@ package refid
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -57,7 +58,8 @@ VALUES (?, 1, now())
 ON CONFLICT (scope_key) DO UPDATE
   SET counter    = %s.counter + 1,
       updated_at = now()
-RETURNING counter`, t, t)
+WHERE %s.counter < ?
+RETURNING counter`, t, t, t)
 	return &postgresStore{db: db, query: query}
 }
 
@@ -82,11 +84,19 @@ CREATE TABLE IF NOT EXISTS %s (
 	return nil
 }
 
-// Next atomically increments the counter for scopeKey and returns the new value.
-func (s *postgresStore) Next(ctx context.Context, scopeKey string) (int64, error) {
+// Next atomically increments the counter for scopeKey and returns the new value,
+// provided counter < max. If counter >= max, returns ErrCounterOverflow without incrementing.
+func (s *postgresStore) Next(ctx context.Context, scopeKey string, max int64) (int64, error) {
 	var counter int64
-	if err := s.db.WithContext(ctx).Raw(s.query, scopeKey).Scan(&counter).Error; err != nil {
+	err := s.db.WithContext(ctx).Raw(s.query, scopeKey, max).Scan(&counter).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, fmt.Errorf("%w: scope %q counter reached max limit %d", ErrCounterOverflow, scopeKey, max)
+		}
 		return 0, fmt.Errorf("refid: sequence increment failed for scope %q: %w", scopeKey, err)
+	}
+	if counter == 0 {
+		return 0, fmt.Errorf("%w: scope %q counter reached max limit %d", ErrCounterOverflow, scopeKey, max)
 	}
 	return counter, nil
 }
