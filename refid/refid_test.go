@@ -715,3 +715,30 @@ func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
 		t.Fatal("expected error for empty date layout, got nil")
 	}
 }
+
+func TestPostgresStore_InvalidTableName(t *testing.T) {
+	invalidNames := []string{
+		"users; DROP TABLE users;--",
+		"refid table",
+		"123refid",
+		"refid-sequences",
+		"table'quote",
+	}
+
+	for _, name := range invalidNames {
+		err := refid.AutoMigrate(nil, refid.WithTableName(name))
+		if err == nil {
+			t.Errorf("expected AutoMigrate error for invalid table name %q, got nil", name)
+		}
+
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Errorf("expected NewPostgresStore to panic for invalid table name %q, got no panic", name)
+				}
+			}()
+			_ = refid.NewPostgresStore(nil, refid.WithTableName(name))
+		}()
+	}
+}

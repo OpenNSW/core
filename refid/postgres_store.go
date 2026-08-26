@@ -7,9 +7,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"gorm.io/gorm"
 )
+
+var validTableIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+func validateTableName(name string) error {
+	if !validTableIdentifier.MatchString(name) {
+		return fmt.Errorf("refid: invalid table name %q: must match [a-zA-Z_][a-zA-Z0-9_]*", name)
+	}
+	return nil
+}
 
 // DefaultTableName is the default PostgreSQL table name used for sequence counters.
 const DefaultTableName = "refid_sequences"
@@ -19,6 +29,7 @@ type PostgresOption func(*postgresConfig)
 
 type postgresConfig struct {
 	tableName string
+	err       error
 }
 
 func defaultPostgresConfig() postgresConfig {
@@ -31,6 +42,10 @@ func defaultPostgresConfig() postgresConfig {
 func WithTableName(name string) PostgresOption {
 	return func(cfg *postgresConfig) {
 		if name != "" {
+			if err := validateTableName(name); err != nil {
+				cfg.err = err
+				return
+			}
 			cfg.tableName = name
 		}
 	}
@@ -45,11 +60,14 @@ type postgresStore struct {
 
 // NewPostgresStore returns a SequenceStore backed by PostgreSQL.
 // By default it uses the "refid_sequences" table name, which can be overridden
-// via WithTableName option.
+// via WithTableName option. Panics if an invalid table name option is provided.
 func NewPostgresStore(db *gorm.DB, opts ...PostgresOption) SequenceStore {
 	cfg := defaultPostgresConfig()
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.err != nil {
+		panic(cfg.err)
 	}
 	t := cfg.tableName
 	query := fmt.Sprintf(`
@@ -69,6 +87,9 @@ func AutoMigrate(db *gorm.DB, opts ...PostgresOption) error {
 	cfg := defaultPostgresConfig()
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.err != nil {
+		return cfg.err
 	}
 
 	sql := fmt.Sprintf(`
