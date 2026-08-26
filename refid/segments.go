@@ -153,18 +153,14 @@ func (s *sequenceSegment) render(ctx context.Context, params map[string]string, 
 		return "", err
 	}
 
-	padding := s.padding
-	if padding < 1 {
-		padding = 1
-	}
-	maxValue := int64(math.Pow10(padding)) - 1
+	maxValue := int64(math.Pow10(s.padding)) - 1
 
 	counter, err := s.store.Next(ctx, key, maxValue)
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("%0*d", padding, counter), nil
+	return fmt.Sprintf("%0*d", s.padding, counter), nil
 }
 
 // newSequenceSegment constructs a sequence segment, associating it with the
@@ -176,15 +172,14 @@ func newSequenceSegment(cfg SegmentConfig, issuer, idType string, store Sequence
 	if store == nil {
 		return nil, fmt.Errorf("refid: sequence segment requires a non-nil SequenceStore")
 	}
-	padding := cfg.Padding
-	if padding < 1 {
-		padding = 1
+	if cfg.Padding < 1 || cfg.Padding > 18 {
+		return nil, fmt.Errorf("refid: sequence segment padding must be between 1 and 18, got %d", cfg.Padding)
 	}
 	return &sequenceSegment{
 		issuer:       issuer,
 		idType:       idType,
 		scopeKeyTmpl: cfg.ScopeKey,
-		padding:      padding,
+		padding:      cfg.Padding,
 		store:        store,
 	}, nil
 }

@@ -700,6 +700,25 @@ func TestSegment_Sequence_EmptyScopeKeyRejected(t *testing.T) {
 	}
 }
 
+func TestSegment_Sequence_InvalidPaddingRejected(t *testing.T) {
+	invalidPaddings := []int{-5, 0, 19, 20, 100}
+	for _, pad := range invalidPaddings {
+		cfg := refid.Config{
+			Issuers: []refid.IssuerConfig{{
+				Issuer: "TEST",
+				Formats: []refid.FormatConfig{{
+					IDType:   "bad",
+					Segments: []refid.SegmentConfig{{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: pad}},
+				}},
+			}},
+		}
+		_, err := refid.NewRegistry(cfg, newMemStore())
+		if err == nil {
+			t.Errorf("expected error for sequence padding %d, got nil", pad)
+		}
+	}
+}
+
 func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
 	cfg := refid.Config{
 		Issuers: []refid.IssuerConfig{{

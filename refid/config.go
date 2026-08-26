@@ -74,9 +74,9 @@ type SegmentConfig struct {
 	ScopeKey string `yaml:"scopeKey,omitempty"`
 
 	// Padding is the minimum number of digits for a sequence segment's counter.
-	// The counter is zero-padded to this width. If the counter exceeds the
-	// maximum value representable with Padding digits, ErrCounterOverflow is
-	// returned. Defaults to 1 when not set.
+	// The counter is zero-padded to this width. Must be between 1 and 18.
+	// If the counter exceeds the maximum value representable with Padding digits,
+	// ErrCounterOverflow is returned.
 	Padding int `yaml:"padding,omitempty"`
 }
 
