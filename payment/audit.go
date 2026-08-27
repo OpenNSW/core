@@ -3,29 +3,31 @@
 
 package payment
 
-import "context"
+import "github.com/OpenNSW/core/shared/audit"
 
-// Auditor is an optional callback that a PaymentService implementation uses to
-// emit audit events after payment operations complete. Implementations must be
-// safe to call from any goroutine.
-type Auditor interface {
-	AuditPayment(ctx context.Context, e AuditEvent)
-}
+var _ audit.Details = AuditDetails{}
 
-// AuditAction describes what operation was performed.
-type AuditAction string
-
-const (
-	AuditActionWebhook  AuditAction = "UPDATE"
-	AuditActionValidate AuditAction = "READ"
-)
-
-// AuditEvent carries the domain-rich details of a payment operation.
-type AuditEvent struct {
-	Action    AuditAction
+// AuditDetails is the payment-owned payload on an audit.Event.
+type AuditDetails struct {
 	GatewayID string
 	Reference string
-	Status    string // domain payment status if available
-	Failure   bool
+	Status    string // domain PaymentStatus, not audit.Status
 	Error     string
+}
+
+func (d AuditDetails) Metadata() map[string]any {
+	m := make(map[string]any, 4)
+	if d.GatewayID != "" {
+		m["gateway_id"] = d.GatewayID
+	}
+	if d.Reference != "" {
+		m["reference"] = d.Reference
+	}
+	if d.Status != "" {
+		m["status"] = d.Status
+	}
+	if d.Error != "" {
+		m["error"] = d.Error
+	}
+	return m
 }
