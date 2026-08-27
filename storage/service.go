@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/OpenNSW/core/shared/audit"
 	"github.com/OpenNSW/core/storage/drivers"
 	"github.com/google/uuid"
 )
@@ -67,7 +68,7 @@ type Service struct {
 	// nil unless WithInlineTypes set it, and then the default list applies.
 	inline inlinePolicy
 
-	Auditor Auditor // optional; nil means no auditing
+	Auditor audit.Auditor // optional; nil means no auditing
 }
 
 // ServiceOption configures a Service.
@@ -180,6 +181,12 @@ func formatSize(n int64) string {
 	return fmt.Sprintf("%d bytes", n)
 }
 
+// WithAuditor injects an optional auditor for recording storage audit events.
+// Passing nil disables auditing.
+func (s *Service) WithAuditor(auditor audit.Auditor) {
+	s.Auditor = auditor
+}
+
 // Upload handles the preparation of a file upload by generating a unique key
 // and a presigned/upload URL via the storage driver. The size and type are
 // checked against the Service's limits here, because the presigned URL is
@@ -204,9 +211,8 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 	// Generate a presigned URL for the upload
 	uploadURL, err := s.Driver.GetUploadURL(ctx, key, mime, size)
 	if err != nil {
-		s.audit(ctx, AuditEvent{
-			Action: AuditActionGetUploadURL, Key: key, Filename: filename,
-			MimeType: mime, Size: size, Failure: true, Error: err.Error(),
+		s.audit(ctx, eventTypePresignUpload, audit.ActionCreate, audit.StatusFailure, AuditDetails{
+			Key: key, Filename: filename, MimeType: mime, Size: size, Error: err.Error(),
 		})
 		return nil, fmt.Errorf("failed to generate upload URL: %w", err)
 	}
@@ -220,9 +226,8 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 		MimeType:  mime,
 	}
 
-	s.audit(ctx, AuditEvent{
-		Action: AuditActionGetUploadURL, Key: key, Filename: filename,
-		MimeType: mime, Size: size,
+	s.audit(ctx, eventTypePresignUpload, audit.ActionCreate, audit.StatusSuccess, AuditDetails{
+		Key: key, Filename: filename, MimeType: mime, Size: size,
 	})
 
 	return metadata, nil
@@ -289,12 +294,12 @@ func (s *Service) Download(ctx context.Context, key string) (io.ReadCloser, stri
 	}
 	rc, mime, err := s.Driver.Get(ctx, key)
 	if err != nil {
-		s.audit(ctx, AuditEvent{
-			Action: AuditActionDownload, Key: key, Failure: true, Error: err.Error(),
+		s.audit(ctx, eventTypeStorage, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			Key: key, Error: err.Error(),
 		})
 		return nil, "", err
 	}
-	s.audit(ctx, AuditEvent{Action: AuditActionDownload, Key: key, MimeType: mime})
+	s.audit(ctx, eventTypeStorage, audit.ActionRead, audit.StatusSuccess, AuditDetails{Key: key, MimeType: mime})
 	return rc, mime, nil
 }
 
@@ -326,20 +331,20 @@ func (s *Service) DownloadURL(ctx context.Context, key string) (Download, error)
 
 	info, err := s.Driver.Stat(ctx, key)
 	if err != nil {
-		s.audit(ctx, AuditEvent{
-			Action: AuditActionDownload, Key: key, Failure: true, Error: err.Error(),
+		s.audit(ctx, eventTypeStorage, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			Key: key, Error: err.Error(),
 		})
 		return Download{}, err
 	}
 	disposition := s.inlineTypes().disposition(info.ContentType)
 	url, err := s.Driver.GetDownloadURL(ctx, key, disposition)
 	if err != nil {
-		s.audit(ctx, AuditEvent{
-			Action: AuditActionDownload, Key: key, Failure: true, Error: err.Error(),
+		s.audit(ctx, eventTypeStorage, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			Key: key, Error: err.Error(),
 		})
 		return Download{}, err
 	}
-	s.audit(ctx, AuditEvent{Action: AuditActionDownload, Key: key})
+	s.audit(ctx, eventTypeStorage, audit.ActionRead, audit.StatusSuccess, AuditDetails{Key: key})
 	return Download{URL: url, ExpiresAt: expiresAt, ContentType: info.ContentType, Disposition: disposition}, nil
 }
 
@@ -365,18 +370,32 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	}
 	err := s.Driver.Delete(ctx, key)
 	if err != nil {
-		s.audit(ctx, AuditEvent{
-			Action: AuditActionDelete, Key: key, Failure: true, Error: err.Error(),
+		s.audit(ctx, eventTypeStorage, audit.ActionDelete, audit.StatusFailure, AuditDetails{
+			Key: key, Error: err.Error(),
 		})
 		return fmt.Errorf("failed to delete file: %w", err)
 	}
-	s.audit(ctx, AuditEvent{Action: AuditActionDelete, Key: key})
+	s.audit(ctx, eventTypeStorage, audit.ActionDelete, audit.StatusSuccess, AuditDetails{Key: key})
 	return nil
 }
 
+const (
+	eventTypeStorage       = "STORAGE"
+	eventTypePresignUpload = "PRESIGN_UPLOAD"
+)
+
 // audit is a nil-safe helper that emits an event only when an Auditor is set.
-func (s *Service) audit(ctx context.Context, e AuditEvent) {
-	if s.Auditor != nil {
-		s.Auditor.AuditStorage(ctx, e)
+func (s *Service) audit(ctx context.Context, eventType string, action audit.Action, status audit.Status, d AuditDetails) {
+	if s.Auditor == nil {
+		return
 	}
+	s.Auditor.Audit(ctx, audit.Event{
+		Timestamp:  time.Now().UTC(),
+		EventType:  eventType,
+		Action:     action,
+		Status:     status,
+		TargetType: "RESOURCE",
+		TargetID:   d.Key,
+		Details:    d,
+	})
 }
