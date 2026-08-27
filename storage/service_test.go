@@ -9,6 +9,8 @@ import (
 	"errors"
 	"io"
 	"testing"
+
+	"github.com/OpenNSW/core/shared/audit"
 )
 
 // MockDriver implements StorageDriver for testing
@@ -63,11 +65,20 @@ func (m *MockDriver) GetUploadURL(ctx context.Context, key string, contentType s
 }
 
 type mockAuditor struct {
-	events []AuditEvent
+	events []audit.Event
 }
 
-func (m *mockAuditor) AuditStorage(_ context.Context, e AuditEvent) {
+func (m *mockAuditor) Audit(_ context.Context, e audit.Event) {
 	m.events = append(m.events, e)
+}
+
+func storageDetails(t *testing.T, e audit.Event) AuditDetails {
+	t.Helper()
+	d, ok := e.Details.(AuditDetails)
+	if !ok {
+		t.Fatalf("Details type %T", e.Details)
+	}
+	return d
 }
 
 func TestUploadService(t *testing.T) {
@@ -100,7 +111,7 @@ func TestUpload_Audit_Success(t *testing.T) {
 	mock := &MockDriver{}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	filename := "test.jpg"
@@ -116,8 +127,9 @@ func TestUpload_Audit_Success(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionGetUploadURL || ev.Key != metadata.Key || ev.Filename != filename || ev.MimeType != mime || ev.Size != size || ev.Failure {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.EventType != eventTypePresignUpload || ev.Action != audit.ActionCreate || ev.Status != audit.StatusSuccess || d.Key != metadata.Key || d.Filename != filename || d.MimeType != mime || d.Size != size {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -126,7 +138,7 @@ func TestUpload_Audit_DriverError(t *testing.T) {
 	mock := &MockDriver{GenerateURLErr: driverErr}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	_, err := service.Upload(ctx, "test.jpg", 1024, "image/jpeg")
@@ -138,8 +150,9 @@ func TestUpload_Audit_DriverError(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionGetUploadURL || !ev.Failure || ev.Error != driverErr.Error() {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionCreate || ev.Status != audit.StatusFailure || d.Error != driverErr.Error() {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -172,7 +185,7 @@ func TestDownload_Audit_Success(t *testing.T) {
 	}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	reader, _, err := service.Download(ctx, "test-key")
@@ -185,8 +198,9 @@ func TestDownload_Audit_Success(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionDownload || ev.Key != "test-key" || ev.MimeType != "application/test" || ev.Failure {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionRead || d.Key != "test-key" || d.MimeType != "application/test" || ev.Status != audit.StatusSuccess {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -195,7 +209,7 @@ func TestDownload_Audit_DriverError(t *testing.T) {
 	mock := &MockDriver{GetErr: driverErr}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	_, _, err := service.Download(ctx, "test-key")
@@ -207,8 +221,9 @@ func TestDownload_Audit_DriverError(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionDownload || ev.Key != "test-key" || !ev.Failure || ev.Error != driverErr.Error() {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionRead || d.Key != "test-key" || ev.Status != audit.StatusFailure || d.Error != driverErr.Error() {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -233,7 +248,7 @@ func TestGetDownloadURL_Audit_Success(t *testing.T) {
 	mock := &MockDriver{}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	const key = "test-key"
@@ -251,8 +266,9 @@ func TestGetDownloadURL_Audit_Success(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionDownload || ev.Key != key || ev.Failure {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionRead || d.Key != key || ev.Status != audit.StatusSuccess {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -275,7 +291,7 @@ func TestGetDownloadURL_Audit_DriverError(t *testing.T) {
 	mock := &MockDriver{GenerateURLErr: driverErr}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	_, err := service.GetDownloadURL(ctx, "test-key")
@@ -287,8 +303,9 @@ func TestGetDownloadURL_Audit_DriverError(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionDownload || ev.Key != "test-key" || !ev.Failure || ev.Error != driverErr.Error() {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionRead || d.Key != "test-key" || ev.Status != audit.StatusFailure || d.Error != driverErr.Error() {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -296,7 +313,7 @@ func TestDelete_Audit_Success(t *testing.T) {
 	mock := &MockDriver{}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	const key = "test-key"
@@ -312,8 +329,9 @@ func TestDelete_Audit_Success(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionDelete || ev.Key != key || ev.Failure {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionDelete || d.Key != key || ev.Status != audit.StatusSuccess {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
 
@@ -322,7 +340,7 @@ func TestDelete_Audit_DriverError(t *testing.T) {
 	mock := &MockDriver{DeleteErr: driverErr}
 	auditor := &mockAuditor{}
 	service := NewService(mock)
-	service.Auditor = auditor
+	service.WithAuditor(auditor)
 
 	ctx := context.Background()
 	err := service.Delete(ctx, "test-key")
@@ -337,7 +355,8 @@ func TestDelete_Audit_DriverError(t *testing.T) {
 		t.Fatalf("expected 1 audit event, got %d", len(auditor.events))
 	}
 	ev := auditor.events[0]
-	if ev.Action != AuditActionDelete || ev.Key != "test-key" || !ev.Failure || ev.Error != driverErr.Error() {
-		t.Errorf("unexpected audit event: %+v", ev)
+	d := storageDetails(t, ev)
+	if ev.Action != audit.ActionDelete || d.Key != "test-key" || ev.Status != audit.StatusFailure || d.Error != driverErr.Error() {
+		t.Errorf("unexpected audit event: %+v details=%+v", ev, d)
 	}
 }
