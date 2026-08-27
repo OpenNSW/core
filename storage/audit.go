@@ -3,31 +3,35 @@
 
 package storage
 
-import "context"
+import "github.com/OpenNSW/core/shared/audit"
 
-// Auditor is an optional callback that a Service uses to emit audit events
-// after storage operations complete. Implementations must be safe to call
-// from any goroutine.
-type Auditor interface {
-	AuditStorage(ctx context.Context, e AuditEvent)
-}
+var _ audit.Details = AuditDetails{}
 
-// AuditAction describes what operation was performed.
-type AuditAction string
-
-const (
-	AuditActionGetUploadURL AuditAction = "PRESIGN_UPLOAD"
-	AuditActionDownload     AuditAction = "READ"
-	AuditActionDelete       AuditAction = "DELETE"
-)
-
-// AuditEvent carries the domain-rich details of a storage operation.
-type AuditEvent struct {
-	Action   AuditAction
+// AuditDetails is the storage-owned payload on an audit.Event.
+type AuditDetails struct {
 	Key      string
 	Filename string
 	MimeType string
 	Size     int64
-	Failure  bool
 	Error    string
+}
+
+func (d AuditDetails) Metadata() map[string]any {
+	m := make(map[string]any, 5)
+	if d.Key != "" {
+		m["key"] = d.Key
+	}
+	if d.Filename != "" {
+		m["filename"] = d.Filename
+	}
+	if d.MimeType != "" {
+		m["mime_type"] = d.MimeType
+	}
+	if d.Size != 0 {
+		m["size"] = d.Size
+	}
+	if d.Error != "" {
+		m["error"] = d.Error
+	}
+	return m
 }
