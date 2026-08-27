@@ -34,3 +34,23 @@ Shared validation helpers for config structs.
 err := validation.TCPPort("Port", cfg.Port)     // 1-65535
 err := validation.HTTPURL("Endpoint", cfg.URL)  // absolute http(s) URL
 ```
+
+## `audit`
+
+Shared auditor callback and event shape used by domain services. `Event`
+carries Argus-aligned fields (`Action`, `Status`, actor/target, …).
+Domain-specific payloads live on `Details` in the emitting package, not on
+`Event` itself.
+
+```go
+type sink struct{}
+func (sink) Audit(ctx context.Context, e audit.Event) { /* persist e */ }
+
+type paymentDetails struct {
+    GatewayID string
+    Reference string
+}
+func (d paymentDetails) Metadata() map[string]any {
+    return map[string]any{"gateway_id": d.GatewayID, "reference": d.Reference}
+}
+```

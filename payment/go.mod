@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/OpenNSW/core/shared v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.12.1
@@ -23,3 +24,5 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 )
+
+replace github.com/OpenNSW/core/shared => ../shared
