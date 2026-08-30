@@ -402,6 +402,38 @@ func (s *BatchGatewayTestSuite) TestBatchValidation_JoinReferencesNonexistentSpl
 	s.Contains(err.Error(), "non-existent BATCH_SPLIT")
 }
 
+// --- Test 7b: Validation — BATCH_JOIN with multiple outgoing edges ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_JoinMultipleOutgoingEdges_Fails() {
+	def := WorkflowDefinition{
+		ID:   "multi_out_join_test",
+		Name: "Multi Out Join",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "task_a", Type: NodeTypeTask, TaskTemplateID: "TASK_A"},
+			{ID: "task_b", Type: NodeTypeTask, TaskTemplateID: "TASK_B"},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "gw_join"},
+			// Multiple outgoing edges directly from BATCH_JOIN:
+			{ID: "e3", SourceID: "gw_join", TargetID: "task_a"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "task_b"},
+			{ID: "e5", SourceID: "task_a", TargetID: "end"},
+			{ID: "e6", SourceID: "task_b", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "cannot have more than 1 outgoing edge")
+}
+
 // --- Test 8: Depth-2 nesting (phyto consignment) ---
 
 func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {

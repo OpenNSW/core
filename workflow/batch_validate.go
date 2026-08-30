@@ -48,5 +48,18 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 		}
 	}
 
+	// BATCH_JOIN is a converging gateway; it cannot have more than 1 outgoing edge.
+	joinOutEdgeCount := make(map[string]int)
+	for _, edge := range def.Edges {
+		if _, isJoin := batchJoins[edge.SourceID]; isJoin {
+			joinOutEdgeCount[edge.SourceID]++
+		}
+	}
+	for joinID := range batchJoins {
+		if count := joinOutEdgeCount[joinID]; count > 1 {
+			return fmt.Errorf("BATCH_JOIN node %q cannot have more than 1 outgoing edge, got %d", joinID, count)
+		}
+	}
+
 	return nil
 }
