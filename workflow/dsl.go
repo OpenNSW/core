@@ -31,7 +31,14 @@ type SplitMode string
 
 // Core split task execution modes.
 const (
-	SplitModeSameTemplate       SplitMode = "SAME_TEMPLATE"
+	// SplitModeSameTemplate spawns one child workflow per item running the same external template.
+	//
+	// Deprecated: Prefer using BATCH_SPLIT gateway nodes instead. BATCH_SPLIT defines sub-graphs
+	// inline, supports conditional partitioning, aggregates tasks over item slices, and merges results
+	// by item ID without requiring external template registration.
+	SplitModeSameTemplate SplitMode = "SAME_TEMPLATE"
+
+	// SplitModeDifferentTemplates spawns child workflows dynamically based on each item's template_id.
 	SplitModeDifferentTemplates SplitMode = "DIFFERENT_TEMPLATES"
 )
 

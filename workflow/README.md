@@ -12,8 +12,8 @@ A powerful, JSON-DSL-driven graph interpreter engine built on top of the Go [Tem
     - Control flow: `EXCLUSIVE_SPLIT`, `PARALLEL_SPLIT`, `EXCLUSIVE_JOIN`, `PARALLEL_JOIN`
     - Batch partitioning: `BATCH_SPLIT` (partitions item slices by evaluating edge conditions per-item and spawns composable child workflows), `BATCH_JOIN` (merges child results by item ID)
   - **`SPLIT_TASK`**: Spawns multiple parallel child workflows dynamically (dynamic fan-out). Supports:
-    - `SAME_TEMPLATE`: Homogeneous splits running the same template across payloads.
-    - `DIFFERENT_TEMPLATES`: Poly-workflow / heterogeneous splits running different templates dynamically.
+    - `SAME_TEMPLATE` *(Deprecated: Use `BATCH_SPLIT` instead for inline DAG sub-graphs, aggregated tasks, and item-ID merging)*
+    - `DIFFERENT_TEMPLATES`: Poly-workflow / heterogeneous splits running different external templates dynamically.
     - Failure handling configurations (`FAIL_FAST` or `COLLECT_ALL`).
   - **`SIGNALING`**: Coordinates sibling branches spawned by the same `SPLIT_TASK` node without invoking any external activity. Two sub-types:
     - `EMIT`: Fires a signal asynchronously to all sibling branches (one hop up to the parent, one hop back down).
