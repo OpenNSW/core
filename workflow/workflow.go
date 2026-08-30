@@ -35,6 +35,12 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		initialWorkflowVariables = make(map[string]any)
 	}
 
+	// TODO: Implement comprehensive workflow definition validation (e.g. reachable nodes, dangling edges,
+	// start/end node counts, gateway pairings). Currently only validating batch gateway invariants.
+	if err := ValidateBatchGateways(def); err != nil {
+		return nil, fmt.Errorf("workflow definition validation failed: %w", err)
+	}
+
 	instance := &WorkflowInstance{
 		ID:                workflow.GetInfo(ctx).WorkflowExecution.ID,
 		Status:            StatusRunning,
@@ -489,6 +495,13 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		nodeInfo.Status = NodeStatusCompleted
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		return g.transitionTo(ctx, outEdges[0])
+
+	case GatewayTypeBatchSplit:
+		return g.handleBatchSplitGateway(ctx, nodeInfo, node, outEdges)
+
+	case GatewayTypeBatchJoin:
+		return g.handleBatchJoinGateway(ctx, nodeInfo, node, outEdges)
+
 	default:
 		return fmt.Errorf("unknown gateway type: %v", node.GatewayType)
 	}
