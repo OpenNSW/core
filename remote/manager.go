@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -112,92 +111,24 @@ func (m *Manager) LoadServices(filePath string) error {
 }
 
 func (m *Manager) Call(ctx context.Context, serviceID string, req Request, response interface{}) error {
-	var client *Client
-	var err error
-
-	if serviceID != "" {
-		client, err = m.GetClient(serviceID)
-	} else {
-		// Attempt to resolve service by URL for backward compatibility
-		var resolvedID string
-		client, resolvedID, err = m.GetClientByURL(req.Path)
-		if err == nil {
-			// Update the request path to be relative if it matched a service baseURL
-			m.mu.RLock()
-			if cfg, ok := m.configs[resolvedID]; ok {
-				req.Path = strings.TrimPrefix(req.Path, cfg.URL)
-			}
-			m.mu.RUnlock()
-		}
-	}
-
+	client, err := m.GetClient(serviceID)
 	if err != nil {
 		return err
 	}
 
-	return client.JSONRequest(ctx, req, response)
+	return client.Request(ctx, req, response)
 }
 
-// CallRaw sends a raw-bodied request (e.g. a SOAP/XML envelope) to a
-// registered service. See Client.RawRequest for the error semantics: a non-2xx
-// status is returned in the response, not as an error.
-func (m *Manager) CallRaw(ctx context.Context, serviceID string, req RawRequest) (*RawResponse, error) {
+// CallRaw sends a raw-bodied request (e.g. a SOAP/XML envelope, via
+// req.Body = RawBody{...}) to a registered service. See Client.RawRequest for
+// the error semantics: a non-2xx status is returned in the response, not as
+// an error.
+func (m *Manager) CallRaw(ctx context.Context, serviceID string, req Request) (*RawResponse, error) {
 	client, err := m.GetClient(serviceID)
 	if err != nil {
 		return nil, err
 	}
 	return client.RawRequest(ctx, req)
-}
-
-// CallMultipart sends a multipart/form-data request (e.g. a JSON payload part
-// alongside file uploads) to a registered service and decodes a JSON response
-// into response. See Client.MultipartRequest: unlike CallRaw, a non-2xx status
-// is returned as an error, after the body has been decoded into response.
-func (m *Manager) CallMultipart(ctx context.Context, serviceID string, req MultipartRequest, response any) error {
-	client, err := m.GetClient(serviceID)
-	if err != nil {
-		return err
-	}
-	return client.MultipartRequest(ctx, req, response)
-}
-
-func (m *Manager) GetClientByURL(rawURL string) (*Client, string, error) {
-	if !strings.HasPrefix(rawURL, "http") {
-		return nil, "", fmt.Errorf("remote: cannot resolve service from relative path: %s", rawURL)
-	}
-
-	parsedReq, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, "", fmt.Errorf("remote: invalid URL: %w", err)
-	}
-
-	m.mu.RLock()
-	// No defer here because we need to release for GetClient call
-
-	for id, cfg := range m.configs {
-		parsedBase, err := url.Parse(cfg.URL)
-		if err != nil {
-			continue
-		}
-
-		// Check if Scheme and Host match
-		if parsedReq.Scheme == parsedBase.Scheme && parsedReq.Host == parsedBase.Host {
-			// Also ensure the path matches the base path if provided
-			if strings.HasPrefix(parsedReq.Path, parsedBase.Path) {
-				m.mu.RUnlock()
-				client, err := m.GetClient(id)
-				if err != nil {
-					// If a service matches but fails to initialize, it's a configuration error.
-					// We should return this error instead of continuing the search.
-					return nil, "", fmt.Errorf("remote: failed to create client for matched service %q: %w", id, err)
-				}
-				return client, id, nil
-			}
-		}
-	}
-	m.mu.RUnlock()
-
-	return nil, "", fmt.Errorf("remote: no registered service found for URL: %s", rawURL)
 }
 
 func (m *Manager) GetClient(id string) (*Client, error) {

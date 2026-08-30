@@ -163,3 +163,19 @@ func TestManager_Call_Integration(t *testing.T) {
 	err := manager.Call(context.Background(), "test", Request{Method: "GET", Path: "/"}, nil)
 	assert.NoError(t, err)
 }
+
+func TestManager_Call_EmptyServiceIDIsNotResolvedFromURL(t *testing.T) {
+	// Call no longer infers a service from an absolute Request.Path when
+	// serviceID is empty — it must fail the normal registry lookup instead.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("the server must never be reached: an empty serviceID must fail before any request is sent")
+	}))
+	defer server.Close()
+
+	manager := NewManager()
+	manager.configs["test"] = ServiceConfig{ID: "test", URL: server.URL}
+
+	err := manager.Call(context.Background(), "", Request{Method: "GET", Path: server.URL + "/"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `service "" not found`)
+}

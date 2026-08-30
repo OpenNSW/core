@@ -44,8 +44,9 @@ func (r *TaskRenderer) Render(ctx context.Context, configRaw json.RawMessage, fa
 	}
 
 	sections, err := r.assembler.Assemble(ctx, &bp, uiprojector.Facts{
-		State: facts.State,
-		Data:  facts.Data,
+		State:  facts.State,
+		Data:   facts.Data,
+		Claims: facts.Claims,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("renderer: assemble: %w", err)

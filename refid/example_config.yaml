@@ -1,0 +1,89 @@
+# Reference ID Generation — Example Configuration
+#
+# This file demonstrates the full config schema for the refid package.
+# Load it via refid.LoadConfig("path/to/refid_config.yaml").
+#
+# Key concepts:
+#   - issuers:  one or more issuing authorities, each with one or more ID formats.
+#   - lists:    named value sets shared across formats; values are validated at generation time.
+#   - segments: ordered building blocks that are concatenated to form the final ID.
+#
+# Segment types:
+#   literal   — fixed text, always emitted as-is.
+#   list      — emits a caller-supplied value after validating it is in the named list.
+#   date      — formats the current UTC time using a Go reference-date layout string.
+#   sequence  — increments a durable counter scoped by a key template and zero-pads the result.
+#
+# Scope key placeholders (for sequence segments):
+#   {issuer}    — the issuer identifier for this format
+#   {idType}    — the ID type identifier for this format
+#   {yyyy}      — 4-digit UTC year
+#   {yyyyMM}    — UTC year + month
+#   {yyyyMMdd}  — UTC year + month + day
+#   {<param>}   — any caller-supplied param key (lower precedence than the above)
+#
+# Including {yyyyMMdd} in a scope key gives a daily-resetting counter.
+# Omitting all date placeholders gives a counter that never resets.
+
+issuers:
+  - issuer: RTA
+    formats:
+      # application_id — resets daily per office
+      # Produces: RTA-APP-COL-20260817-000042
+      - idType: application_id
+        segments:
+          - type: literal
+            value: "RTA-APP-"
+          - type: list
+            list: office_location
+            param: officeCode       # caller must pass officeCode: "COL" (or GAL/KAN)
+          - type: literal
+            value: "-"
+          - type: date
+            layout: "20060102"      # Go reference date for YYYYMMDD
+          - type: literal
+            value: "-"
+          - type: sequence
+            scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}"
+            padding: 6              # 000001 … 999999; returns ErrCounterOverflow beyond that
+
+      # permit_id — never resets, counted independently per office
+      # Produces: RTA-PMT-COL-00000001
+      - idType: permit_id
+        segments:
+          - type: literal
+            value: "RTA-PMT-"
+          - type: list
+            list: office_location
+            param: officeCode
+          - type: literal
+            value: "-"
+          - type: sequence
+            scopeKey: "{issuer}:{idType}:{officeCode}"
+            padding: 8              # 00000001 … 99999999
+
+  # A second issuer sharing the same list — counters are always isolated by
+  # {issuer} and {idType} in the scope key, so no collision is possible.
+  - issuer: FCAU
+    formats:
+      - idType: case_id
+        segments:
+          - type: literal
+            value: "FCAU-"
+          - type: list
+            list: office_location
+            param: officeCode
+          - type: literal
+            value: "-"
+          - type: date
+            layout: "20060102"
+          - type: literal
+            value: "-"
+          - type: sequence
+            scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}"
+            padding: 6
+
+lists:
+  # office_location is the controlled set of valid office codes.
+  # Any list segment referencing "office_location" will reject values not in this set.
+  office_location: [COL, GAL, KAN]
