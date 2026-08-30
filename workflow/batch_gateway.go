@@ -65,7 +65,21 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 		return g.skipToJoinOutEdge(ctx, joinNodeID)
 	}
 
-	// 3. Runtime depth check via scope path segments.
+	// 3. Validate that each item has a unique, non-empty ID field.
+	seenIDs := make(map[string]int, len(items))
+	for i, item := range items {
+		idVal := getItemID(item, idField)
+		idStr := fmt.Sprintf("%v", idVal)
+		if idVal == nil || idVal == "" || idStr == "" {
+			return fmt.Errorf("BATCH_SPLIT node %s: item at index %d is missing required ID field %q", node.ID, i, idField)
+		}
+		if firstIdx, exists := seenIDs[idStr]; exists {
+			return fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q found at index %d (first seen at index %d)", node.ID, idStr, i, firstIdx)
+		}
+		seenIDs[idStr] = i
+	}
+
+	// 4. Runtime depth check via scope path segments.
 	scopePath, _ := g.instance.WorkflowVariables[VarScopePath].(string)
 	if scopePath == "" {
 		scopePath = "root"

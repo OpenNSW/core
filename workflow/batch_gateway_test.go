@@ -234,6 +234,116 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_UnmatchedItemNoDefault_Fails() {
 	s.Contains(err.Error(), "C2")
 }
 
+// --- Test 3b: Missing item ID → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_MissingItemID_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "missing_id_test",
+		Name: "Missing ID Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, 0)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "missing-id-1"})
+
+	// Second item is missing the "id" field
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "C1", "type": "food"},
+			map[string]any{"type": "goods"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "missing required ID field")
+}
+
+// --- Test 3c: Duplicate item ID → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_DuplicateItemID_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "dup_id_test",
+		Name: "Duplicate ID Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, 0)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "dup-id-1"})
+
+	// Duplicate "C1" ID
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "C1", "type": "food"},
+			map[string]any{"id": "C1", "type": "goods"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "duplicate item ID \"C1\"")
+}
+
 // --- Test 4: Default edge catches unmatched items ---
 
 func (s *BatchGatewayTestSuite) TestBatchSplit_DefaultEdgeCatchAll() {
