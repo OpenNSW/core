@@ -89,16 +89,16 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 		return fmt.Errorf("BATCH_SPLIT node %s: maximum batch nesting depth %d exceeded (scope_path=%q)", node.ID, DefaultMaxBatchDepth, scopePath)
 	}
 
-	// 4. Partition items across outEdges.
+	// 5. Partition items across outEdges.
 	partitions, partitionOrder, err := partitionItems(items, outEdges, g.instance.WorkflowVariables, node.ID, idField)
 	if err != nil {
 		return err
 	}
 
-	// 5. Spawn child workflows per partition.
+	// 6. Spawn child workflows per partition.
 	children := g.spawnBatchChildren(ctx, partitions, partitionOrder, node.ID, joinNodeID, scopePath, itemsVar)
 
-	// 6. Wait for all child workflows and merge results by item ID.
+	// 7. Wait for all child workflows and merge results by item ID.
 	mergedItems, err := collectAndMergeBatchResults(ctx, children, items, itemsVar, idField, node.ID)
 	if err != nil {
 		return err
