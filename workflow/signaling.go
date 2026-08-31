@@ -23,6 +23,10 @@ import (
 // arrives (routed down from the parent broker). The received payload is written
 // back into WorkflowVariables via the node's OutputMapping.
 func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
+	if len(outEdges) != 1 {
+		return fmt.Errorf("SIGNALING node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges))
+	}
+
 	cfg := node.Signaling
 	if cfg == nil {
 		return fmt.Errorf("SIGNALING node %s: signaling config is required", node.ID)
@@ -33,7 +37,7 @@ func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *N
 
 	switch cfg.Type {
 	case SignalingTypeEmit:
-		if err := g.handleSignalingEmit(ctx, nodeInfo, node, cfg); err != nil {
+		if err := g.handleSignalingEmit(ctx, node, cfg); err != nil {
 			return err
 		}
 
@@ -49,9 +53,6 @@ func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *N
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
 
-	if len(outEdges) != 1 {
-		return fmt.Errorf("SIGNALING node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges))
-	}
 	return g.transitionTo(ctx, outEdges[0])
 }
 
@@ -63,7 +64,7 @@ func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *N
 //
 // The configured Payload is used as-is; additional payload fields can be injected
 // by populating node.InputMapping.
-func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, _ *NodeInfo, node *Node, cfg *SignalingConfig) error {
+func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, node *Node, cfg *SignalingConfig) error {
 	signalName := cfg.SignalName
 
 	parentWorkflowID, _ := g.instance.WorkflowVariables[VarParentWorkflowID].(string)
