@@ -422,12 +422,14 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 				OutputMapping:  map[string]string{"inspection_status": "phyto_status"},
 			},
 			{
-				ID:             "p_emit",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskEmitSignal,
+				ID:   "p_emit",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeEmit,
+					SignalName: "PHYTO_APPROVAL_EMITTED",
+				},
 				InputMapping: map[string]string{
-					"custom_iter.input.signal_to_emit": InputSignalName,
-					"phyto_status":                     "payload.phyto_status",
+					"phyto_status": "phyto_status",
 				},
 			},
 			{ID: "p_end", Type: NodeTypeEnd},
@@ -445,11 +447,13 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 		Nodes: []Node{
 			{ID: "h_start", Type: NodeTypeStart},
 			{
-				ID:             "h_wait",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskWaitForSignal,
-				InputMapping:   map[string]string{"custom_iter.input.signal_to_wait": InputSignalName},
-				OutputMapping:  map[string]string{"phyto_status": "phyto_status"},
+				ID:   "h_wait",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeWait,
+					SignalName: "PHYTO_APPROVAL_EMITTED",
+				},
+				OutputMapping: map[string]string{"phyto_status": "phyto_status"},
 			},
 			{
 				ID:             "h_verify_phyto",
@@ -514,16 +518,14 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 				"template_id": "oga_phyto_workflow",
 				"branch_id":   "oga-phyto",
 				"payload": map[string]any{
-					"container_id":   "CONT-4412",
-					"signal_to_emit": "PHYTO_APPROVAL_EMITTED",
+					"container_id": "CONT-4412",
 				},
 			},
 			{
 				"template_id": "oga_health_workflow",
 				"branch_id":   "oga-health",
 				"payload": map[string]any{
-					"container_id":   "CONT-4412",
-					"signal_to_wait": "PHYTO_APPROVAL_EMITTED",
+					"container_id": "CONT-4412",
 				},
 			},
 		},
@@ -574,12 +576,14 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 		Nodes: []Node{
 			{ID: "e_start", Type: NodeTypeStart},
 			{
-				ID:             "e_emit",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskEmitSignal,
+				ID:   "e_emit",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeEmit,
+					SignalName: "SYNC_SIGNAL",
+				},
 				InputMapping: map[string]string{
-					"custom_iter.input.signal_to_emit": InputSignalName,
-					"custom_iter.input.tag":            "payload.tag",
+					"custom_iter.input.tag": "tag",
 				},
 			},
 			{ID: "e_end", Type: NodeTypeEnd},
@@ -595,11 +599,13 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 		Nodes: []Node{
 			{ID: "w_start", Type: NodeTypeStart},
 			{
-				ID:             "w_wait",
-				Type:           NodeTypeTask,
-				TaskTemplateID: SysTaskWaitForSignal,
-				InputMapping:   map[string]string{"custom_iter.input.signal_to_wait": InputSignalName},
-				OutputMapping:  map[string]string{"tag": "received_tag"},
+				ID:   "w_wait",
+				Type: NodeTypeSignaling,
+				Signaling: &SignalingConfig{
+					Type:       SignalingTypeWait,
+					SignalName: "SYNC_SIGNAL",
+				},
+				OutputMapping: map[string]string{"tag": "received_tag"},
 			},
 			{ID: "w_end", Type: NodeTypeEnd},
 		},
@@ -661,24 +667,24 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 			{
 				"template_id": "signal_emitter",
 				"branch_id":   "a-emit",
-				"payload":     map[string]any{"signal_to_emit": "SIG_A", "tag": "A"},
+				"payload":     map[string]any{"tag": "A"},
 			},
 			{
 				"template_id": "signal_waiter",
 				"branch_id":   "a-wait",
-				"payload":     map[string]any{"signal_to_wait": "SIG_A"},
+				"payload":     map[string]any{},
 			},
 		},
 		"group_b_items": []map[string]any{
 			{
 				"template_id": "signal_emitter",
 				"branch_id":   "b-emit",
-				"payload":     map[string]any{"signal_to_emit": "SIG_B", "tag": "B"},
+				"payload":     map[string]any{"tag": "B"},
 			},
 			{
 				"template_id": "signal_waiter",
 				"branch_id":   "b-wait",
-				"payload":     map[string]any{"signal_to_wait": "SIG_B"},
+				"payload":     map[string]any{},
 			},
 		},
 	}

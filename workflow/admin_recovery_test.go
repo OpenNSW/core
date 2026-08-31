@@ -424,7 +424,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 }
 
 // TestAdminOverrideResolvesWaitForSignalOutputMappingError verifies that when a
-// SysTaskWaitForSignal node parks due to an output mapping error, the received signal payload
+// SIGNALING WAIT node parks due to an output mapping error, the received signal payload
 // is cached in NodeInfo.CachedTaskResult and can be successfully overridden by the admin.
 func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
@@ -443,10 +443,10 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "wait",
-				"type": "TASK",
-				"task_template_id": "sys:wait_for_signal",
-				"input_mapping": {
-					"signal_name": "signal_name"
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "WAIT",
+					"signal_name": "my_test_signal"
 				},
 				"output_mapping": {
 					"missing_key": "global_target"
@@ -505,7 +505,7 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 }
 
 // TestWaitForSignalCancellationCleanlyPropagates verifies that when a workflow is canceled while
-// blocked on sys:wait_for_signal, the node propagates the cancellation error immediately
+// blocked on a SIGNALING WAIT node, the node propagates the cancellation error immediately
 // and the workflow fails with a canceled error instead of parking the node for admin intervention.
 func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
@@ -524,10 +524,10 @@ func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
 			{ "id": "start", "type": "START" },
 			{
 				"id": "wait",
-				"type": "TASK",
-				"task_template_id": "sys:wait_for_signal",
-				"input_mapping": {
-					"signal_name": "signal_name"
+				"type": "SIGNALING",
+				"signaling": {
+					"type": "WAIT",
+					"signal_name": "my_test_signal"
 				}
 			},
 			{ "id": "end", "type": "END" }
