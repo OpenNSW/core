@@ -544,6 +544,101 @@ func (s *BatchGatewayTestSuite) TestBatchValidation_JoinMultipleOutgoingEdges_Fa
 	s.Contains(err.Error(), "cannot have more than 1 outgoing edge")
 }
 
+// --- Test 7c: Validation — edge escaping batch region to post-join node ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_EscapesBatchRegionToPostJoin_Fails() {
+	def := WorkflowDefinition{
+		ID:   "leak_to_post_join_test",
+		Name: "Leak To Post Join",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "issue_cert", Type: NodeTypeTask, TaskTemplateID: "ISSUE_CERT"},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			// Leak: edge bypassing gw_join to post-join node issue_cert
+			{ID: "e_leak", SourceID: "process", TargetID: "issue_cert"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "issue_cert"},
+			{ID: "e5", SourceID: "issue_cert", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	// issue_cert / end are reachable from gw_split without passing through gw_join and cannot reach gw_join
+	s.True(strings.Contains(err.Error(), "cannot reach paired BATCH_JOIN") ||
+		strings.Contains(err.Error(), "without passing through paired BATCH_JOIN"))
+}
+
+// --- Test 7d: Validation — edge escaping batch region directly to END ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_EscapesBatchRegionToEnd_Fails() {
+	def := WorkflowDefinition{
+		ID:   "leak_to_end_test",
+		Name: "Leak To End",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			// Leak: edge bypassing gw_join directly to END
+			{ID: "e_leak", SourceID: "process", TargetID: "end"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "without passing through paired BATCH_JOIN")
+}
+
+// --- Test 7e: Validation — dead-end node inside batch region ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_InternalDeadEndNode_Fails() {
+	def := WorkflowDefinition{
+		ID:   "dead_end_test",
+		Name: "Dead End Inside Batch",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "dead_task", Type: NodeTypeTask, TaskTemplateID: "DEAD"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e2b", SourceID: "gw_split", TargetID: "dead_task"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			// dead_task has no outgoing edges
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "dead-end node")
+}
+
 // --- Test 8: Depth-2 nesting (phyto consignment) ---
 
 func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {

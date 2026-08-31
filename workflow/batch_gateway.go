@@ -379,12 +379,17 @@ func extractSubGraph(def WorkflowDefinition, startNodeID, stopNodeID string) Wor
 	}
 	walk(startNodeID)
 
-	// Build the sub-graph with a synthetic START → startNodeID and edges to stopNodeID → synthetic END.
+	// If the branch connects directly to the join, synthetic START connects directly to synthetic END.
+	entryTargetID := startNodeID
+	if entryTargetID == stopNodeID {
+		entryTargetID = "_batch_end"
+	}
+
 	subNodes := []Node{
 		{ID: "_batch_start", Type: NodeTypeStart},
 	}
 	subEdges := []Edge{
-		{ID: "_batch_e_start", SourceID: "_batch_start", TargetID: startNodeID},
+		{ID: "_batch_e_start", SourceID: "_batch_start", TargetID: entryTargetID},
 	}
 
 	for _, node := range def.Nodes {
