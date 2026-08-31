@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -1029,4 +1030,136 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MaxDepthExceeded_Fails() {
 	err := env.GetWorkflowError()
 	s.Error(err)
 	s.Contains(err.Error(), "maximum batch nesting depth 4 exceeded")
+}
+
+// --- Test 13: Child workflow returns corrupted items variable → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "corrupt_child_items_test",
+		Name: "Corrupt Child Items Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "corrupt_task", Type: NodeTypeTask, TaskTemplateID: "CORRUPT_TASK",
+				OutputMapping: map[string]string{"bad_items": "_items"}},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "corrupt_task"},
+			{ID: "e3", SourceID: "corrupt_task", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any) error {
+			if strings.Contains(workflowID, "--") {
+				return fmt.Errorf("workflow %s not found in host registry", workflowID)
+			}
+			return nil
+		})
+
+	// CORRUPT_TASK outputs a string instead of a slice for _items
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CORRUPT_TASK", mock.Anything).
+		Return(map[string]any{"bad_items": "not-a-slice"}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, time.Millisecond)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "corrupt-items-1"})
+
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "item1", "name": "foo"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "returned invalid items")
+}
+
+// --- Test 14: Child workflow returns item with missing ID field → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "missing_id_child_test",
+		Name: "Missing ID Child Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "strip_id_task", Type: NodeTypeTask, TaskTemplateID: "STRIP_ID_TASK",
+				OutputMapping: map[string]string{"items": "_items"}},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "strip_id_task"},
+			{ID: "e3", SourceID: "strip_id_task", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any) error {
+			if strings.Contains(workflowID, "--") {
+				return fmt.Errorf("workflow %s not found in host registry", workflowID)
+			}
+			return nil
+		})
+
+	// STRIP_ID_TASK outputs an item without an id field
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "STRIP_ID_TASK", mock.Anything).
+		Return(map[string]any{"items": []any{map[string]any{"name": "foo"}}}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, time.Millisecond)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "strip-id-1"})
+
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "item1", "name": "foo"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "returned item missing required ID field")
 }

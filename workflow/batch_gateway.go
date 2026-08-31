@@ -242,16 +242,28 @@ func collectAndMergeBatchResults(
 				nodeID, child.EdgeID, err)
 		}
 		if childOutput == nil {
-			continue
+			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned nil output",
+				nodeID, child.EdgeID)
 		}
 
-		childItemsRaw, _ := maputil.GetNestedKey(childOutput.WorkflowVariables, itemsVar)
-		childSlice, _ := toItemSlice(childItemsRaw)
+		childItemsRaw, exists := maputil.GetNestedKey(childOutput.WorkflowVariables, itemsVar)
+		if !exists {
+			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q missing items variable %q in output",
+				nodeID, child.EdgeID, itemsVar)
+		}
+		childSlice, err := toItemSlice(childItemsRaw)
+		if err != nil {
+			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned invalid items: %w",
+				nodeID, child.EdgeID, err)
+		}
 		for _, item := range childSlice {
-			id := fmt.Sprintf("%v", getItemID(item, idField))
-			if id != "" {
-				mergedItems[id] = item
+			idVal := getItemID(item, idField)
+			idStr := fmt.Sprintf("%v", idVal)
+			if idVal == nil || idVal == "" || idStr == "" {
+				return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
+					nodeID, child.EdgeID, idField)
 			}
+			mergedItems[idStr] = item
 		}
 	}
 
