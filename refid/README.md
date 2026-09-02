@@ -9,7 +9,7 @@
 
 - **Config-Driven**: Define ID structures for multiple Issuers and ID Types purely via YAML.
 - **Typed Segments**: Concatenate `literal`, `list`, `date`, and `sequence` segments into custom ID formats.
-- **Durable Counters**: PostgreSQL-backed atomic sequence increment (`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`).
+- **Durable Counters, Pluggable Backend**: Atomic sequence increment via raw SQL (no ORM) against the bundled PostgreSQL (`refid/postgres`) backend, or bring your own `refid.Store` implementation.
 - **Flexible Resets**: Scope key templates allow counters to reset daily (`{yyyyMMdd}`), monthly (`{yyyyMM}`), yearly (`{yyyy}`), or never.
 - **Fail-Fast & Side-Effect Free**: Two-pass generation validates all caller parameters before executing database side-effects.
 
@@ -22,12 +22,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 
 	"github.com/OpenNSW/core/refid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	"github.com/OpenNSW/core/refid/postgres"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
 func main() {
@@ -39,18 +41,21 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// 2. Connect DB and auto-migrate sequence table
-	dsn := "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	// 2. Connect DB and migrate the sequence table
+	dsn := "host=localhost port=5432 user=postgres password=postgres dbname=postgres sslmode=disable"
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatalf("failed to connect db: %v", err)
+		log.Fatalf("failed to open db: %v", err)
 	}
-	if err := refid.AutoMigrate(db); err != nil {
+	if err := postgres.Migrate(ctx, db); err != nil {
 		log.Fatalf("migration failed: %v", err)
 	}
 
 	// 3. Initialize Registry
-	store := refid.NewPostgresStore(db)
+	store, err := postgres.New(db)
+	if err != nil {
+		log.Fatalf("failed to create store: %v", err)
+	}
 	reg, err := refid.NewRegistry(cfg, store)
 	if err != nil {
 		log.Fatalf("failed to create registry: %v", err)
@@ -101,7 +106,11 @@ Reserved placeholders:
 
 ## Database Setup
 
-The default `SequenceStore` uses a single PostgreSQL table (`refid_sequences`) with row-level atomic upsert:
+`refid.Store` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships a raw-SQL PostgreSQL backend in its own subpackage so importing the core package never pulls in a database driver.
+
+### PostgreSQL (`refid/postgres`)
+
+A single table (`refid_sequences` by default) with row-level atomic upsert:
 
 ```sql
 CREATE TABLE IF NOT EXISTS refid_sequences (
@@ -111,14 +120,18 @@ CREATE TABLE IF NOT EXISTS refid_sequences (
 );
 ```
 
-You can initialize the table automatically via `refid.AutoMigrate(db)`.
-
-To use a custom table name:
+Initialize it automatically via `postgres.Migrate(ctx, db)`. To use a custom table name:
 
 ```go
-store := refid.NewPostgresStore(db, refid.WithTableName("custom_sequences"))
-err := refid.AutoMigrate(db, refid.WithTableName("custom_sequences"))
+store, err := postgres.New(db, postgres.WithTableName("custom_sequences"))
+err = postgres.Migrate(ctx, db, postgres.WithTableName("custom_sequences"))
 ```
+
+`db` is a `*sql.DB` opened against the `pgx` driver (`sql.Open("pgx", dsn)`), not a `*gorm.DB` — see the Quickstart above.
+
+### Bring your own backend
+
+Any type implementing `refid.Store` works — a Redis-backed counter, an in-memory store for tests, etc. `Next` must be safe for concurrent use, including across multiple process instances sharing the same backing store — see the doc comment on `refid.Store` for the exact contract.
 
 ---
 
