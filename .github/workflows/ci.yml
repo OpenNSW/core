@@ -516,6 +516,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # No equivalent service is needed for the sqlite backend -- it's embedded
+    # (no server to stand up), so its tests already run unconditionally
+    # under the plain `go test ./...` below.
     services:
       postgres:
         image: postgres:16-alpine
