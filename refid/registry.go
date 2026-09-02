@@ -14,7 +14,7 @@
 // # Usage
 //
 //	cfg, err := refid.LoadConfig("refid_config.yaml")
-//	store := refid.NewPostgresStore(db)
+//	store, err := postgres.New(db) // github.com/OpenNSW/core/refid/postgres
 //	reg, err := refid.NewRegistry(cfg, store)
 //
 //	id, err := reg.Generate(ctx, "RTA", "application_id", map[string]string{
@@ -89,7 +89,7 @@ type compiledFormat struct {
 
 // registry is the package-private implementation of Registry.
 // It is read-only after construction; no locking is needed here.
-// Concurrent safety for sequence counters is the responsibility of SequenceStore.
+// Concurrent safety for sequence counters is the responsibility of Store.
 type registry struct {
 	formats map[formatKey]*compiledFormat
 }
@@ -103,7 +103,7 @@ type registry struct {
 //
 // Fail-fast at startup: every error that would surface at generation time is
 // caught here instead.
-func NewRegistry(cfg Config, store SequenceStore) (Registry, error) {
+func NewRegistry(cfg Config, store Store) (Registry, error) {
 	formats := make(map[formatKey]*compiledFormat)
 
 	for _, issuerCfg := range cfg.Issuers {
@@ -170,7 +170,7 @@ func (r *registry) Generate(ctx context.Context, issuer, idType string, params m
 
 // compileFormat validates and pre-compiles a single FormatConfig into its
 // segment implementations.
-func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, store SequenceStore) (*compiledFormat, error) {
+func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, store Store) (*compiledFormat, error) {
 	if len(cfg.Segments) == 0 {
 		return nil, fmt.Errorf("format has no segments")
 	}
@@ -187,7 +187,7 @@ func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, s
 }
 
 // compileSegment dispatches to the appropriate constructor based on sc.Type.
-func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]string, store SequenceStore) (segment, error) {
+func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]string, store Store) (segment, error) {
 	switch sc.Type {
 	case "literal":
 		return newLiteralSegment(sc)
