@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/OpenNSW/core/refid"
 	"github.com/OpenNSW/core/refid/sqlite"
@@ -112,6 +113,66 @@ func TestNew_InvalidTableName(t *testing.T) {
 		if _, err := sqlite.New(nil, sqlite.WithTableName(name)); err == nil {
 			t.Errorf("expected New error for invalid table name %q, got nil", name)
 		}
+	}
+}
+
+// TestStore_NextDoesNotHangBehindHeldTransaction proves Next fails promptly
+// rather than hanging forever when it can't get SQLite's write lock, even
+// though Store's own mutex (see the package doc's "Concurrency" section)
+// only serializes calls made through this one Store — it can't see or wait
+// on a transaction opened directly against the same *sql.DB elsewhere in the
+// caller's application. Before New stopped pinning the pool to a single
+// connection, this scenario deadlocked: Next would block forever waiting for
+// a connection the held transaction was never going to release.
+//
+// Next is deliberately called with context.Background() (no deadline) here:
+// database/sql's own connection-pool checkout also respects a ctx deadline
+// while waiting for a free connection, so a short-deadline ctx passed
+// straight to Next can't tell "the pool is exhausted and will never free up"
+// apart from "Next got its own connection and simply failed fast on
+// SQLite's file lock" — both would return within the same short window. Only
+// an unbounded ctx, guarded by an external test-level timeout (via the
+// goroutine+select below, not anything Next itself respects), can actually
+// distinguish a genuine hang from a bounded failure.
+func TestStore_NextDoesNotHangBehindHeldTransaction(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate failed: %v", err)
+	}
+	store, err := sqlite.New(db)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Simulate another part of the caller's application holding a write
+	// transaction open on the same *sql.DB — this takes SQLite's
+	// whole-database write lock and does not release it until Commit or
+	// Rollback.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	if _, err := tx.ExecContext(ctx, "INSERT INTO refid_sequences (scope_key, counter, updated_at) VALUES ('holder', 0, datetime('now'))"); err != nil {
+		t.Fatalf("failed to take the write lock via tx: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Next(context.Background(), "OTHER:scope", 100)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected Next to fail while the write lock is held by another transaction, got nil error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not return within 2s — it appears to be waiting forever for a pooled " +
+			"connection that a transaction held elsewhere will never release")
 	}
 }
 

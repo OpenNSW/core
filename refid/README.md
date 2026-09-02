@@ -136,13 +136,24 @@ Same schema shape and API, using the pure-Go `modernc.org/sqlite` driver (no CGO
 ```go
 db, err := sql.Open("sqlite", "refid.db") // registered by importing github.com/OpenNSW/core/refid/sqlite
 if err := sqlite.Migrate(ctx, db); err != nil { ... }
-store, err := sqlite.New(db) // pins db to a single connection; see New's doc comment
+store, err := sqlite.New(db)
 ```
 
-SQLite allows only one writer at a time, so concurrent `Next` calls serialize — a normal
-throughput characteristic, not a correctness concern. Because it needs no external
-service, this backend is a convenient choice for local development and tests, alongside
-— or instead of — a hand-rolled `refid.Store` test double.
+`New` never modifies `db`'s connection-pool configuration — `db` may be shared with the
+rest of your application. `Next` is guarded by an in-process mutex, so concurrent `Next`
+calls made through the same `Store` never race each other into a `SQLITE_BUSY` error —
+they queue instead. That mutex can't see a transaction opened directly against the same
+`db` elsewhere, or a second process sharing the same file; either can still hit
+`SQLITE_BUSY` immediately, since nothing sets SQLite's `busy_timeout` by default. If you
+need `Next` to wait instead of failing in those cases, open `db` with a busy timeout in
+the DSN, e.g. `sql.Open("sqlite", "file:refid.db?_busy_timeout=5000")`.
+
+In short: this backend satisfies `refid.Store`'s concurrency contract for a single
+process out of the box, which is exactly what makes it a convenient choice for local
+development and tests, alongside — or instead of — a hand-rolled `refid.Store` test
+double. For a deployment with multiple process instances sharing one SQLite file, either
+configure `busy_timeout` as above or prefer `refid/postgres`, which has no equivalent
+limitation.
 
 ### Bring your own backend
 
