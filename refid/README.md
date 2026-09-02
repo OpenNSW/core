@@ -9,7 +9,7 @@
 
 - **Config-Driven**: Define ID structures for multiple Issuers and ID Types purely via YAML.
 - **Typed Segments**: Concatenate `literal`, `list`, `date`, and `sequence` segments into custom ID formats.
-- **Durable Counters, Pluggable Backend**: Atomic sequence increment via raw SQL (no ORM) against the bundled PostgreSQL (`refid/postgres`) backend, or bring your own `refid.Store` implementation.
+- **Durable Counters, Pluggable Backend**: Atomic sequence increment via raw SQL (no ORM) against either the bundled PostgreSQL (`refid/postgres`) or SQLite (`refid/sqlite`) backend, or bring your own `refid.Store` implementation.
 - **Flexible Resets**: Scope key templates allow counters to reset daily (`{yyyyMMdd}`), monthly (`{yyyyMM}`), yearly (`{yyyy}`), or never.
 - **Fail-Fast & Side-Effect Free**: Two-pass generation validates all caller parameters before executing database side-effects.
 
@@ -106,7 +106,7 @@ Reserved placeholders:
 
 ## Database Setup
 
-`refid.Store` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships a raw-SQL PostgreSQL backend in its own subpackage so importing the core package never pulls in a database driver.
+`refid.Store` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships two raw-SQL backends, each in its own subpackage so importing the core package never pulls in a database driver.
 
 ### PostgreSQL (`refid/postgres`)
 
@@ -128,6 +128,21 @@ err = postgres.Migrate(ctx, db, postgres.WithTableName("custom_sequences"))
 ```
 
 `db` is a `*sql.DB` opened against the `pgx` driver (`sql.Open("pgx", dsn)`), not a `*gorm.DB` — see the Quickstart above.
+
+### SQLite (`refid/sqlite`)
+
+Same schema shape and API, using the pure-Go `modernc.org/sqlite` driver (no CGO):
+
+```go
+db, err := sql.Open("sqlite", "refid.db") // registered by importing github.com/OpenNSW/core/refid/sqlite
+if err := sqlite.Migrate(ctx, db); err != nil { ... }
+store, err := sqlite.New(db) // pins db to a single connection; see New's doc comment
+```
+
+SQLite allows only one writer at a time, so concurrent `Next` calls serialize — a normal
+throughput characteristic, not a correctness concern. Because it needs no external
+service, this backend is a convenient choice for local development and tests, alongside
+— or instead of — a hand-rolled `refid.Store` test double.
 
 ### Bring your own backend
 
