@@ -26,6 +26,7 @@ import (
 	"log"
 
 	"github.com/OpenNSW/core/refid"
+	refidpostgres "github.com/OpenNSW/core/refid/store/postgres"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -45,12 +46,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to connect db: %v", err)
 	}
-	if err := refid.AutoMigrate(db); err != nil {
+	if err := refidpostgres.AutoMigrate(db); err != nil {
 		log.Fatalf("migration failed: %v", err)
 	}
 
 	// 3. Initialize Registry
-	store := refid.NewPostgresStore(db)
+	store := refidpostgres.NewPostgresStore(db)
 	reg, err := refid.NewRegistry(cfg, store)
 	if err != nil {
 		log.Fatalf("failed to create registry: %v", err)
@@ -111,13 +112,14 @@ CREATE TABLE IF NOT EXISTS refid_sequences (
 );
 ```
 
-You can initialize the table automatically via `refid.AutoMigrate(db)`.
+You can initialize the table automatically via `postgres.AutoMigrate(db)` (from the
+`refid/store/postgres` subpackage).
 
 To use a custom table name:
 
 ```go
-store := refid.NewPostgresStore(db, refid.WithTableName("custom_sequences"))
-err := refid.AutoMigrate(db, refid.WithTableName("custom_sequences"))
+store := postgres.NewPostgresStore(db, postgres.WithTableName("custom_sequences"))
+err := postgres.AutoMigrate(db, postgres.WithTableName("custom_sequences"))
 ```
 
 ---

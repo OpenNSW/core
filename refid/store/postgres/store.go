@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Lanka Software Foundation
 
-package refid
+package postgres
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
+
+	"github.com/OpenNSW/core/refid"
 
 	"gorm.io/gorm"
 )
@@ -51,17 +53,17 @@ func WithTableName(name string) PostgresOption {
 	}
 }
 
-// postgresStore is the default SequenceStore backed by PostgreSQL.
+// postgresStore is the default refid.SequenceStore backed by PostgreSQL.
 // It uses an upsert-and-increment query that is atomic at the database level.
 type postgresStore struct {
 	db    *gorm.DB
 	query string // built once at construction time from the table name
 }
 
-// NewPostgresStore returns a SequenceStore backed by PostgreSQL.
+// NewPostgresStore returns a refid.SequenceStore backed by PostgreSQL.
 // By default it uses the "refid_sequences" table name, which can be overridden
 // via WithTableName option. Panics if an invalid table name option is provided.
-func NewPostgresStore(db *gorm.DB, opts ...PostgresOption) SequenceStore {
+func NewPostgresStore(db *gorm.DB, opts ...PostgresOption) refid.SequenceStore {
 	cfg := defaultPostgresConfig()
 	for _, opt := range opts {
 		opt(&cfg)
@@ -106,18 +108,18 @@ CREATE TABLE IF NOT EXISTS %s (
 }
 
 // Next atomically increments the counter for scopeKey and returns the new value,
-// provided counter < max. If counter >= max, returns ErrCounterOverflow without incrementing.
+// provided counter < max. If counter >= max, returns refid.ErrCounterOverflow without incrementing.
 func (s *postgresStore) Next(ctx context.Context, scopeKey string, max int64) (int64, error) {
 	var counter int64
 	err := s.db.WithContext(ctx).Raw(s.query, scopeKey, max).Scan(&counter).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, fmt.Errorf("%w: scope %q counter reached max limit %d", ErrCounterOverflow, scopeKey, max)
+			return 0, fmt.Errorf("%w: scope %q counter reached max limit %d", refid.ErrCounterOverflow, scopeKey, max)
 		}
 		return 0, fmt.Errorf("refid: sequence increment failed for scope %q: %w", scopeKey, err)
 	}
 	if counter == 0 {
-		return 0, fmt.Errorf("%w: scope %q counter reached max limit %d", ErrCounterOverflow, scopeKey, max)
+		return 0, fmt.Errorf("%w: scope %q counter reached max limit %d", refid.ErrCounterOverflow, scopeKey, max)
 	}
 	return counter, nil
 }

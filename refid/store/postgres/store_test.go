@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Lanka Software Foundation
 
-package refid_test
+package postgres_test
 
 import (
 	"context"
@@ -10,7 +10,8 @@ import (
 	"testing"
 
 	"github.com/OpenNSW/core/refid"
-	"gorm.io/driver/postgres"
+	"github.com/OpenNSW/core/refid/store/postgres"
+	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -24,19 +25,19 @@ func TestPostgresStore_Integration(t *testing.T) {
 		t.Skip("skipping Postgres integration test; set POSTGRES_TEST_DSN to run")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(gormpostgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to connect to postgres: %v", err)
 	}
 
 	// 1. AutoMigrate default table
-	if err := refid.AutoMigrate(db); err != nil {
+	if err := postgres.AutoMigrate(db); err != nil {
 		t.Fatalf("AutoMigrate failed: %v", err)
 	}
 
 	// 2. AutoMigrate custom table
 	customTable := "refid_integration_test_seqs"
-	if err := refid.AutoMigrate(db, refid.WithTableName(customTable)); err != nil {
+	if err := postgres.AutoMigrate(db, postgres.WithTableName(customTable)); err != nil {
 		t.Fatalf("AutoMigrate with custom table failed: %v", err)
 	}
 	defer func() {
@@ -44,7 +45,7 @@ func TestPostgresStore_Integration(t *testing.T) {
 	}()
 
 	// 3. Create store and test Next increments
-	store := refid.NewPostgresStore(db, refid.WithTableName(customTable))
+	store := postgres.NewPostgresStore(db, postgres.WithTableName(customTable))
 	ctx := context.Background()
 	scope := "RTA:app_id:COL:20260826"
 
@@ -79,5 +80,32 @@ func TestPostgresStore_Integration(t *testing.T) {
 	}
 	if currentCounter != 2 {
 		t.Errorf("expected counter in db to remain frozen at 2, got %d", currentCounter)
+	}
+}
+
+func TestPostgresStore_InvalidTableName(t *testing.T) {
+	invalidNames := []string{
+		"users; DROP TABLE users;--",
+		"refid table",
+		"123refid",
+		"refid-sequences",
+		"table'quote",
+	}
+
+	for _, name := range invalidNames {
+		err := postgres.AutoMigrate(nil, postgres.WithTableName(name))
+		if err == nil {
+			t.Errorf("expected AutoMigrate error for invalid table name %q, got nil", name)
+		}
+
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Errorf("expected NewPostgresStore to panic for invalid table name %q, got no panic", name)
+				}
+			}()
+			_ = postgres.NewPostgresStore(nil, postgres.WithTableName(name))
+		}()
 	}
 }
