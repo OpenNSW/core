@@ -5,51 +5,56 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
 
 	"github.com/OpenNSW/core/refid"
 	"github.com/OpenNSW/core/refid/store/postgres"
-	gormpostgres "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
-// TestPostgresStore_Integration tests AutoMigrate and PostgresStore against a live
+// TestStore_Integration tests Migrate and the SequenceStore against a live
 // PostgreSQL instance if POSTGRES_TEST_DSN is provided in the environment.
 //
-// Example DSN: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
-func TestPostgresStore_Integration(t *testing.T) {
+// Example DSN: "host=localhost port=5432 user=postgres password=postgres dbname=refid_test sslmode=disable"
+func TestStore_Integration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("skipping Postgres integration test; set POSTGRES_TEST_DSN to run")
 	}
 
-	db, err := gorm.Open(gormpostgres.Open(dsn), &gorm.Config{})
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
+		t.Fatalf("failed to open postgres connection: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	if err := db.PingContext(ctx); err != nil {
 		t.Fatalf("failed to connect to postgres: %v", err)
 	}
 
-	// 1. AutoMigrate default table
-	if err := postgres.AutoMigrate(db); err != nil {
-		t.Fatalf("AutoMigrate failed: %v", err)
+	// 1. Migrate default table
+	if err := postgres.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate failed: %v", err)
 	}
 
-	// 2. AutoMigrate custom table
+	// 2. Migrate custom table
 	customTable := "refid_integration_test_seqs"
-	if err := postgres.AutoMigrate(db, postgres.WithTableName(customTable)); err != nil {
-		t.Fatalf("AutoMigrate with custom table failed: %v", err)
+	if err := postgres.Migrate(ctx, db, postgres.WithTableName(customTable)); err != nil {
+		t.Fatalf("Migrate with custom table failed: %v", err)
 	}
-	defer func() {
-		_ = db.Exec("DROP TABLE IF EXISTS " + customTable).Error
-	}()
+	t.Cleanup(func() {
+		_, _ = db.Exec("DROP TABLE IF EXISTS " + customTable)
+	})
 
 	// 3. Create store and test Next increments
-	store := postgres.NewPostgresStore(db, postgres.WithTableName(customTable))
-	ctx := context.Background()
+	store, err := postgres.New(db, postgres.WithTableName(customTable))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	scope := "RTA:app_id:COL:20260826"
 
-	// 1st increment -> 1
 	c1, err := store.Next(ctx, scope, 100)
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
@@ -58,7 +63,6 @@ func TestPostgresStore_Integration(t *testing.T) {
 		t.Errorf("expected counter 1, got %d", c1)
 	}
 
-	// 2nd increment -> 2
 	c2, err := store.Next(ctx, scope, 100)
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
@@ -75,7 +79,7 @@ func TestPostgresStore_Integration(t *testing.T) {
 
 	// Verify counter in DB remained frozen at 2 after failed overflow call
 	var currentCounter int64
-	if err := db.Raw("SELECT counter FROM "+customTable+" WHERE scope_key = ?", scope).Scan(&currentCounter).Error; err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT counter FROM "+customTable+" WHERE scope_key = $1", scope).Scan(&currentCounter); err != nil {
 		t.Fatalf("failed to query counter from db: %v", err)
 	}
 	if currentCounter != 2 {
@@ -83,7 +87,7 @@ func TestPostgresStore_Integration(t *testing.T) {
 	}
 }
 
-func TestPostgresStore_InvalidTableName(t *testing.T) {
+func TestNew_InvalidTableName(t *testing.T) {
 	invalidNames := []string{
 		"users; DROP TABLE users;--",
 		"refid table",
@@ -93,19 +97,11 @@ func TestPostgresStore_InvalidTableName(t *testing.T) {
 	}
 
 	for _, name := range invalidNames {
-		err := postgres.AutoMigrate(nil, postgres.WithTableName(name))
-		if err == nil {
-			t.Errorf("expected AutoMigrate error for invalid table name %q, got nil", name)
+		if err := postgres.Migrate(context.Background(), nil, postgres.WithTableName(name)); err == nil {
+			t.Errorf("expected Migrate error for invalid table name %q, got nil", name)
 		}
-
-		func() {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Errorf("expected NewPostgresStore to panic for invalid table name %q, got no panic", name)
-				}
-			}()
-			_ = postgres.NewPostgresStore(nil, postgres.WithTableName(name))
-		}()
+		if _, err := postgres.New(nil, postgres.WithTableName(name)); err == nil {
+			t.Errorf("expected New error for invalid table name %q, got nil", name)
+		}
 	}
 }
