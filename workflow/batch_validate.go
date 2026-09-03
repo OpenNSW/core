@@ -66,9 +66,9 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 	}
 
 	// 4. Sub-graph topological containment: enforce that every path from BATCH_SPLIT
-	// reaches its paired BATCH_JOIN, and no edges escape the sub-graph region.
+	// reaches its paired BATCH_JOIN, and no edges escape or illegally enter the sub-graph region.
 	for splitID, joinID := range pairedJoins {
-		if err := validateBatchRegion(splitID, joinID, nodesByID, forwardEdges, reverseEdges); err != nil {
+		if err := validateBatchRegion(splitID, joinID, pairedJoins, nodesByID, forwardEdges, reverseEdges); err != nil {
 			return err
 		}
 	}
@@ -77,9 +77,10 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 }
 
 // validateBatchRegion checks that the sub-graph between splitID and joinID is strictly
-// closed: all paths must terminate at joinID, with no dead ends or escaped edges.
+// closed: all paths must terminate at joinID, with no dead ends, escaped edges, or illegal entries.
 func validateBatchRegion(
 	splitID, joinID string,
+	pairedJoins map[string]string,
 	nodesByID map[string]*Node,
 	forwardEdges map[string][]Edge,
 	reverseEdges map[string][]string,
@@ -141,6 +142,30 @@ func validateBatchRegion(
 		}
 		if !canReachJoin[nodeID] {
 			return fmt.Errorf("BATCH_SPLIT node %q region contains node %q which cannot reach paired BATCH_JOIN %q", splitID, nodeID, joinID)
+		}
+
+		// Nested BATCH_SPLIT must have its paired BATCH_JOIN contained within this batch region.
+		if node.Type == NodeTypeGateway && node.GatewayType == GatewayTypeBatchSplit && nodeID != splitID {
+			nestedJoinID := pairedJoins[nodeID]
+			if !regionNodes[nestedJoinID] {
+				return fmt.Errorf("BATCH_SPLIT node %q contains nested BATCH_SPLIT %q whose paired BATCH_JOIN %q is outside the batch region", splitID, nodeID, nestedJoinID)
+			}
+		}
+
+		// Encapsulation: no edges from outside the batch region may enter intermediate region nodes.
+		if nodeID != splitID {
+			for _, prev := range reverseEdges[nodeID] {
+				if !regionNodes[prev] {
+					return fmt.Errorf("BATCH_SPLIT node %q region contains node %q with incoming edge from outside the batch region (from %q)", splitID, nodeID, prev)
+				}
+			}
+		}
+	}
+
+	// 4. Encapsulation: all incoming edges to the paired BATCH_JOIN must originate within this batch region.
+	for _, prev := range reverseEdges[joinID] {
+		if !regionNodes[prev] {
+			return fmt.Errorf("BATCH_JOIN node %q has incoming edge from node %q outside its paired BATCH_SPLIT %q region", joinID, prev, splitID)
 		}
 	}
 

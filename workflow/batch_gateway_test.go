@@ -640,6 +640,102 @@ func (s *BatchGatewayTestSuite) TestBatchValidation_InternalDeadEndNode_Fails() 
 	s.Contains(err.Error(), "dead-end node")
 }
 
+// --- Test 7f: Validation — interleaved batch regions fail ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_InterleavedBatchRegions_Fails() {
+	def := WorkflowDefinition{
+		ID:   "interleaved_test",
+		Name: "Interleaved Batch Regions",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split1", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "gw_split2", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "task_a", Type: NodeTypeTask, TaskTemplateID: "TASK_A"},
+			{ID: "gw_join1", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split1"}},
+			{ID: "gw_join2", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split2"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split1"},
+			{ID: "e2", SourceID: "gw_split1", TargetID: "gw_split2"},
+			{ID: "e3", SourceID: "gw_split2", TargetID: "task_a"},
+			{ID: "e4", SourceID: "task_a", TargetID: "gw_join1"},
+			{ID: "e5", SourceID: "gw_join1", TargetID: "gw_join2"},
+			{ID: "e6", SourceID: "gw_join2", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "outside the batch region")
+}
+
+// --- Test 7g: Validation — external edge entering batch region fails ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_ExternalEdgeEnteringRegion_Fails() {
+	def := WorkflowDefinition{
+		ID:   "external_enter_test",
+		Name: "External Edge Entering Region",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "ext_task", Type: NodeTypeTask, TaskTemplateID: "EXT_TASK"},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e1b", SourceID: "start", TargetID: "ext_task"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e_ext", SourceID: "ext_task", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "incoming edge from outside the batch region")
+}
+
+// --- Test 7h: Validation — external edge entering BATCH_JOIN fails ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_ExternalEdgeEnteringJoin_Fails() {
+	def := WorkflowDefinition{
+		ID:   "external_join_test",
+		Name: "External Edge Entering Join",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "ext_task", Type: NodeTypeTask, TaskTemplateID: "EXT_TASK"},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e1b", SourceID: "start", TargetID: "ext_task"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			{ID: "e_ext", SourceID: "ext_task", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "outside its paired BATCH_SPLIT")
+}
+
 // --- Test 8: Depth-2 nesting (phyto consignment) ---
 
 func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
@@ -1079,7 +1175,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fail
 			NodeID: "gw_split",
 			Action: AdminActionAbort,
 		})
-	}, time.Millisecond)
+	}, time.Second)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "corrupt-items-1"})
@@ -1145,7 +1241,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 			NodeID: "gw_split",
 			Action: AdminActionAbort,
 		})
-	}, time.Millisecond)
+	}, time.Second)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "strip-id-1"})
@@ -1162,4 +1258,77 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 	err := env.GetWorkflowError()
 	s.Error(err)
 	s.Contains(err.Error(), "returned item missing required ID field")
+}
+
+// --- Test 15: Child workflow returns duplicate item ID across partitions → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsDuplicateItemIDAcrossPartitions_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "dup_id_partitions_test",
+		Name: "Duplicate ID Across Partitions Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "task_a", Type: NodeTypeTask, TaskTemplateID: "TASK_A"},
+			{ID: "task_b", Type: NodeTypeTask, TaskTemplateID: "TASK_B",
+				OutputMapping: map[string]string{"items": "_items"}},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "task_a", Condition: `item.type == "a"`},
+			{ID: "e3", SourceID: "gw_split", TargetID: "task_b", Condition: `item.type == "b"`},
+			{ID: "e4", SourceID: "task_a", TargetID: "gw_join"},
+			{ID: "e5", SourceID: "task_b", TargetID: "gw_join"},
+			{ID: "e6", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any) error {
+			if strings.Contains(workflowID, "--") {
+				return fmt.Errorf("workflow %s not found in host registry", workflowID)
+			}
+			return nil
+		})
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything).
+		Return(map[string]any{}, nil)
+
+	// TASK_B returns an item with id "item-a", which already belongs to partition A
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything).
+		Return(map[string]any{"items": []any{map[string]any{"id": "item-a", "type": "b"}}}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, time.Second)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "dup-partition-id-1"})
+
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "item-a", "type": "a"},
+			map[string]any{"id": "item-b", "type": "b"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "duplicate item ID \"item-a\" returned across child partitions")
 }

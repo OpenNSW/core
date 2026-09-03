@@ -137,8 +137,10 @@ func partitionItems(
 
 		for i, e := range outEdges {
 			if e.Condition == "" || e.Condition == "true" {
-				edgeCopy := outEdges[i]
-				defaultEdge = &edgeCopy
+				if defaultEdge == nil {
+					edgeCopy := outEdges[i]
+					defaultEdge = &edgeCopy
+				}
 				continue
 			}
 			match, evalErr := EvaluateCondition(e.Condition, evalScope)
@@ -262,6 +264,10 @@ func collectAndMergeBatchResults(
 			if idVal == nil || idVal == "" || idStr == "" {
 				return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
 					nodeID, child.EdgeID, idField)
+			}
+			if _, alreadySeen := mergedItems[idStr]; alreadySeen {
+				return nil, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q returned across child partitions (from edge %q)",
+					nodeID, idStr, child.EdgeID)
 			}
 			mergedItems[idStr] = item
 		}
