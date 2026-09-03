@@ -106,7 +106,7 @@ Reserved placeholders:
 
 ## Database Setup
 
-`refid.SequenceStore` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships a raw-SQL PostgreSQL backend in its own subpackage so importing the core package never pulls in a database driver.
+`refid.SequenceStore` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships a raw-SQL PostgreSQL backend in its own subpackage. A program that imports only `refid` never compiles a database driver into its binary — Go's per-package import graph links `pgx` only if you actually import `refid/store/postgres`. `go.mod` still lists `pgx` as a requirement of the module as a whole, since every subpackage shares one `go.mod` for simplicity; that's a module-level dependency-graph entry, not something your binary picks up unless you import the subpackage that uses it.
 
 ### PostgreSQL (`refid/store/postgres`)
 
