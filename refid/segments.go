@@ -139,7 +139,7 @@ type sequenceSegment struct {
 	idType       string
 	scopeKeyTmpl string
 	padding      int
-	store        Store
+	store        SequenceStore
 }
 
 func (s *sequenceSegment) validate(params map[string]string, now time.Time) error {
@@ -165,12 +165,12 @@ func (s *sequenceSegment) render(ctx context.Context, params map[string]string, 
 
 // newSequenceSegment constructs a sequence segment, associating it with the
 // store and binding the issuer/idType from the enclosing format.
-func newSequenceSegment(cfg SegmentConfig, issuer, idType string, store Store) (*sequenceSegment, error) {
+func newSequenceSegment(cfg SegmentConfig, issuer, idType string, store SequenceStore) (*sequenceSegment, error) {
 	if cfg.ScopeKey == "" {
 		return nil, fmt.Errorf("refid: sequence segment requires a non-empty scopeKey")
 	}
 	if store == nil {
-		return nil, fmt.Errorf("refid: sequence segment requires a non-nil Store")
+		return nil, fmt.Errorf("refid: sequence segment requires a non-nil SequenceStore")
 	}
 	if cfg.Padding < 1 || cfg.Padding > 18 {
 		return nil, fmt.Errorf("refid: sequence segment padding must be between 1 and 18, got %d", cfg.Padding)
