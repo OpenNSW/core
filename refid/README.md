@@ -9,7 +9,7 @@
 
 - **Config-Driven**: Define ID structures for multiple Issuers and ID Types purely via YAML.
 - **Typed Segments**: Concatenate `literal`, `list`, `date`, and `sequence` segments into custom ID formats.
-- **Durable Counters**: Atomic sequence increment via raw SQL (no ORM) against the bundled PostgreSQL backend (`refid/store/postgres`), or bring your own `refid.SequenceStore` implementation.
+- **Durable Counters, Pluggable Backend**: Atomic sequence increment via raw SQL (no ORM) against either the bundled PostgreSQL (`refid/store/postgres`) or SQLite (`refid/store/sqlite`) backend, or bring your own `refid.SequenceStore` implementation.
 - **Flexible Resets**: Scope key templates allow counters to reset daily (`{yyyyMMdd}`), monthly (`{yyyyMM}`), yearly (`{yyyy}`), or never.
 - **Fail-Fast & Side-Effect Free**: Two-pass generation validates all caller parameters before executing database side-effects.
 
@@ -106,7 +106,7 @@ Reserved placeholders:
 
 ## Database Setup
 
-`refid.SequenceStore` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships a raw-SQL PostgreSQL backend in its own subpackage. A program that imports only `refid` never compiles a database driver into its binary — Go's per-package import graph links `pgx` only if you actually import `refid/store/postgres`. `go.mod` still lists `pgx` as a requirement of the module as a whole, since every subpackage shares one `go.mod` for simplicity; that's a module-level dependency-graph entry, not something your binary picks up unless you import the subpackage that uses it.
+`refid.SequenceStore` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships two raw-SQL backends, each in its own subpackage. A program that imports only `refid` never compiles a database driver into its binary — Go's per-package import graph links `pgx` or `modernc.org/sqlite` only if you actually import `refid/store/postgres` or `refid/store/sqlite`, respectively. `go.mod` still lists both as requirements of the module as a whole, since every subpackage shares one `go.mod` for simplicity; that's a module-level dependency-graph entry, not something your binary picks up unless you import the subpackage that uses it.
 
 ### PostgreSQL (`refid/store/postgres`)
 
@@ -129,9 +129,25 @@ err = postgres.Migrate(ctx, db, postgres.WithTableName("custom_sequences"))
 
 `db` is a `*sql.DB` opened against the `pgx` driver (`sql.Open("pgx", dsn)`) — see the Quickstart above.
 
+### SQLite (`refid/store/sqlite`)
+
+Same schema shape and API, using the pure-Go `modernc.org/sqlite` driver (no CGO):
+
+```go
+db, err := sql.Open("sqlite", "refid.db") // registered by importing github.com/OpenNSW/core/refid/store/sqlite
+if err := sqlite.Migrate(ctx, db); err != nil { ... }
+store, err := sqlite.New(db)
+```
+
+SQLite allows only one writer at a time, and nothing sets a busy timeout by default, so
+concurrent access can fail immediately with `SQLITE_BUSY`. Set a busy timeout in the DSN
+(e.g. `sql.Open("sqlite", "file:refid.db?_busy_timeout=5000")`) if you need `Next` to wait
+instead of failing, or use `refid/store/postgres` for real concurrent-safe access. This
+makes SQLite a convenient choice for local development and tests.
+
 ### Bring your own backend
 
-Any type implementing `refid.SequenceStore` works — a Redis-backed counter, an in-memory store for tests, etc. `Next` must be safe for concurrent use, including across multiple process instances sharing the same backing store — see the doc comment on `refid.SequenceStore` for the exact contract.
+Any type implementing `refid.SequenceStore` works — a Redis-backed counter, an in-memory store for tests, etc. Whether `Next` is safe under concurrent or multi-process use is entirely up to your implementation; the two bundled backends above sit at different points on that spectrum, so check their docs for what each one actually guarantees.
 
 ---
 
