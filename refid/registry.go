@@ -14,7 +14,7 @@
 // # Usage
 //
 //	cfg, err := refid.LoadConfig("refid_config.yaml")
-//	store := refid.NewPostgresStore(db)
+//	store := postgres.NewPostgresStore(db) // github.com/OpenNSW/core/refid/store/postgres
 //	reg, err := refid.NewRegistry(cfg, store)
 //
 //	id, err := reg.Generate(ctx, "RTA", "application_id", map[string]string{
