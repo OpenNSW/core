@@ -8,10 +8,12 @@ A powerful, JSON-DSL-driven graph interpreter engine built on top of the Go [Tem
 - **Multiple Node Types**:
   - **`START` / `END`**: Standard execution entry and exit points.
   - **`TASK`**: Executes application activities. Supports synchronous/asynchronous work execution.
-  - **`GATEWAY`**: Controls logical branching and joining (`EXCLUSIVE_SPLIT`, `PARALLEL_SPLIT`, `EXCLUSIVE_JOIN`, `PARALLEL_JOIN`).
+  - **`GATEWAY`**: Controls logical branching and joining:
+    - Control flow: `EXCLUSIVE_SPLIT`, `PARALLEL_SPLIT`, `EXCLUSIVE_JOIN`, `PARALLEL_JOIN`
+    - Batch partitioning: `BATCH_SPLIT` (partitions item slices by evaluating edge conditions per-item and spawns composable child workflows), `BATCH_JOIN` (merges child results by item ID)
   - **`SPLIT_TASK`**: Spawns multiple parallel child workflows dynamically (dynamic fan-out). Supports:
-    - `SAME_TEMPLATE`: Homogeneous splits running the same template across payloads.
-    - `DIFFERENT_TEMPLATES`: Poly-workflow / heterogeneous splits running different templates dynamically.
+    - `SAME_TEMPLATE` *(Deprecated: Use `BATCH_SPLIT` instead for inline DAG sub-graphs, aggregated tasks, and item-ID merging)*
+    - `DIFFERENT_TEMPLATES`: Poly-workflow / heterogeneous splits running different external templates dynamically.
     - Failure handling configurations (`FAIL_FAST` or `COLLECT_ALL`).
   - **`SIGNALING`**: Coordinates sibling branches spawned by the same `SPLIT_TASK` node without invoking any external activity. Two sub-types:
     - `EMIT`: Fires a signal asynchronously to all sibling branches (one hop up to the parent, one hop back down).
@@ -49,13 +51,29 @@ Workflows are defined through the [WorkflowDefinition](https://github.com/OpenNS
 type Node struct {
 	ID             string            `json:"id"`
 	Type           NodeType          `json:"type"`                       // START, END, TASK, GATEWAY, SPLIT_TASK, TIMER, or SIGNALING
-	GatewayType    GatewayType       `json:"gateway_type,omitempty"`     // EXCLUSIVE_SPLIT, PARALLEL_SPLIT, etc.
+	GatewayType    GatewayType       `json:"gateway_type,omitempty"`     // EXCLUSIVE_SPLIT, PARALLEL_SPLIT, BATCH_SPLIT, BATCH_JOIN, etc.
 	TaskTemplateID string            `json:"task_template_id,omitempty"` // ID of the task template to run
 	InputMapping   map[string]string `json:"input_mapping,omitempty"`    // Maps WorkflowVariables -> Task Input Key
 	OutputMapping  map[string]string `json:"output_mapping,omitempty"`   // Maps Task Output -> WorkflowVariables Key
 	SplitTask      *SplitTaskConfig  `json:"split_task,omitempty"`       // Configuration for dynamic fan-out splits
 	Timer          *TimerConfig      `json:"timer,omitempty"`            // Configuration for durable timer waits
-	Signaling      *SignalingConfig   `json:"signaling,omitempty"`        // Configuration for EMIT/WAIT signaling
+	Signaling      *SignalingConfig  `json:"signaling,omitempty"`        // Configuration for EMIT/WAIT signaling
+	BatchGateway   *BatchGatewayConfig `json:"batch_gateway,omitempty"`  // Configuration for BATCH_SPLIT item partitioning
+	BatchJoin      *BatchJoinConfig    `json:"batch_join,omitempty"`     // Configuration for BATCH_JOIN item merging
+}
+```
+
+### Batch Gateway Configuration (`BatchGatewayConfig` & `BatchJoinConfig`)
+```go
+type BatchGatewayConfig struct {
+	ItemsVariable string `json:"items_variable,omitempty"` // Dot-path to []Item (defaults to "_items")
+	IDField       string `json:"id_field,omitempty"`       // Unique item identifier field (defaults to "id")
+}
+
+type BatchJoinConfig struct {
+	GatewayNodeID string `json:"gateway_node_id"`          // Node ID of paired BATCH_SPLIT
+	ItemsVariable string `json:"items_variable,omitempty"` // Dot-path to []Item (defaults to "_items")
+	IDField       string `json:"id_field,omitempty"`       // Unique item identifier field (defaults to "id")
 }
 ```
 

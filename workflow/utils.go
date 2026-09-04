@@ -57,3 +57,10 @@ func ParseSplitTaskItem(itemRaw any) (SplitTaskItem, error) {
 
 	return item, nil
 }
+
+// FormatBatchChildWorkflowID constructs a deterministic child workflow ID for batch partitions.
+// The parentWorkflowID encodes ancestor paths, preventing collisions when the same partition key
+// appears at different gateway levels.
+func FormatBatchChildWorkflowID(parentWorkflowID, nodeID, partitionKey string) string {
+	return fmt.Sprintf("%s--%s--%s", parentWorkflowID, nodeID, partitionKey)
+}

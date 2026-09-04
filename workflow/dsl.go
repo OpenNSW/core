@@ -31,7 +31,14 @@ type SplitMode string
 
 // Core split task execution modes.
 const (
-	SplitModeSameTemplate       SplitMode = "SAME_TEMPLATE"
+	// SplitModeSameTemplate spawns one child workflow per item running the same external template.
+	//
+	// Deprecated: Prefer using BATCH_SPLIT gateway nodes instead. BATCH_SPLIT defines sub-graphs
+	// inline, supports conditional partitioning, aggregates tasks over item slices, and merges results
+	// by item ID without requiring external template registration.
+	SplitModeSameTemplate SplitMode = "SAME_TEMPLATE"
+
+	// SplitModeDifferentTemplates spawns child workflows dynamically based on each item's template_id.
 	SplitModeDifferentTemplates SplitMode = "DIFFERENT_TEMPLATES"
 )
 
@@ -135,6 +142,8 @@ const (
 	GatewayTypeParallelSplit  GatewayType = "PARALLEL_SPLIT"  // AND Split
 	GatewayTypeExclusiveJoin  GatewayType = "EXCLUSIVE_JOIN"  // XOR Join
 	GatewayTypeParallelJoin   GatewayType = "PARALLEL_JOIN"   // AND Join
+	GatewayTypeBatchSplit     GatewayType = "BATCH_SPLIT"     // Item-partitioning Split
+	GatewayTypeBatchJoin      GatewayType = "BATCH_JOIN"      // Item-merging Join
 )
 
 // Node represents a step in the workflow graph.
@@ -147,9 +156,11 @@ type Node struct {
 	OutputMapping  map[string]string `json:"output_mapping,omitempty"`   // Maps Task Output Key -> WorkflowVariables Key
 
 	// Extensions
-	SplitTask *SplitTaskConfig `json:"split_task,omitempty"`
-	Timer     *TimerConfig     `json:"timer,omitempty"`
-	Signaling *SignalingConfig `json:"signaling,omitempty"`
+	SplitTask    *SplitTaskConfig    `json:"split_task,omitempty"`
+	Timer        *TimerConfig        `json:"timer,omitempty"`
+	Signaling    *SignalingConfig    `json:"signaling,omitempty"`
+	BatchGateway *BatchGatewayConfig `json:"batch_gateway,omitempty"`
+	BatchJoin    *BatchJoinConfig    `json:"batch_join,omitempty"`
 }
 
 // Edge represents a directed connection between two nodes.
@@ -182,3 +193,47 @@ type WorkflowDefinition struct {
 	// any conditional logic required for branching.
 	Edges []Edge `json:"edges"`
 }
+
+// BatchGatewayConfig configures item-level partitioning for a BATCH_SPLIT gateway node.
+type BatchGatewayConfig struct {
+	// ItemsVariable is the dot-path in WorkflowVariables pointing to the item slice.
+	// Defaults to "_items" if empty.
+	ItemsVariable string `json:"items_variable,omitempty"`
+
+	// IDField is the field name within each item used as the unique identifier for
+	// ID-based merging at the paired BATCH_JOIN. Defaults to "id" if empty.
+	IDField string `json:"id_field,omitempty"`
+}
+
+// BatchJoinConfig configures how a BATCH_JOIN gateway merges child partition results.
+type BatchJoinConfig struct {
+	// GatewayNodeID is the node ID of the paired BATCH_SPLIT gateway.
+	GatewayNodeID string `json:"gateway_node_id"`
+
+	// ItemsVariable is the dot-path in WorkflowVariables pointing to the item slice.
+	// Must match the paired BATCH_SPLIT's items_variable. Defaults to "_items" if empty.
+	ItemsVariable string `json:"items_variable,omitempty"`
+
+	// IDField is the field name within each item used as the unique identifier.
+	// Must match the paired BATCH_SPLIT's id_field. Defaults to "id" if empty.
+	IDField string `json:"id_field,omitempty"`
+}
+
+// VarScopePath is the workflow variable key holding the hierarchical scope path string
+// for batch gateway nesting (e.g. "root/gw_type/lab/gw_result/fail").
+const VarScopePath = "_scope_path"
+
+// Default values for BatchGatewayConfig / BatchJoinConfig fields.
+const (
+	DefaultItemsVariable = "_items"
+	DefaultIDField       = "id"
+)
+
+// Engine-level guardrail defaults for batch gateways.
+const (
+	// DefaultMaxBatchDepth is the maximum nesting depth of BATCH_SPLIT gateways.
+	DefaultMaxBatchDepth = 4
+	// DefaultMaxChildrenPerGateway is the maximum number of partitions a single
+	// BATCH_SPLIT gateway may spawn.
+	DefaultMaxChildrenPerGateway = 20
+)
