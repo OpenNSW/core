@@ -106,7 +106,9 @@ Reserved placeholders:
 
 ## Database Setup
 
-`refid.SequenceStore` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships two raw-SQL backends, each in its own subpackage. A program that imports only `refid` never compiles a database driver into its binary — Go's per-package import graph links `pgx` or `modernc.org/sqlite` only if you actually import `refid/store/postgres` or `refid/store/sqlite`, respectively. `go.mod` still lists both as requirements of the module as a whole, since every subpackage shares one `go.mod` for simplicity; that's a module-level dependency-graph entry, not something your binary picks up unless you import the subpackage that uses it.
+`refid.SequenceStore` is a pluggable interface (`Next(ctx, scopeKey, max) (int64, error)`); the package ships two raw-SQL backends, each in its own subpackage.
+
+Neither backend registers a `database/sql` driver — they only issue SQL against the `*sql.DB` you hand them, so you import the driver, open the connection, and pass the result in. That keeps the driver choice yours, and avoids an `init` panic in a binary that already registers the same driver name.
 
 ### PostgreSQL (`refid/store/postgres`)
 
@@ -127,14 +129,16 @@ store, err := postgres.New(db, postgres.WithTableName("custom_sequences"))
 err = postgres.Migrate(ctx, db, postgres.WithTableName("custom_sequences"))
 ```
 
-`db` is a `*sql.DB` opened against the `pgx` driver (`sql.Open("pgx", dsn)`) — see the Quickstart above.
+`db` is a `*sql.DB` you opened yourself — the queries use PostgreSQL's native `$1` placeholders, so any PostgreSQL driver works. The Quickstart above uses pgx.
 
 ### SQLite (`refid/store/sqlite`)
 
-Same schema shape and API, using the pure-Go `modernc.org/sqlite` driver (no CGO):
+Same schema shape and API. Import a SQLite driver — `modernc.org/sqlite` is pure Go, no CGO:
 
 ```go
-db, err := sql.Open("sqlite", "refid.db") // registered by importing github.com/OpenNSW/core/refid/store/sqlite
+import _ "modernc.org/sqlite" // registers the "sqlite" driver
+
+db, err := sql.Open("sqlite", "refid.db")
 if err := sqlite.Migrate(ctx, db); err != nil { ... }
 store, err := sqlite.New(db)
 ```

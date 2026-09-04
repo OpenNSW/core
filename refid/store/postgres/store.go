@@ -2,10 +2,9 @@
 // Copyright (c) 2026 Lanka Software Foundation
 
 // Package postgres provides a PostgreSQL-backed implementation of
-// refid.SequenceStore using database/sql and the pgx stdlib driver directly
-// — no ORM. Open a connection with sql.Open("pgx", dsn) (this package
-// blank-imports github.com/jackc/pgx/v5/stdlib to register that driver name)
-// and pass the resulting *sql.DB to New.
+// refid.SequenceStore using database/sql and raw SQL — no ORM. Import a
+// PostgreSQL driver (e.g. github.com/jackc/pgx/v5/stdlib), open a connection
+// with sql.Open, and pass the resulting *sql.DB to New.
 package postgres
 
 import (
@@ -16,8 +15,6 @@ import (
 
 	"github.com/OpenNSW/core/refid"
 	"github.com/OpenNSW/core/refid/store/internal/sqlident"
-
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
 // DefaultTableName is the default table name used for sequence counters.

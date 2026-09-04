@@ -12,6 +12,8 @@ import (
 
 	"github.com/OpenNSW/core/refid"
 	"github.com/OpenNSW/core/refid/store/postgres"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
 // TestStore_Integration tests Migrate and the SequenceStore against a live
