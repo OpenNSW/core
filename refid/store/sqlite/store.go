@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Lanka Software Foundation
 
 // Package sqlite provides a SQLite-backed implementation of
-// refid.SequenceStore using database/sql and the pure-Go
-// modernc.org/sqlite driver — no CGO, no ORM. Open a connection with
-// sql.Open("sqlite", path) and pass the resulting *sql.DB to New.
+// refid.SequenceStore using database/sql and raw SQL — no ORM. Import a
+// SQLite driver (e.g. modernc.org/sqlite, which is pure Go — no CGO), open a
+// connection with sql.Open, and pass the resulting *sql.DB to New.
 //
 // SQLite allows only one writer at a time via a whole-database file lock,
 // and nothing sets a busy_timeout by default, so concurrent access can fail
@@ -21,8 +21,6 @@ import (
 
 	"github.com/OpenNSW/core/refid"
 	"github.com/OpenNSW/core/refid/store/internal/sqlident"
-
-	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
 )
 
 // DefaultTableName is the default table name used for sequence counters.

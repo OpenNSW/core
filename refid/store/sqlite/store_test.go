@@ -12,6 +12,8 @@ import (
 
 	"github.com/OpenNSW/core/refid"
 	"github.com/OpenNSW/core/refid/store/sqlite"
+
+	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
 )
 
 // TestStore_Integration tests Migrate and the SequenceStore against a fresh
