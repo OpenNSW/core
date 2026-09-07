@@ -380,6 +380,12 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 // block a sibling branch running in parallel: the sibling completes while the first branch
 // is still NodeStatusAwaitingAdmin. Aborting the parked branch afterward still fails the
 // overall workflow, since parallel join semantics are unchanged.
+// TestAdminParkingIsolatesParallelBranches also exercises PARALLEL_SPLIT's own isolation: each
+// matching branch runs as its own child workflow (see parallel_gateway.go), so a node parked
+// for admin inside one branch (task_a, here) shows up in THAT CHILD's own status/signal
+// channel, not the parent's — mirroring how a node inside a BATCH_SPLIT partition already
+// works. The child's deterministic ID is FormatBatchChildWorkflowID(parentID, splitNodeID,
+// edgeID); parallelWorkflowJSON's split->task_a edge is "e2".
 func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
@@ -396,21 +402,22 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
+	branchWorkflowID := FormatBatchChildWorkflowID("default-test-workflow-id", "split", "e2")
+
 	env.RegisterDelayedCallback(func() {
-		val, err := env.QueryWorkflow("GetStatus")
+		val, err := env.QueryWorkflowByID(branchWorkflowID, "GetStatus")
 		require.NoError(t, err)
 		var instance WorkflowInstance
 		require.NoError(t, val.Get(&instance))
 
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["task_a"].Status)
-		require.Equal(t, NodeStatusCompleted, instance.NodeInfo["task_b"].Status)
 	}, time.Second)
 
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+		require.NoError(t, env.SignalWorkflowByID(branchWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task_a",
 			Action: AdminActionAbort,
-		})
+		}))
 	}, 2*time.Second)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})

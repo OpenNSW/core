@@ -78,7 +78,7 @@ const parallelWorkflowJSON = `
     { "id": "split", "type": "GATEWAY", "gateway_type": "PARALLEL_SPLIT" },
     { "id": "task_a", "type": "TASK", "task_template_id": "TASK_A" },
     { "id": "task_b", "type": "TASK", "task_template_id": "TASK_B" },
-    { "id": "join", "type": "GATEWAY", "gateway_type": "PARALLEL_JOIN" },
+    { "id": "join", "type": "GATEWAY", "gateway_type": "PARALLEL_JOIN", "parallel_join": { "gateway_node_id": "split" } },
     { "id": "task_c", "type": "TASK", "task_template_id": "TASK_C" },
     { "id": "end", "type": "END" }
   ]

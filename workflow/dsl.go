@@ -161,6 +161,7 @@ type Node struct {
 	Signaling    *SignalingConfig    `json:"signaling,omitempty"`
 	BatchGateway *BatchGatewayConfig `json:"batch_gateway,omitempty"`
 	BatchJoin    *BatchJoinConfig    `json:"batch_join,omitempty"`
+	ParallelJoin *ParallelJoinConfig `json:"parallel_join,omitempty"`
 }
 
 // Edge represents a directed connection between two nodes.
@@ -217,6 +218,37 @@ type BatchJoinConfig struct {
 	// IDField is the field name within each item used as the unique identifier.
 	// Must match the paired BATCH_SPLIT's id_field. Defaults to "id" if empty.
 	IDField string `json:"id_field,omitempty"`
+}
+
+// ParallelJoinConfig configures how a PARALLEL_JOIN gateway isolates its branches and
+// merges their final workflow variable states back into the parent scope.
+//
+// Each matching outgoing edge of the paired PARALLEL_SPLIT runs as its own child workflow
+// with a deep-copied, isolated set of WorkflowVariables — no branch can see another
+// branch's writes while any of them are still running. When all branches complete,
+// PARALLEL_JOIN reconciles their (possibly divergent) final states back into one:
+//
+//   - map[string]any values are deep-merged key by key (same behavior as SetNestedKey's
+//     existing map-merge case): each branch's mutated sub-fields combine, so two branches
+//     changing different fields of the same object both survive.
+//   - Variables listed in MergeByID (each a []map[string]any) are merged element-by-element
+//     by that id_field across ALL branches — not "one branch's array replaces another's":
+//     for a given item ID, the fields each branch's copy of that item carries are unioned
+//     into one item, so lab writing sample_test_result and visual writing visual_result to
+//     the same underlying item both survive regardless of which branch finishes last. A
+//     field two branches BOTH carry a (possibly different) value for is a genuine conflict
+//     this cannot resolve: branches are applied in a fixed, deterministic order (sorted by
+//     source edge ID) and the last one wins for that field — give each branch its own field
+//     name if that ambiguity isn't acceptable.
+//   - Any other variable (scalar, or array not listed in MergeByID) falls back to the same
+//     fixed deterministic branch order, last one wins.
+type ParallelJoinConfig struct {
+	// GatewayNodeID is the node ID of the paired PARALLEL_SPLIT gateway.
+	GatewayNodeID string `json:"gateway_node_id"`
+
+	// MergeByID maps a workflow-variable dot-path (holding a []map[string]any shared by
+	// multiple branches) to the field name within each item used as its unique ID.
+	MergeByID map[string]string `json:"merge_by_id,omitempty"`
 }
 
 // VarScopePath is the workflow variable key holding the hierarchical scope path string

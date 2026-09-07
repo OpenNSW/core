@@ -647,7 +647,7 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 					IterationKey:    "custom_iter",
 				},
 			},
-			{ID: "m_pjoin", Type: NodeTypeGateway, GatewayType: GatewayTypeParallelJoin},
+			{ID: "m_pjoin", Type: NodeTypeGateway, GatewayType: GatewayTypeParallelJoin, ParallelJoin: &ParallelJoinConfig{GatewayNodeID: "m_psplit"}},
 			{ID: "m_end", Type: NodeTypeEnd},
 		},
 		Edges: []Edge{

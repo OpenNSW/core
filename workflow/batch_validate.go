@@ -68,7 +68,7 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 	// 4. Sub-graph topological containment: enforce that every path from BATCH_SPLIT
 	// reaches its paired BATCH_JOIN, and no edges escape or illegally enter the sub-graph region.
 	for splitID, joinID := range pairedJoins {
-		if err := validateBatchRegion(splitID, joinID, pairedJoins, nodesByID, forwardEdges, reverseEdges); err != nil {
+		if err := validateGatewayRegion(splitID, joinID, GatewayTypeBatchSplit, "BATCH_SPLIT", "BATCH_JOIN", "batch region", pairedJoins, nodesByID, forwardEdges, reverseEdges); err != nil {
 			return err
 		}
 	}
@@ -76,20 +76,29 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 	return nil
 }
 
-// validateBatchRegion checks that the sub-graph between splitID and joinID is strictly
-// closed: all paths must terminate at joinID, with no dead ends, escaped edges, or illegal entries.
-func validateBatchRegion(
+// validateGatewayRegion checks that the sub-graph between splitID and joinID is strictly
+// closed: all paths must terminate at joinID, with no dead ends, escaped edges, or illegal
+// entries. Shared by ValidateBatchGateways and ValidateParallelGateways — nestedType and
+// pairedJoins scope the "nested split's join must stay inside this region" check to gateways
+// of the same kind as splitID itself (a nested BATCH_SPLIT inside a BATCH_SPLIT region, or a
+// nested PARALLEL_SPLIT inside a PARALLEL_SPLIT region); it does not check cross-kind nesting.
+// splitLabel/joinLabel/regionLabel are purely for error text (e.g. "BATCH_SPLIT"/"BATCH_JOIN"/
+// "batch region" vs "PARALLEL_SPLIT"/"PARALLEL_JOIN"/"parallel region") — ValidateBatchGateways
+// passes the exact original wording so existing error-message assertions are unaffected.
+func validateGatewayRegion(
 	splitID, joinID string,
+	nestedType GatewayType,
+	splitLabel, joinLabel, regionLabel string,
 	pairedJoins map[string]string,
 	nodesByID map[string]*Node,
 	forwardEdges map[string][]Edge,
 	reverseEdges map[string][]string,
 ) error {
 	if len(forwardEdges[splitID]) == 0 {
-		return fmt.Errorf("BATCH_SPLIT node %q has no outgoing edges", splitID)
+		return fmt.Errorf("%s node %q has no outgoing edges", splitLabel, splitID)
 	}
 
-	// 1. Forward reachability: find all nodes in the batch region, stopping at joinID.
+	// 1. Forward reachability: find all nodes in the region, stopping at joinID.
 	regionNodes := make(map[string]bool)
 	queue := []string{splitID}
 	regionNodes[splitID] = true
@@ -132,40 +141,40 @@ func validateBatchRegion(
 	for nodeID := range regionNodes {
 		node, exists := nodesByID[nodeID]
 		if !exists {
-			return fmt.Errorf("BATCH_SPLIT node %q region references non-existent node %q", splitID, nodeID)
+			return fmt.Errorf("%s node %q region references non-existent node %q", splitLabel, splitID, nodeID)
 		}
 		if node.Type == NodeTypeEnd {
-			return fmt.Errorf("BATCH_SPLIT node %q has a path reaching END node %q without passing through paired BATCH_JOIN %q", splitID, nodeID, joinID)
+			return fmt.Errorf("%s node %q has a path reaching END node %q without passing through paired %s %q", splitLabel, splitID, nodeID, joinLabel, joinID)
 		}
 		if len(forwardEdges[nodeID]) == 0 {
-			return fmt.Errorf("BATCH_SPLIT node %q region contains dead-end node %q with no outgoing edges", splitID, nodeID)
+			return fmt.Errorf("%s node %q region contains dead-end node %q with no outgoing edges", splitLabel, splitID, nodeID)
 		}
 		if !canReachJoin[nodeID] {
-			return fmt.Errorf("BATCH_SPLIT node %q region contains node %q which cannot reach paired BATCH_JOIN %q", splitID, nodeID, joinID)
+			return fmt.Errorf("%s node %q region contains node %q which cannot reach paired %s %q", splitLabel, splitID, nodeID, joinLabel, joinID)
 		}
 
-		// Nested BATCH_SPLIT must have its paired BATCH_JOIN contained within this batch region.
-		if node.Type == NodeTypeGateway && node.GatewayType == GatewayTypeBatchSplit && nodeID != splitID {
+		// A nested split of the SAME kind must have its paired join contained within this region.
+		if node.Type == NodeTypeGateway && node.GatewayType == nestedType && nodeID != splitID {
 			nestedJoinID := pairedJoins[nodeID]
 			if !regionNodes[nestedJoinID] {
-				return fmt.Errorf("BATCH_SPLIT node %q contains nested BATCH_SPLIT %q whose paired BATCH_JOIN %q is outside the batch region", splitID, nodeID, nestedJoinID)
+				return fmt.Errorf("%s node %q contains nested %s %q whose paired %s %q is outside the %s", splitLabel, splitID, splitLabel, nodeID, joinLabel, nestedJoinID, regionLabel)
 			}
 		}
 
-		// Encapsulation: no edges from outside the batch region may enter intermediate region nodes.
+		// Encapsulation: no edges from outside the region may enter intermediate region nodes.
 		if nodeID != splitID {
 			for _, prev := range reverseEdges[nodeID] {
 				if !regionNodes[prev] {
-					return fmt.Errorf("BATCH_SPLIT node %q region contains node %q with incoming edge from outside the batch region (from %q)", splitID, nodeID, prev)
+					return fmt.Errorf("%s node %q region contains node %q with incoming edge from outside the %s (from %q)", splitLabel, splitID, nodeID, regionLabel, prev)
 				}
 			}
 		}
 	}
 
-	// 4. Encapsulation: all incoming edges to the paired BATCH_JOIN must originate within this batch region.
+	// 4. Encapsulation: all incoming edges to the paired join must originate within this region.
 	for _, prev := range reverseEdges[joinID] {
 		if !regionNodes[prev] {
-			return fmt.Errorf("BATCH_JOIN node %q has incoming edge from node %q outside its paired BATCH_SPLIT %q region", joinID, prev, splitID)
+			return fmt.Errorf("%s node %q has incoming edge from node %q outside its paired %s %q region", joinLabel, joinID, prev, splitLabel, splitID)
 		}
 	}
 

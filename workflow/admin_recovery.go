@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/OpenNSW/core/shared/maputil"
@@ -23,11 +24,26 @@ type terminalAdminError struct {
 func (e *terminalAdminError) Error() string { return e.err.Error() }
 func (e *terminalAdminError) Unwrap() error { return e.err }
 
+// terminalAdminErrorType is the Go type name Temporal's default error converter stamps onto
+// the ApplicationError it wraps a plain (non-Temporal) error in when that error crosses a
+// child workflow boundary — e.g. a PARALLEL_SPLIT or BATCH_SPLIT branch's terminalAdminError,
+// returned from the child, re-materializes in the parent as *temporal.ApplicationError with
+// this Type(), not as a *terminalAdminError errors.As can find. Must match the unqualified
+// type name of terminalAdminError exactly.
+const terminalAdminErrorType = "terminalAdminError"
+
 // isTerminalAdminError reports whether err has already been through parkNodeForAdmin and
-// was deliberately given up on, meaning it should propagate without being parked again.
+// was deliberately given up on, meaning it should propagate without being parked again. This
+// checks both forms: a same-workflow error still holding its original Go type, and one that
+// crossed a child workflow boundary (a spawned PARALLEL_SPLIT or BATCH_SPLIT branch) and so
+// only carries the type name as a string — see terminalAdminErrorType.
 func isTerminalAdminError(err error) bool {
 	var terminal *terminalAdminError
-	return errors.As(err, &terminal)
+	if errors.As(err, &terminal) {
+		return true
+	}
+	var appErr *temporal.ApplicationError
+	return errors.As(err, &appErr) && appErr.Type() == terminalAdminErrorType
 }
 
 // AdminResolutionAction describes how an admin chooses to resolve a node that is
