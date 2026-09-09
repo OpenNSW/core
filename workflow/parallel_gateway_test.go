@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -253,4 +254,105 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_SameFieldConflict_LastBranc
 	// e3 is applied before e4, so visual_task's (later) value wins the conflicting field.
 	s.Equal("visual reason", item["failure_reason"],
 		"a genuinely conflicting field resolves via the fixed, documented branch order — not a merge algorithm decision")
+}
+
+func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_ItemMissingID_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	mockWorkflowCompletedIgnoringChildren(env)
+
+	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
+
+	// An item is missing the required "id" field
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything).
+		Return(map[string]any{
+			"items": []any{
+				map[string]any{"name": "No ID item"},
+			},
+		}, nil).Once()
+
+	passThrough := func(_ context.Context, _ string, inputs map[string]any) (map[string]any, error) {
+		return map[string]any{"commodities": inputs["commodities"]}, nil
+	}
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything).Return(passThrough)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything).Return(passThrough)
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		s.Require().NoError(err)
+		var instance WorkflowInstance
+		s.Require().NoError(val.Get(&instance))
+		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["psplit"].Status)
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "psplit",
+			Action: AdminActionAbort,
+		})
+	}, 2*time.Second)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "missing-id-test"})
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "missing required ID field \"id\"")
+}
+
+func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_InvalidItemType_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	mockWorkflowCompletedIgnoringChildren(env)
+
+	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
+
+	// LOAD_ITEMS returns invalid non-slice items
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything).
+		Return(map[string]any{
+			"items": "not-a-slice",
+		}, nil).Once()
+
+	passThrough := func(_ context.Context, _ string, inputs map[string]any) (map[string]any, error) {
+		return map[string]any{"commodities": inputs["commodities"]}, nil
+	}
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything).Return(passThrough)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything).Return(passThrough)
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		s.Require().NoError(err)
+		var instance WorkflowInstance
+		s.Require().NoError(val.Get(&instance))
+		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["psplit"].Status)
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "psplit",
+			Action: AdminActionAbort,
+		})
+	}, 2*time.Second)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "invalid-slice-test"})
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "invalid items")
+}
+
+func (s *ParallelGatewayTestSuite) TestParallelValidation_MergeByID_EmptyIDField_Fails() {
+	def := buildParallelMergeWorkflow(map[string]string{"commodities": ""})
+	err := ValidateParallelGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "has empty ID field")
 }

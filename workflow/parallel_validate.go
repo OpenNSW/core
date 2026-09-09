@@ -30,9 +30,12 @@ func ValidateParallelGateways(def WorkflowDefinition) error {
 			if node.ParallelJoin == nil || node.ParallelJoin.GatewayNodeID == "" {
 				return fmt.Errorf("PARALLEL_JOIN node %q: parallel_join.gateway_node_id is required", node.ID)
 			}
-			for varPath := range node.ParallelJoin.MergeByID {
+			for varPath, idField := range node.ParallelJoin.MergeByID {
 				if strings.Contains(varPath, ".") {
 					return fmt.Errorf("PARALLEL_JOIN node %q: merge_by_id key %q must be a top-level workflow variable (nested dot-paths are not supported)", node.ID, varPath)
+				}
+				if idField == "" {
+					return fmt.Errorf("PARALLEL_JOIN node %q: merge_by_id key %q has empty ID field", node.ID, varPath)
 				}
 			}
 			parallelJoins[node.ID] = &def.Nodes[i]

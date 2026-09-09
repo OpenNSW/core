@@ -1377,9 +1377,10 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	// 1. Verify that the child's node is parked awaiting admin intervention
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(childWorkflowID, "GetStatus")
-		s.NoError(err)
+		s.Require().NoError(err)
 		var instance WorkflowInstance
-		s.NoError(val.Get(&instance))
+		s.Require().NoError(val.Get(&instance))
+		s.Require().NotNil(instance.NodeInfo["process"], "node 'process' must exist in child NodeInfo")
 		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["process"].Status)
 	}, time.Second)
 

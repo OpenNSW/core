@@ -90,7 +90,11 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 		branchVars = append(branchVars, childOutput.WorkflowVariables)
 	}
 
-	g.instance.WorkflowVariables = mergeParallelBranches(baseVars, branchVars, mergeByID)
+	mergedVars, err := mergeParallelBranches(baseVars, branchVars, mergeByID)
+	if err != nil {
+		return fmt.Errorf("PARALLEL_SPLIT node %s: merge failed: %w", node.ID, err)
+	}
+	g.instance.WorkflowVariables = mergedVars
 
 	g.instance.AuditTrail = append(g.instance.AuditTrail,
 		fmt.Sprintf("PARALLEL_SPLIT %s ran %d branch(es) and merged results", node.ID, len(branches)))
@@ -141,7 +145,7 @@ func findPairedParallelJoin(def WorkflowDefinition, splitNodeID string) string {
 // merged item-by-item, by ID, across every branch: for each item ID, the fields each branch's
 // copy of that item carries are unioned into one item. Everything else is merged generically:
 // map[string]any values merge key by key (recursively); anything else is last-branch-wins.
-func mergeParallelBranches(base map[string]any, branchVars []map[string]any, mergeByID map[string]string) map[string]any {
+func mergeParallelBranches(base map[string]any, branchVars []map[string]any, mergeByID map[string]string) (map[string]any, error) {
 	result := deepcopy.Map(base)
 
 	mergeByIDKeys := make(map[string]bool, len(mergeByID))
@@ -150,7 +154,10 @@ func mergeParallelBranches(base map[string]any, branchVars []map[string]any, mer
 	}
 
 	for varPath, idField := range mergeByID {
-		merged := mergeItemsByID(result, branchVars, varPath, idField)
+		merged, err := mergeItemsByID(result, branchVars, varPath, idField)
+		if err != nil {
+			return nil, err
+		}
 		maputil.SetNestedKey(result, varPath, merged)
 	}
 
@@ -158,7 +165,7 @@ func mergeParallelBranches(base map[string]any, branchVars []map[string]any, mer
 		mergeVariablesInto(result, bv, mergeByIDKeys)
 	}
 
-	return result
+	return result, nil
 }
 
 // mergeItemsByID merges a []map[string]any variable (found at varPath) across the base state
@@ -166,35 +173,48 @@ func mergeParallelBranches(base map[string]any, branchVars []map[string]any, mer
 // later branch's copy overwrite the same field from an earlier one (or from base); fields a
 // branch's copy simply doesn't have are left untouched. Items are returned in first-seen order
 // (base's order, then any items a branch introduced that base didn't have).
-func mergeItemsByID(base map[string]any, branchVars []map[string]any, varPath, idField string) []any {
+func mergeItemsByID(base map[string]any, branchVars []map[string]any, varPath, idField string) ([]any, error) {
 	merged := make(map[string]map[string]any)
 	var order []string
 
-	absorb := func(raw any) {
+	absorb := func(raw any, origin string) error {
+		if raw == nil {
+			return nil
+		}
 		items, err := toItemSlice(raw)
 		if err != nil {
-			return
+			return fmt.Errorf("variable %q from %s is invalid items: %w", varPath, origin, err)
 		}
-		for _, item := range items {
-			id := fmt.Sprintf("%v", getItemID(item, idField))
-			existing, ok := merged[id]
+		for i, item := range items {
+			idVal := getItemID(item, idField)
+			idStr := fmt.Sprintf("%v", idVal)
+			if idVal == nil || idVal == "" || idStr == "" || idStr == "<nil>" {
+				return fmt.Errorf("variable %q from %s has item at index %d missing required ID field %q",
+					varPath, origin, i, idField)
+			}
+			existing, ok := merged[idStr]
 			if !ok {
-				merged[id] = deepcopy.Map(item)
-				order = append(order, id)
+				merged[idStr] = deepcopy.Map(item)
+				order = append(order, idStr)
 				continue
 			}
 			for k, v := range item {
 				existing[k] = deepcopy.Value(v)
 			}
 		}
+		return nil
 	}
 
 	if baseRaw, ok := maputil.GetNestedKey(base, varPath); ok {
-		absorb(baseRaw)
+		if err := absorb(baseRaw, "base state"); err != nil {
+			return nil, err
+		}
 	}
-	for _, bv := range branchVars {
+	for i, bv := range branchVars {
 		if raw, ok := maputil.GetNestedKey(bv, varPath); ok {
-			absorb(raw)
+			if err := absorb(raw, fmt.Sprintf("branch %d", i)); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -202,7 +222,7 @@ func mergeItemsByID(base map[string]any, branchVars []map[string]any, varPath, i
 	for _, id := range order {
 		out = append(out, merged[id])
 	}
-	return out
+	return out, nil
 }
 
 // mergeVariablesInto merges src into dst: map[string]any values merge key by key
