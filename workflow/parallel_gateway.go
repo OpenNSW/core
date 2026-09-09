@@ -137,7 +137,7 @@ func findPairedParallelJoin(def WorkflowDefinition, splitNodeID string) string {
 // the caller — expected to be a fixed, deterministic order — so that a genuine same-field
 // conflict resolves the same way on every run.
 //
-// mergeByID-listed variables (top-level dot-paths only — see ValidateParallelGateways) are
+// mergeByID-listed variables (top-level variable names only — see ValidateParallelGateways) are
 // merged item-by-item, by ID, across every branch: for each item ID, the fields each branch's
 // copy of that item carries are unioned into one item. Everything else is merged generically:
 // map[string]any values merge key by key (recursively); anything else is last-branch-wins.

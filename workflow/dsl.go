@@ -266,8 +266,10 @@ type ParallelJoinConfig struct {
 	// GatewayNodeID is the node ID of the paired PARALLEL_SPLIT gateway.
 	GatewayNodeID string `json:"gateway_node_id"`
 
-	// MergeByID maps a workflow-variable dot-path (holding a []map[string]any shared by
+	// MergeByID maps a top-level workflow variable name (holding a []map[string]any shared by
 	// multiple branches) to the field name within each item used as its unique ID.
+	// Nested dot-paths are not currently supported; see ValidateParallelGateways.
+	// TODO: Support nested dot-paths (e.g. "order.items") in MergeByID and mergeVariablesInto.
 	MergeByID map[string]string `json:"merge_by_id,omitempty"`
 }
 
