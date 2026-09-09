@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -1331,4 +1332,79 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsDuplicateItemIDAcross
 	err := env.GetWorkflowError()
 	s.Error(err)
 	s.Contains(err.Error(), "duplicate item ID \"item-a\" returned across child partitions")
+}
+
+// --- Test 16: Child workflow task aborted by admin propagates to parent without re-parking ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWithoutReparkingParent() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "batch_child_abort_test",
+		Name: "Batch Child Abort Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}}, // defaults: _items, id
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "post_task", Type: NodeTypeTask, TaskTemplateID: "POST_TASK"},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process", Condition: `item.needsWork == true`},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "post_task"},
+			{ID: "e5", SourceID: "post_task", TargetID: "end"},
+		},
+	}
+
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS", mock.Anything).
+		Return(nil, temporal.NewNonRetryableApplicationError("inspection boom", "TaskFailure", nil)).Once()
+
+	parentWorkflowID := "batch-child-abort-1"
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
+
+	childWorkflowID := FormatBatchChildWorkflowID(parentWorkflowID, "gw_split", "e2")
+
+	// 1. Verify that the child's node is parked awaiting admin intervention
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflowByID(childWorkflowID, "GetStatus")
+		s.NoError(err)
+		var instance WorkflowInstance
+		s.NoError(val.Get(&instance))
+		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["process"].Status)
+	}, time.Second)
+
+	// 2. Resolve the child node with AdminActionAbort
+	env.RegisterDelayedCallback(func() {
+		s.NoError(env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "process",
+			Action: AdminActionAbort,
+		}))
+	}, 2*time.Second)
+
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "item1", "needsWork": true},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	// Workflow completes with failure immediately without re-parking the parent's gw_split
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "inspection boom")
+
+	// Verify post_task was never invoked
+	env.AssertNotCalled(s.T(), "ExecuteTaskActivity", mock.Anything, "POST_TASK", mock.Anything)
 }

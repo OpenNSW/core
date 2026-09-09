@@ -28,7 +28,7 @@ func TestParallelGatewayTestSuite(t *testing.T) {
 
 // buildParallelMergeWorkflow: start -> load_items -> PARALLEL_SPLIT -> (lab_task | visual_task)
 // -> PARALLEL_JOIN -> end. Both branches read and independently annotate the same shared
-// `commodities` array — the scenario that used to clobber before this fix.
+// `commodities` array.
 func buildParallelMergeWorkflow(mergeByID map[string]string) WorkflowDefinition {
 	return WorkflowDefinition{
 		ID:   "parallel_merge_test",
@@ -70,13 +70,10 @@ func mockWorkflowCompletedIgnoringChildren(env *testsuite.TestWorkflowEnvironmen
 		})
 }
 
-// TestParallelSplit_ItemFieldMerge_BothBranchesFieldsSurvive is the direct regression test for
-// the bug this fix addresses: before it, whichever branch's BATCH_SPLIT-style write-back ran
-// last would silently revert the other branch's contribution to the shared `commodities`
-// array. Here lab_task adds lab_result to every item and visual_task adds visual_result to
-// every item (both branches actively touch the SAME items, not disjoint ones) — both fields
-// must be present on both items afterward, regardless of which branch's child workflow happens
-// to finish first.
+// TestParallelSplit_ItemFieldMerge_BothBranchesFieldsSurvive verifies that when two branches
+// independently annotate the same items in a shared array (lab_task adds lab_result and
+// visual_task adds visual_result to every item), both fields are preserved after merge,
+// regardless of which branch's child workflow finishes first.
 func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranchesFieldsSurvive() {
 	env := s.NewTestWorkflowEnvironment()
 
@@ -143,15 +140,14 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranches
 	}
 
 	s.Equal("pass", byID["item-1"]["lab_result"], "item-1 must keep lab's contribution")
-	s.Equal("clean", byID["item-1"]["visual_result"], "item-1 must ALSO keep visual's contribution — this is the fix")
+	s.Equal("clean", byID["item-1"]["visual_result"], "item-1 must keep visual's contribution")
 	s.Equal("pass", byID["item-2"]["lab_result"], "item-2 must keep lab's contribution")
-	s.Equal("clean", byID["item-2"]["visual_result"], "item-2 must ALSO keep visual's contribution — this is the fix")
+	s.Equal("clean", byID["item-2"]["visual_result"], "item-2 must keep visual's contribution")
 }
 
 // TestParallelSplit_GenericMapMerge_DisjointFieldsSurvive covers a shared variable that is a
-// map (not an array), with each branch writing a different sub-field — the FCAU-style pattern.
-// This already worked before the fix (SetNestedKey's own map-merge case), and must keep
-// working now that branches are isolated child workflows instead of in-process coroutines.
+// map (not an array), with each branch writing a different sub-field — verifying that map
+// sub-fields merge properly across isolated child workflows.
 func (s *ParallelGatewayTestSuite) TestParallelSplit_GenericMapMerge_DisjointFieldsSurvive() {
 	env := s.NewTestWorkflowEnvironment()
 

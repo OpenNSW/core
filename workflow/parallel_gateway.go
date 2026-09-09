@@ -38,7 +38,7 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 		mergeByID = joinNode.ParallelJoin.MergeByID
 	}
 
-	// 1. Evaluate conditions up front, against the pre-split state, same as today.
+	// 1. Evaluate conditions up front against the pre-split state.
 	var matchedEdgeIDs []string
 	edgeByID := make(map[string]Edge, len(outEdges))
 	for _, e := range outEdges {
@@ -206,9 +206,9 @@ func mergeItemsByID(base map[string]any, branchVars []map[string]any, varPath, i
 }
 
 // mergeVariablesInto merges src into dst: map[string]any values merge key by key
-// (recursively, same semantics as SetNestedKey's own map-merge case); anything else
-// (scalars, arrays not handled by mergeItemsByID) is a plain overwrite. Top-level keys in
-// skipTopKeys (the mergeByID-configured variables, already merged separately) are skipped.
+// (recursively); anything else (scalars, arrays not handled by mergeItemsByID) is a plain
+// overwrite. Top-level keys in skipTopKeys (the mergeByID-configured variables, already
+// merged separately) are skipped.
 func mergeVariablesInto(dst, src map[string]any, skipTopKeys map[string]bool) {
 	for k, v := range src {
 		if skipTopKeys[k] {

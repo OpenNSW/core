@@ -82,9 +82,8 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 // pairedJoins scope the "nested split's join must stay inside this region" check to gateways
 // of the same kind as splitID itself (a nested BATCH_SPLIT inside a BATCH_SPLIT region, or a
 // nested PARALLEL_SPLIT inside a PARALLEL_SPLIT region); it does not check cross-kind nesting.
-// splitLabel/joinLabel/regionLabel are purely for error text (e.g. "BATCH_SPLIT"/"BATCH_JOIN"/
-// "batch region" vs "PARALLEL_SPLIT"/"PARALLEL_JOIN"/"parallel region") — ValidateBatchGateways
-// passes the exact original wording so existing error-message assertions are unaffected.
+// splitLabel/joinLabel/regionLabel format the error messages (e.g. "BATCH_SPLIT"/"BATCH_JOIN"/
+// "batch region" vs "PARALLEL_SPLIT"/"PARALLEL_JOIN"/"parallel region").
 func validateGatewayRegion(
 	splitID, joinID string,
 	nestedType GatewayType,

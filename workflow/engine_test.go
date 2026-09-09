@@ -375,8 +375,7 @@ func TestTaskNodeFailsWhenInputKeyMissing(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 
-	// The input mapping error now parks the node for admin intervention instead of
-	// failing the workflow outright. Abort it to reproduce today's end-state.
+	// The input mapping error parks the node for admin intervention. Abort it so the workflow fails.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task",
@@ -553,8 +552,7 @@ func TestTaskNodeFailsWhenRequiredOutputMissing(t *testing.T) {
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
-	// The output mapping error now parks the node for admin intervention instead of
-	// failing the workflow outright. Abort it to reproduce today's end-state.
+	// The output mapping error parks the node for admin intervention. Abort it so the workflow fails.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task",

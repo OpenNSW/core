@@ -336,10 +336,9 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 		},
 	}
 
-	// The child "fail_task" activity error now parks each child's c_task node for admin
-	// intervention instead of failing the child workflow outright, and the parent's
-	// m_fanout node parks too once the aggregate failure reaches it. Abort each in turn to
-	// reproduce today's "multiple branches failed" end-state.
+	// Activity failures park each child's c_task node for admin intervention, and the
+	// parent's m_fanout node parks once the aggregate failure reaches it. Abort each node
+	// to assert the "multiple branches failed" end-state.
 	const parentWorkflowID = "master-collect-all-test"
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
 
@@ -556,11 +555,9 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 
 // TestConcurrentSplitTasksDoNotCrossTalkBroadcast guards against the broadcast channel being
 // shared between two SPLIT_TASK nodes that run concurrently in the same workflow execution
-// (e.g. both reachable from a PARALLEL_SPLIT gateway). Before the broadcast channel was scoped
-// per split node, both groups' monitorChildWorkflows listened on the same fixed signal name, so
-// a broadcast emitted by one group's child could be received and relayed by the other group's
-// selector instead — delivering the wrong group's payload, or losing it so the intended waiter
-// hangs forever.
+// (e.g. both reachable from a PARALLEL_SPLIT gateway): the broadcast channel is scoped per
+// split node so that broadcasts emitted by one split task group are not cross-talked or
+// misrouted to a concurrent group's monitorChildWorkflows.
 func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 	env := s.NewTestWorkflowEnvironment()
 
@@ -769,8 +766,7 @@ func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
 	}
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf").Return(childDef, nil)
 
-	// The test env runs activity mocks on their own goroutines, so if this fix regresses and
-	// multiple branches fire the hook concurrently, the append would race under -race. Guard it.
+	// Guard against concurrent appends under -race if multiple branches fire the hook concurrently.
 	var mu sync.Mutex
 	var completedIDs []string
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
@@ -795,12 +791,10 @@ func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
 		"completion hook must fire once for the top-level workflow only, not per child branch")
 }
 
-// TestChildBranchCompletionHandlerErrorDoesNotHang is the direct regression for the reported bug:
-// when the host's completion handler errors on IDs it doesn't recognize (child branches carry a
-// synthetic ID like master-1--m_fanout--b1-0 that isn't in the host's registry), the overall
-// workflow must still complete. Before the fix, each child branch invoked the hook at its END
-// node; the error there parked the branch for admin, so it never completed and the parent's
-// monitorChildWorkflows blocked forever (ScheduleToClose deadline exceeded).
+// TestChildBranchCompletionHandlerErrorDoesNotHang verifies that when the host's completion handler
+// errors on synthetic child branch IDs not found in the registry, the overall workflow completes
+// successfully: child branches must not invoke the completion hook at their END node, which would
+// otherwise park the branch and cause the parent's monitorChildWorkflows to block.
 func (s *NSWEngineTestSuite) TestChildBranchCompletionHandlerErrorDoesNotHang() {
 	env := s.NewTestWorkflowEnvironment()
 

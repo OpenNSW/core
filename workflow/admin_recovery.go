@@ -61,8 +61,7 @@ const (
 	AdminActionOverride AdminResolutionAction = "OVERRIDE"
 	// AdminActionSkip marks the node completed without setting any variables.
 	AdminActionSkip AdminResolutionAction = "SKIP"
-	// AdminActionAbort fails the node and the workflow with the original error —
-	// the same behavior the engine had before the escape hatch existed.
+	// AdminActionAbort fails the node and the workflow with the original error.
 	AdminActionAbort AdminResolutionAction = "ABORT"
 )
 

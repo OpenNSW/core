@@ -223,14 +223,34 @@ type BatchJoinConfig struct {
 // ParallelJoinConfig configures how a PARALLEL_JOIN gateway isolates its branches and
 // merges their final workflow variable states back into the parent scope.
 //
+// WARNING: CONFLICT RESOLUTION AND LAST-WRITE-WINS (LWW)
+// When concurrent parallel branches write conflicting data, the engine cannot infer intent
+// and applies a deterministic "last-write-wins" policy. Precedence is determined strictly by
+// branch edge order (sorted ascending by source edge ID; later branches in that order overwrite
+// earlier ones), NOT wall-clock completion time.
+//
+// Specifically, LAST-WRITE-WINS applies in the following three places:
+//  1. Conflicting item fields in MergeByID: If two branches modify the SAME field on the SAME
+//     item (e.g. branch A sets item["status"]="PASS" and branch B sets item["status"]="FAIL"),
+//     the later branch's field value overwrites the earlier one.
+//  2. Conflicting map keys: If two branches set the SAME leaf key in a map[string]any, the
+//     later branch's value overwrites the earlier one.
+//  3. Scalars and unlisted arrays: Any scalar variable (string, number, boolean) or slice not
+//     listed in MergeByID that is written by multiple branches will be completely overwritten
+//     by the later branch.
+//
+// Recommendation for workflow authors: Ensure concurrent parallel branches write to distinct
+// variable paths or distinct field names on shared items if overwriting cannot be tolerated.
+//
+// Execution and Reconciliation Model:
 // Each matching outgoing edge of the paired PARALLEL_SPLIT runs as its own child workflow
 // with a deep-copied, isolated set of WorkflowVariables — no branch can see another
 // branch's writes while any of them are still running. When all branches complete,
 // PARALLEL_JOIN reconciles their (possibly divergent) final states back into one:
 //
-//   - map[string]any values are deep-merged key by key (same behavior as SetNestedKey's
-//     existing map-merge case): each branch's mutated sub-fields combine, so two branches
-//     changing different fields of the same object both survive.
+//   - map[string]any values are deep-merged key by key (recursive map merge):
+//     each branch's mutated sub-fields combine, so two branches changing different
+//     fields of the same object both survive.
 //   - Variables listed in MergeByID (each a []map[string]any) are merged element-by-element
 //     by that id_field across ALL branches — not "one branch's array replaces another's":
 //     for a given item ID, the fields each branch's copy of that item carries are unioned

@@ -380,12 +380,12 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 // block a sibling branch running in parallel: the sibling completes while the first branch
 // is still NodeStatusAwaitingAdmin. Aborting the parked branch afterward still fails the
 // overall workflow, since parallel join semantics are unchanged.
-// TestAdminParkingIsolatesParallelBranches also exercises PARALLEL_SPLIT's own isolation: each
+// TestAdminParkingIsolatesParallelBranches exercises PARALLEL_SPLIT's isolation: each
 // matching branch runs as its own child workflow (see parallel_gateway.go), so a node parked
-// for admin inside one branch (task_a, here) shows up in THAT CHILD's own status/signal
-// channel, not the parent's — mirroring how a node inside a BATCH_SPLIT partition already
-// works. The child's deterministic ID is FormatBatchChildWorkflowID(parentID, splitNodeID,
-// edgeID); parallelWorkflowJSON's split->task_a edge is "e2".
+// for admin inside one branch (task_a, here) shows up in that child's own status and signal
+// channel, not the parent's (similar to BATCH_SPLIT partitions).
+// The child's deterministic ID is FormatBatchChildWorkflowID(parentID, splitNodeID, edgeID);
+// parallelWorkflowJSON's split->task_a edge is "e2".
 func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
