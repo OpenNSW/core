@@ -50,7 +50,7 @@ type FormatConfig struct {
 // SegmentConfig is the raw configuration for a single segment. Fields are
 // interpreted according to Type; unused fields are ignored.
 type SegmentConfig struct {
-	// Type is one of: "literal", "list", "date", "sequence".
+	// Type is one of: "literal", "list", "date", "sequence", "random".
 	Type string `yaml:"type"`
 
 	// Value is the fixed text for a literal segment.
@@ -67,10 +67,10 @@ type SegmentConfig struct {
 	// date segments.
 	Layout string `yaml:"layout,omitempty"`
 
-	// ScopeKey is a template string for sequence segments. Placeholders are
-	// resolved at generation time. Curly braces '{' and '}' are reserved as
-	// placeholder delimiters in scope keys. See the Registry documentation for
-	// the full placeholder reference.
+	// ScopeKey is a template string for sequence and random segments.
+	// Placeholders are resolved at generation time. Curly braces '{' and '}'
+	// are reserved as placeholder delimiters in scope keys. See the Registry
+	// documentation for the full placeholder reference.
 	ScopeKey string `yaml:"scopeKey,omitempty"`
 
 	// Padding is the minimum number of digits for a sequence segment's counter.
@@ -78,6 +78,17 @@ type SegmentConfig struct {
 	// If the counter exceeds the maximum value representable with Padding digits,
 	// ErrCounterOverflow is returned.
 	Padding int `yaml:"padding,omitempty"`
+
+	// Charset selects the alphabet a random segment draws characters from.
+	// One of: "numeric", "alpha", "alphanumeric".
+	Charset string `yaml:"charset,omitempty"`
+
+	// Length is the number of characters a random segment generates.
+	Length int `yaml:"length,omitempty"`
+
+	// MaxAttempts caps the number of collision retries for a random segment
+	// before Generate returns ErrRandomExhausted. Defaults to 10 if unset.
+	MaxAttempts int `yaml:"maxAttempts,omitempty"`
 }
 
 // LoadConfig reads and parses a YAML configuration file at the given path.

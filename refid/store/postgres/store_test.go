@@ -105,5 +105,67 @@ func TestNew_InvalidTableName(t *testing.T) {
 		if _, err := postgres.New(nil, postgres.WithTableName(name)); err == nil {
 			t.Errorf("expected New error for invalid table name %q, got nil", name)
 		}
+		if err := postgres.MigrateRandom(context.Background(), nil, postgres.WithTableName(name)); err == nil {
+			t.Errorf("expected MigrateRandom error for invalid table name %q, got nil", name)
+		}
+		if _, err := postgres.NewRandom(nil, postgres.WithTableName(name)); err == nil {
+			t.Errorf("expected NewRandom error for invalid table name %q, got nil", name)
+		}
+	}
+}
+
+// TestRandomStore_Integration tests MigrateRandom and the RandomStore against
+// a live PostgreSQL instance if POSTGRES_TEST_DSN is provided in the
+// environment.
+func TestRandomStore_Integration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("skipping Postgres integration test; set POSTGRES_TEST_DSN to run")
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("failed to open postgres connection: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("failed to connect to postgres: %v", err)
+	}
+
+	// 1. Migrate default table
+	if err := postgres.MigrateRandom(ctx, db); err != nil {
+		t.Fatalf("MigrateRandom failed: %v", err)
+	}
+
+	// 2. Migrate custom table
+	customTable := "refid_integration_test_random"
+	if err := postgres.MigrateRandom(ctx, db, postgres.WithTableName(customTable)); err != nil {
+		t.Fatalf("MigrateRandom with custom table failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DROP TABLE IF EXISTS " + customTable)
+	})
+
+	// 3. Create store and test Reserve
+	store, err := postgres.NewRandom(db, postgres.WithTableName(customTable))
+	if err != nil {
+		t.Fatalf("NewRandom failed: %v", err)
+	}
+	scope := "RTA:voucher_id"
+
+	if err := store.Reserve(ctx, scope, "AB12CD"); err != nil {
+		t.Fatalf("Reserve failed for a fresh value: %v", err)
+	}
+
+	// 4. Reserving the same value under the same scope must collide
+	err = store.Reserve(ctx, scope, "AB12CD")
+	if !errors.Is(err, refid.ErrRandomCollision) {
+		t.Errorf("expected ErrRandomCollision for duplicate value, got %v", err)
+	}
+
+	// 5. The same value under a different scope must not collide
+	if err := store.Reserve(ctx, "RTA:other_id", "AB12CD"); err != nil {
+		t.Errorf("expected no collision across scopes, got %v", err)
 	}
 }

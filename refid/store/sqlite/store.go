@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Lanka Software Foundation
 
-// Package sqlite provides a SQLite-backed implementation of
-// refid.SequenceStore using database/sql and raw SQL — no ORM. Import a
-// SQLite driver (e.g. modernc.org/sqlite, which is pure Go — no CGO), open a
-// connection with sql.Open, and pass the resulting *sql.DB to New.
+// Package sqlite provides SQLite-backed implementations of
+// refid.SequenceStore (via New) and refid.RandomStore (via NewRandom) using
+// database/sql and raw SQL — no ORM. Import a SQLite driver (e.g.
+// modernc.org/sqlite, which is pure Go — no CGO), open a connection with
+// sql.Open, and pass the resulting *sql.DB to New or NewRandom.
 //
 // SQLite allows only one writer at a time via a whole-database file lock,
 // and nothing sets a busy_timeout by default, so concurrent access can fail
@@ -119,4 +120,74 @@ func (s *store) Next(ctx context.Context, scopeKey string, max int64) (int64, er
 		return 0, fmt.Errorf("refid/store/sqlite: sequence increment failed for scope %q: %w", scopeKey, err)
 	}
 	return counter, nil
+}
+
+// DefaultRandomTableName is the default table name used for issued random ID values.
+const DefaultRandomTableName = "refid_random"
+
+// randomStore is a SQLite-backed implementation of refid.RandomStore. It uses
+// a single conditional insert, so Reserve never holds a transaction or lock
+// open beyond that one statement.
+type randomStore struct {
+	db    *sql.DB
+	query string // built once at construction time from the table name
+}
+
+// NewRandom returns a refid.RandomStore backed by SQLite. db must already be
+// opened against the sqlite driver (see the package doc). By default it
+// targets the "refid_random" table; override with WithTableName. NewRandom
+// returns an error (never panics) if an option is invalid.
+func NewRandom(db *sql.DB, opts ...Option) (refid.RandomStore, error) {
+	cfg := config{tableName: DefaultRandomTableName}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.err != nil {
+		return nil, cfg.err
+	}
+	query := fmt.Sprintf(`
+INSERT INTO %s (scope_key, value, issued_at)
+VALUES (?1, ?2, datetime('now'))
+ON CONFLICT DO NOTHING`, cfg.tableName)
+	return &randomStore{db: db, query: query}, nil
+}
+
+// MigrateRandom creates the issued-random-value table if it does not already
+// exist. Pass WithTableName to migrate a custom table name.
+func MigrateRandom(ctx context.Context, db *sql.DB, opts ...Option) error {
+	cfg := config{tableName: DefaultRandomTableName}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.err != nil {
+		return cfg.err
+	}
+	ddl := fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS %s (
+    scope_key  TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    issued_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (scope_key, value)
+)`, cfg.tableName)
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("refid/store/sqlite: failed to create table %q: %w", cfg.tableName, err)
+	}
+	return nil
+}
+
+// Reserve implements refid.RandomStore using a single conditional insert: no
+// explicit transaction, no lock held beyond this one call.
+func (s *randomStore) Reserve(ctx context.Context, scopeKey, value string) error {
+	res, err := s.db.ExecContext(ctx, s.query, scopeKey, value)
+	if err != nil {
+		return fmt.Errorf("refid/store/sqlite: random reserve failed for scope %q: %w", scopeKey, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("refid/store/sqlite: random reserve failed for scope %q: %w", scopeKey, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: scope %q, value %q", refid.ErrRandomCollision, scopeKey, value)
+	}
+	return nil
 }

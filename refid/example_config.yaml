@@ -13,8 +13,10 @@
 #   list      — emits a caller-supplied value after validating it is in the named list.
 #   date      — formats the current UTC time using a Go reference-date layout string.
 #   sequence  — increments a durable counter scoped by a key template and zero-pads the result.
+#   random    — generates a fixed-length random string from a charset, reserved via a
+#               RandomStore (retrying on collision) scoped by the same kind of key template.
 #
-# Scope key placeholders (for sequence segments):
+# Scope key placeholders (for sequence and random segments):
 #   {issuer}    — the issuer identifier for this format
 #   {idType}    — the ID type identifier for this format
 #   {yyyy}      — 4-digit UTC year
@@ -22,8 +24,14 @@
 #   {yyyyMMdd}  — UTC year + month + day
 #   {<param>}   — any caller-supplied param key (lower precedence than the above)
 #
-# Including {yyyyMMdd} in a scope key gives a daily-resetting counter.
-# Omitting all date placeholders gives a counter that never resets.
+# Including {yyyyMMdd} in a scope key gives a daily-resetting counter (or daily-reset
+# uniqueness set, for random segments). Omitting all date placeholders gives a scope
+# that never resets.
+#
+# Random segments also take:
+#   charset      — one of: numeric, alpha, alphanumeric
+#   length       — number of characters to generate
+#   maxAttempts  — collision retries before giving up (default 10)
 
 issuers:
   - issuer: RTA
@@ -61,6 +69,18 @@ issuers:
           - type: sequence
             scopeKey: "{issuer}:{idType}:{officeCode}"
             padding: 8              # 00000001 … 99999999
+
+      # voucher_id — 8-character alphanumeric random code, unique per idType
+      # Produces: RTA-VCH-7K2QQXAB
+      - idType: voucher_id
+        segments:
+          - type: literal
+            value: "RTA-VCH-"
+          - type: random
+            scopeKey: "{issuer}:{idType}"
+            charset: alphanumeric    # numeric | alpha | alphanumeric
+            length: 8
+            maxAttempts: 10          # optional; 10 is also the default
 
   # A second issuer sharing the same list — counters are always isolated by
   # {issuer} and {idType} in the scope key, so no collision is possible.

@@ -26,4 +26,16 @@ var (
 	// string, breaking the expected ID format. Callers should alert operations
 	// when this occurs; the scope key is likely configured too broadly.
 	ErrCounterOverflow = errors.New("refid: sequence counter exceeds padding width")
+
+	// ErrRandomCollision is returned by RandomStore.Reserve when the given
+	// value is already reserved under the same scope key. A random segment
+	// treats this as a signal to generate a new value and retry, up to its
+	// configured maxAttempts.
+	ErrRandomCollision = errors.New("refid: random value already reserved for this scope")
+
+	// ErrRandomExhausted is returned when a random segment could not find an
+	// unreserved value within its configured maxAttempts. This usually means
+	// the charset/length combination is too small for the volume of IDs being
+	// issued in that scope; widen the charset or length, or narrow the scope.
+	ErrRandomExhausted = errors.New("refid: random segment exhausted attempts without finding an unreserved value")
 )

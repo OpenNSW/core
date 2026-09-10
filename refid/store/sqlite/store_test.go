@@ -95,5 +95,56 @@ func TestNew_InvalidTableName(t *testing.T) {
 		if _, err := sqlite.New(nil, sqlite.WithTableName(name)); err == nil {
 			t.Errorf("expected New error for invalid table name %q, got nil", name)
 		}
+		if err := sqlite.MigrateRandom(context.Background(), nil, sqlite.WithTableName(name)); err == nil {
+			t.Errorf("expected MigrateRandom error for invalid table name %q, got nil", name)
+		}
+		if _, err := sqlite.NewRandom(nil, sqlite.WithTableName(name)); err == nil {
+			t.Errorf("expected NewRandom error for invalid table name %q, got nil", name)
+		}
+	}
+}
+
+// TestRandomStore_Integration tests MigrateRandom and the RandomStore against
+// a fresh on-disk SQLite database in a temp directory.
+func TestRandomStore_Integration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "refid_random_test.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+
+	// 1. Migrate default table
+	if err := sqlite.MigrateRandom(ctx, db); err != nil {
+		t.Fatalf("MigrateRandom failed: %v", err)
+	}
+
+	// 2. Migrate custom table
+	customTable := "refid_integration_test_random"
+	if err := sqlite.MigrateRandom(ctx, db, sqlite.WithTableName(customTable)); err != nil {
+		t.Fatalf("MigrateRandom with custom table failed: %v", err)
+	}
+
+	// 3. Create store and test Reserve
+	store, err := sqlite.NewRandom(db, sqlite.WithTableName(customTable))
+	if err != nil {
+		t.Fatalf("NewRandom failed: %v", err)
+	}
+	scope := "RTA:voucher_id"
+
+	if err := store.Reserve(ctx, scope, "AB12CD"); err != nil {
+		t.Fatalf("Reserve failed for a fresh value: %v", err)
+	}
+
+	// 4. Reserving the same value under the same scope must collide
+	err = store.Reserve(ctx, scope, "AB12CD")
+	if !errors.Is(err, refid.ErrRandomCollision) {
+		t.Errorf("expected ErrRandomCollision for duplicate value, got %v", err)
+	}
+
+	// 5. The same value under a different scope must not collide
+	if err := store.Reserve(ctx, "RTA:other_id", "AB12CD"); err != nil {
+		t.Errorf("expected no collision across scopes, got %v", err)
 	}
 }

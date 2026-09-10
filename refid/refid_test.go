@@ -52,6 +52,38 @@ func (f *fixedStore) Next(_ context.Context, _ string, max int64) (int64, error)
 	return f.value, nil
 }
 
+// memRandomStore is an in-memory RandomStore for unit tests. It is safe for
+// concurrent use.
+type memRandomStore struct {
+	mu       sync.Mutex
+	reserved map[string]map[string]struct{} // scopeKey -> set of reserved values
+}
+
+func newMemRandomStore() *memRandomStore {
+	return &memRandomStore{reserved: make(map[string]map[string]struct{})}
+}
+
+func (m *memRandomStore) Reserve(_ context.Context, scopeKey, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.reserved[scopeKey] == nil {
+		m.reserved[scopeKey] = make(map[string]struct{})
+	}
+	if _, exists := m.reserved[scopeKey][value]; exists {
+		return refid.ErrRandomCollision
+	}
+	m.reserved[scopeKey][value] = struct{}{}
+	return nil
+}
+
+// collidingRandomStore always reports a collision, regardless of scope key or
+// value. Used to test exhaustion.
+type collidingRandomStore struct{}
+
+func (collidingRandomStore) Reserve(_ context.Context, _, _ string) error {
+	return refid.ErrRandomCollision
+}
+
 // -----------------------------------------------------------------------
 // Config construction helpers
 // -----------------------------------------------------------------------
@@ -732,5 +764,178 @@ func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
 	_, err := refid.NewRegistry(cfg, newMemStore())
 	if err == nil {
 		t.Fatal("expected error for empty date layout, got nil")
+	}
+}
+
+// -----------------------------------------------------------------------
+// randomSegment
+// -----------------------------------------------------------------------
+
+func randomConfig(charset string, length, maxAttempts int) refid.Config {
+	return refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "voucher",
+				Segments: []refid.SegmentConfig{
+					{Type: "literal", Value: "V-"},
+					{
+						Type:        "random",
+						ScopeKey:    "{issuer}:{idType}",
+						Charset:     charset,
+						Length:      length,
+						MaxAttempts: maxAttempts,
+					},
+				},
+			}},
+		}},
+	}
+}
+
+func TestGenerate_Random_Numeric(t *testing.T) {
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := reg.Generate(context.Background(), "TEST", "voucher", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(id) != len("V-")+6 {
+		t.Fatalf("unexpected id length: %q", id)
+	}
+	suffix := id[len("V-"):]
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			t.Errorf("expected numeric charset, got %q in %q", c, id)
+		}
+	}
+}
+
+func TestGenerate_Random_Alpha(t *testing.T) {
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlpha, 8, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := reg.Generate(context.Background(), "TEST", "voucher", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	suffix := id[len("V-"):]
+	for _, c := range suffix {
+		if c < 'A' || c > 'Z' {
+			t.Errorf("expected alpha charset, got %q in %q", c, id)
+		}
+	}
+}
+
+func TestGenerate_Random_NoDuplicatesWithinScope(t *testing.T) {
+	// Small charset/length forces frequent collisions, exercising the retry path.
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 2, 50), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	seen := make(map[string]struct{})
+	for i := 0; i < 20; i++ {
+		id, err := reg.Generate(ctx, "TEST", "voucher", nil)
+		if err != nil {
+			t.Fatalf("call %d: unexpected error: %v", i, err)
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("call %d: duplicate id %q", i, id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestGenerate_Random_Exhausted(t *testing.T) {
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 4, 3), newMemStore(), refid.WithRandomStore(collidingRandomStore{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = reg.Generate(context.Background(), "TEST", "voucher", nil)
+	if !errors.Is(err, refid.ErrRandomExhausted) {
+		t.Errorf("expected ErrRandomExhausted, got %v", err)
+	}
+}
+
+func TestGenerate_ConcurrentRandomCallsNoDuplicates(t *testing.T) {
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlphanumeric, 3, 200), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 50
+	ctx := context.Background()
+	results := make([]string, goroutines)
+	var wg sync.WaitGroup
+	var failed atomic.Bool
+
+	for i := range goroutines {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			id, err := reg.Generate(ctx, "TEST", "voucher", nil)
+			if err != nil {
+				t.Errorf("goroutine %d: %v", idx, err)
+				failed.Store(true)
+				return
+			}
+			results[idx] = id
+		}(i)
+	}
+	wg.Wait()
+
+	if failed.Load() {
+		t.FailNow()
+	}
+
+	seen := make(map[string]struct{}, goroutines)
+	for _, id := range results {
+		if _, dup := seen[id]; dup {
+			t.Errorf("duplicate ID generated: %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestSegment_Random_EmptyScopeKeyRejected(t *testing.T) {
+	cfg := randomConfig(refid.CharsetNumeric, 6, 0)
+	cfg.Issuers[0].Formats[0].Segments[1].ScopeKey = ""
+	_, err := refid.NewRegistry(cfg, newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err == nil {
+		t.Fatal("expected error for empty random scopeKey, got nil")
+	}
+}
+
+func TestSegment_Random_MissingStoreRejected(t *testing.T) {
+	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 0), newMemStore())
+	if err == nil {
+		t.Fatal("expected error for random segment without a RandomStore, got nil")
+	}
+}
+
+func TestSegment_Random_InvalidCharsetRejected(t *testing.T) {
+	_, err := refid.NewRegistry(randomConfig("bogus", 6, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err == nil {
+		t.Fatal("expected error for invalid charset, got nil")
+	}
+}
+
+func TestSegment_Random_InvalidLengthRejected(t *testing.T) {
+	invalidLengths := []int{-1, 0}
+	for _, length := range invalidLengths {
+		_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, length, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+		if err == nil {
+			t.Errorf("expected error for random length %d, got nil", length)
+		}
+	}
+}
+
+func TestSegment_Random_NegativeMaxAttemptsRejected(t *testing.T) {
+	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, -1), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	if err == nil {
+		t.Fatal("expected error for negative maxAttempts, got nil")
 	}
 }

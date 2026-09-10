@@ -7,9 +7,9 @@
 // # Overview
 //
 // Each ID format is defined as an ordered list of typed segments (literal, list,
-// date, sequence) that are concatenated at generation time. Formats are grouped
-// by issuer and identified by an idType, and are looked up from a Registry by
-// (issuer, idType).
+// date, sequence, random) that are concatenated at generation time. Formats are
+// grouped by issuer and identified by an idType, and are looked up from a
+// Registry by (issuer, idType).
 //
 // # Usage
 //
@@ -22,15 +22,22 @@
 //	})
 //	// id == "RTA-APP-COL-20260817-000042"
 //
+// If cfg uses any random segments, pass a RandomStore via WithRandomStore:
+//
+//	randomStore, err := postgres.NewRandom(db)
+//	reg, err := refid.NewRegistry(cfg, store, refid.WithRandomStore(randomStore))
+//
 // # Config format
 //
 // See the package-level example_config.yaml for a fully annotated example.
 //
 // # Scope key placeholders
 //
-// Sequence segments use a scopeKey template to determine counter scope.
-// Curly braces '{' and '}' are reserved in scopeKey templates for placeholder
-// delimiters. The following placeholders are resolved at generation time:
+// Sequence and random segments use a scopeKey template to determine the scope
+// within which their values must be unique (a counter for sequence segments,
+// the set of previously issued values for random segments). Curly braces '{'
+// and '}' are reserved in scopeKey templates for placeholder delimiters. The
+// following placeholders are resolved at generation time:
 //
 //	{issuer}    — the issuer identifier for this format
 //	{idType}    — the ID type identifier for this format
@@ -39,8 +46,9 @@
 //	{yyyyMMdd}  — year, month, and day (UTC)
 //	{<param>}   — any caller-supplied param not already claimed above
 //
-// Including {yyyyMMdd} in a scope key gives a daily-resetting counter; omitting
-// all date components gives a counter that never resets.
+// Including {yyyyMMdd} in a scope key gives a daily-resetting counter (or
+// daily-reset uniqueness set, for random segments); omitting all date
+// components gives a scope that never resets.
 //
 // # Counter overflow
 //
@@ -49,6 +57,15 @@
 // wider-than-expected ID would silently break any downstream system that
 // validates ID length. Operations should be alerted and the scope key
 // configuration reviewed.
+//
+// # Random segment exhaustion
+//
+// A random segment generates a value from its charset/length and reserves it
+// via RandomStore, retrying on collision up to maxAttempts (default 10). If
+// every attempt collides, Generate returns ErrRandomExhausted — this means
+// the charset/length combination is too small for the number of values
+// already issued in that scope; widen the charset or length, or narrow the
+// scope key (e.g. add {yyyyMMdd}).
 package refid
 
 import (
@@ -64,16 +81,34 @@ import (
 type Registry interface {
 	// Generate produces a new ID for the given issuer and idType.
 	//
-	// params supplies caller-provided values consumed by list and sequence
-	// segments (e.g. map[string]string{"officeCode": "COL"}). Unused keys are
-	// silently ignored; missing required keys return ErrInvalidParam.
+	// params supplies caller-provided values consumed by list, sequence, and
+	// random segments (e.g. map[string]string{"officeCode": "COL"}). Unused
+	// keys are silently ignored; missing required keys return ErrInvalidParam.
 	//
 	// Errors:
 	//   - ErrUnknownIssuer   — issuer not found in config
 	//   - ErrUnknownIDType   — idType not found under the given issuer
 	//   - ErrInvalidParam    — a required param is missing or has an invalid value
 	//   - ErrCounterOverflow — sequence counter exceeds padding width
+	//   - ErrRandomExhausted — random segment found no free value within maxAttempts
 	Generate(ctx context.Context, issuer, idType string, params map[string]string) (string, error)
+}
+
+// RegistryOption configures optional behavior for NewRegistry.
+type RegistryOption func(*registryConfig)
+
+type registryConfig struct {
+	randomStore RandomStore
+}
+
+// WithRandomStore supplies the RandomStore used to back "random" segments.
+// It is only required if the config contains at least one random segment;
+// NewRegistry returns an error at compile time if one is used without this
+// option set.
+func WithRandomStore(store RandomStore) RegistryOption {
+	return func(rc *registryConfig) {
+		rc.randomStore = store
+	}
 }
 
 // formatKey is the composite map key used to look up a pre-compiled format.
@@ -103,7 +138,12 @@ type registry struct {
 //
 // Fail-fast at startup: every error that would surface at generation time is
 // caught here instead.
-func NewRegistry(cfg Config, store SequenceStore) (Registry, error) {
+func NewRegistry(cfg Config, store SequenceStore, opts ...RegistryOption) (Registry, error) {
+	var rc registryConfig
+	for _, opt := range opts {
+		opt(&rc)
+	}
+
 	formats := make(map[formatKey]*compiledFormat)
 
 	for _, issuerCfg := range cfg.Issuers {
@@ -121,7 +161,7 @@ func NewRegistry(cfg Config, store SequenceStore) (Registry, error) {
 				return nil, fmt.Errorf("refid: duplicate format (%q, %q)", issuerCfg.Issuer, fmtCfg.IDType)
 			}
 
-			compiled, err := compileFormat(fmtCfg, issuerCfg.Issuer, cfg.Lists, store)
+			compiled, err := compileFormat(fmtCfg, issuerCfg.Issuer, cfg.Lists, store, rc.randomStore)
 			if err != nil {
 				return nil, fmt.Errorf("refid: compiling format (%q, %q): %w", issuerCfg.Issuer, fmtCfg.IDType, err)
 			}
@@ -170,14 +210,14 @@ func (r *registry) Generate(ctx context.Context, issuer, idType string, params m
 
 // compileFormat validates and pre-compiles a single FormatConfig into its
 // segment implementations.
-func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, store SequenceStore) (*compiledFormat, error) {
+func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, store SequenceStore, randomStore RandomStore) (*compiledFormat, error) {
 	if len(cfg.Segments) == 0 {
 		return nil, fmt.Errorf("format has no segments")
 	}
 
 	segs := make([]segment, 0, len(cfg.Segments))
 	for i, sc := range cfg.Segments {
-		seg, err := compileSegment(sc, issuer, cfg.IDType, lists, store)
+		seg, err := compileSegment(sc, issuer, cfg.IDType, lists, store, randomStore)
 		if err != nil {
 			return nil, fmt.Errorf("segment[%d] (type=%q): %w", i, sc.Type, err)
 		}
@@ -187,7 +227,7 @@ func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, s
 }
 
 // compileSegment dispatches to the appropriate constructor based on sc.Type.
-func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]string, store SequenceStore) (segment, error) {
+func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]string, store SequenceStore, randomStore RandomStore) (segment, error) {
 	switch sc.Type {
 	case "literal":
 		return newLiteralSegment(sc)
@@ -205,7 +245,10 @@ func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]
 	case "sequence":
 		return newSequenceSegment(sc, issuer, idType, store)
 
+	case "random":
+		return newRandomSegment(sc, issuer, idType, randomStore)
+
 	default:
-		return nil, fmt.Errorf("unknown segment type %q; must be one of: literal, list, date, sequence", sc.Type)
+		return nil, fmt.Errorf("unknown segment type %q; must be one of: literal, list, date, sequence, random", sc.Type)
 	}
 }
