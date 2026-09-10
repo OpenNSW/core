@@ -960,7 +960,7 @@ func TestGenerate_Random_Exhausted(t *testing.T) {
 }
 
 func TestGenerate_ConcurrentRandomCallsNoDuplicates(t *testing.T) {
-	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlphanumeric, 3, 200), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlphanumeric, 3, 100), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1036,5 +1036,12 @@ func TestSegment_Random_NegativeMaxAttemptsRejected(t *testing.T) {
 	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, -1), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err == nil {
 		t.Fatal("expected error for negative maxAttempts, got nil")
+	}
+}
+
+func TestSegment_Random_MaxAttemptsTooLargeRejected(t *testing.T) {
+	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 101), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
+	if err == nil {
+		t.Fatal("expected error for maxAttempts exceeding the cap, got nil")
 	}
 }

@@ -121,8 +121,8 @@ type registryConfig struct {
 
 // WithSequenceStore supplies the SequenceStore used to back "sequence"
 // segments. It is only required if the config contains at least one sequence
-// segment; NewRegistry returns an error at compile time if one is used
-// without this option set.
+// segment; NewRegistry returns an error when called if one is used without
+// this option set.
 func WithSequenceStore(store SequenceStore) RegistryOption {
 	return func(rc *registryConfig) {
 		rc.sequenceStore = store
@@ -131,7 +131,7 @@ func WithSequenceStore(store SequenceStore) RegistryOption {
 
 // WithRandomStore supplies the RandomStore used to back "random" segments.
 // It is only required if the config contains at least one random segment;
-// NewRegistry returns an error at compile time if one is used without this
+// NewRegistry returns an error when called if one is used without this
 // option set.
 func WithRandomStore(store RandomStore) RegistryOption {
 	return func(rc *registryConfig) {

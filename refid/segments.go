@@ -229,6 +229,13 @@ var randomAlphabets = map[string]string{
 // set MaxAttempts.
 const defaultRandomMaxAttempts = 10
 
+// maxRandomMaxAttempts caps a random segment's configured MaxAttempts. Without
+// a cap, a large value would let Generate loop through many crypto/rand draws
+// and store round-trips in a single call before finally returning
+// ErrRandomExhausted, turning a misconfiguration into a latency/cost problem
+// at generation time instead of a fail-fast NewRegistry error.
+const maxRandomMaxAttempts = 100
+
 // randomSegment generates a fixed-length random string from a charset and
 // reserves it in a RandomStore to guarantee uniqueness within its scope,
 // retrying with a new value on collision.
@@ -311,8 +318,8 @@ func newRandomSegment(cfg SegmentConfig, issuer, idType string, store RandomStor
 	if !ok {
 		return nil, fmt.Errorf("refid: random segment has unknown charset %q; must be one of: numeric, alpha, alphanumeric", cfg.Random.Charset)
 	}
-	if cfg.Random.MaxAttempts < 0 {
-		return nil, fmt.Errorf("refid: random segment maxAttempts must not be negative, got %d", cfg.Random.MaxAttempts)
+	if cfg.Random.MaxAttempts < 0 || cfg.Random.MaxAttempts > maxRandomMaxAttempts {
+		return nil, fmt.Errorf("refid: random segment maxAttempts must be between 0 and %d, got %d", maxRandomMaxAttempts, cfg.Random.MaxAttempts)
 	}
 	maxAttempts := cfg.Random.MaxAttempts
 	if maxAttempts == 0 {

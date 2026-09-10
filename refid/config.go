@@ -117,7 +117,8 @@ type RandomSegmentConfig struct {
 	Length int `yaml:"length"`
 
 	// MaxAttempts caps the number of collision retries before Generate
-	// returns ErrRandomExhausted. Defaults to 10 if unset.
+	// returns ErrRandomExhausted. Defaults to 10 if unset; must be between
+	// 0 and 100.
 	MaxAttempts int `yaml:"maxAttempts,omitempty"`
 }
 
