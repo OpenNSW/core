@@ -13,8 +13,16 @@
 #   list      — emits a caller-supplied value after validating it is in the named list.
 #   date      — formats the current UTC time using a Go reference-date layout string.
 #   sequence  — increments a durable counter scoped by a key template and zero-pads the result.
+#               Settings go under a nested `sequence:` block (scopeKey, padding).
 #   random    — generates a fixed-length random string from a charset, reserved via a
 #               RandomStore (retrying on collision) scoped by the same kind of key template.
+#               Settings go under a nested `random:` block (scopeKey, charset, length,
+#               maxAttempts).
+#
+# A format may contain at most one sequence or random segment combined — Generate has
+# no rollback across segments, so a second stateful segment could commit a durable side
+# effect (a counter increment, a random value reservation) that is then orphaned if a
+# later stateful segment fails during the same call.
 #
 # Scope key placeholders (for sequence and random segments):
 #   {issuer}    — the issuer identifier for this format
@@ -27,11 +35,6 @@
 # Including {yyyyMMdd} in a scope key gives a daily-resetting counter (or daily-reset
 # uniqueness set, for random segments). Omitting all date placeholders gives a scope
 # that never resets.
-#
-# Random segments also take:
-#   charset      — one of: numeric, alpha, alphanumeric
-#   length       — number of characters to generate
-#   maxAttempts  — collision retries before giving up (default 10)
 
 issuers:
   - issuer: RTA
@@ -52,8 +55,9 @@ issuers:
           - type: literal
             value: "-"
           - type: sequence
-            scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}"
-            padding: 6              # 000001 … 999999; returns ErrCounterOverflow beyond that
+            sequence:
+              scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}"
+              padding: 6              # 000001 … 999999; returns ErrCounterOverflow beyond that
 
       # permit_id — never resets, counted independently per office
       # Produces: RTA-PMT-COL-00000001
@@ -67,8 +71,9 @@ issuers:
           - type: literal
             value: "-"
           - type: sequence
-            scopeKey: "{issuer}:{idType}:{officeCode}"
-            padding: 8              # 00000001 … 99999999
+            sequence:
+              scopeKey: "{issuer}:{idType}:{officeCode}"
+              padding: 8              # 00000001 … 99999999
 
       # voucher_id — 8-character alphanumeric random code, unique per idType
       # Produces: RTA-VCH-7K2QQXAB
@@ -77,10 +82,11 @@ issuers:
           - type: literal
             value: "RTA-VCH-"
           - type: random
-            scopeKey: "{issuer}:{idType}"
-            charset: alphanumeric    # numeric | alpha | alphanumeric
-            length: 8
-            maxAttempts: 10          # optional; 10 is also the default
+            random:
+              scopeKey: "{issuer}:{idType}"
+              charset: alphanumeric    # numeric | alpha | alphanumeric
+              length: 8
+              maxAttempts: 10          # optional; 10 is also the default
 
   # A second issuer sharing the same list — counters are always isolated by
   # {issuer} and {idType} in the scope key, so no collision is possible.
@@ -100,8 +106,9 @@ issuers:
           - type: literal
             value: "-"
           - type: sequence
-            scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}"
-            padding: 6
+            sequence:
+              scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}"
+              padding: 6
 
 lists:
   # office_location is the controlled set of valid office codes.

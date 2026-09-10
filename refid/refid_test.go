@@ -100,21 +100,21 @@ func rtaConfig() refid.Config {
 					{
 						IDType: "application_id",
 						Segments: []refid.SegmentConfig{
-							{Type: "literal", Value: "RTA-APP-"},
-							{Type: "list", List: "office_location", Param: "officeCode"},
-							{Type: "literal", Value: "-"},
-							{Type: "date", Layout: "20060102"},
-							{Type: "literal", Value: "-"},
-							{Type: "sequence", ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6},
+							{Type: refid.SegmentTypeLiteral, Value: "RTA-APP-"},
+							{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
+							{Type: refid.SegmentTypeLiteral, Value: "-"},
+							{Type: refid.SegmentTypeDate, Layout: "20060102"},
+							{Type: refid.SegmentTypeLiteral, Value: "-"},
+							{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6}},
 						},
 					},
 					{
 						IDType: "permit_id",
 						Segments: []refid.SegmentConfig{
-							{Type: "literal", Value: "RTA-PMT-"},
-							{Type: "list", List: "office_location", Param: "officeCode"},
-							{Type: "literal", Value: "-"},
-							{Type: "sequence", ScopeKey: "{issuer}:{idType}:{officeCode}", Padding: 8},
+							{Type: refid.SegmentTypeLiteral, Value: "RTA-PMT-"},
+							{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
+							{Type: refid.SegmentTypeLiteral, Value: "-"},
+							{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}", Padding: 8}},
 						},
 					},
 				},
@@ -128,7 +128,7 @@ func rtaConfig() refid.Config {
 // -----------------------------------------------------------------------
 
 func TestNewRegistry_ValidConfig(t *testing.T) {
-	_, err := refid.NewRegistry(rtaConfig(), newMemStore())
+	_, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatalf("expected no error for valid config, got: %v", err)
 	}
@@ -141,15 +141,15 @@ func TestNewRegistry_DuplicateIDType(t *testing.T) {
 			Issuer: "RTA",
 			Formats: []refid.FormatConfig{
 				{IDType: "application_id", Segments: []refid.SegmentConfig{
-					{Type: "literal", Value: "A"},
+					{Type: refid.SegmentTypeLiteral, Value: "A"},
 				}},
 				{IDType: "application_id", Segments: []refid.SegmentConfig{
-					{Type: "literal", Value: "B"},
+					{Type: refid.SegmentTypeLiteral, Value: "B"},
 				}},
 			},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for duplicate idType, got nil")
 	}
@@ -163,12 +163,12 @@ func TestNewRegistry_UndefinedList(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "application_id",
 				Segments: []refid.SegmentConfig{
-					{Type: "list", List: "nonexistent_list", Param: "officeCode"},
+					{Type: refid.SegmentTypeList, List: "nonexistent_list", Param: "officeCode"},
 				},
 			}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for undefined list reference, got nil")
 	}
@@ -184,7 +184,7 @@ func TestNewRegistry_UnknownSegmentType(t *testing.T) {
 			}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for unknown segment type, got nil")
 	}
@@ -197,9 +197,66 @@ func TestNewRegistry_EmptySegments(t *testing.T) {
 			Formats: []refid.FormatConfig{{IDType: "application_id", Segments: nil}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for format with no segments, got nil")
+	}
+}
+
+func TestNewRegistry_MultipleSequenceSegmentsRejected(t *testing.T) {
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "bad",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:a", Padding: 4}},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:b", Padding: 4}},
+				},
+			}},
+		}},
+	}
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
+	if err == nil {
+		t.Fatal("expected error for format with two sequence segments, got nil")
+	}
+}
+
+func TestNewRegistry_MultipleRandomSegmentsRejected(t *testing.T) {
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "bad",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeRandom, Random: &refid.RandomSegmentConfig{ScopeKey: "{issuer}:{idType}:a", Charset: refid.CharsetNumeric, Length: 4}},
+					{Type: refid.SegmentTypeRandom, Random: &refid.RandomSegmentConfig{ScopeKey: "{issuer}:{idType}:b", Charset: refid.CharsetNumeric, Length: 4}},
+				},
+			}},
+		}},
+	}
+	_, err := refid.NewRegistry(cfg, refid.WithRandomStore(newMemRandomStore()))
+	if err == nil {
+		t.Fatal("expected error for format with two random segments, got nil")
+	}
+}
+
+func TestNewRegistry_SequenceAndRandomSegmentRejected(t *testing.T) {
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "bad",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 4}},
+					{Type: refid.SegmentTypeRandom, Random: &refid.RandomSegmentConfig{ScopeKey: "{issuer}:{idType}", Charset: refid.CharsetNumeric, Length: 4}},
+				},
+			}},
+		}},
+	}
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
+	if err == nil {
+		t.Fatal("expected error for format mixing a sequence and a random segment, got nil")
 	}
 }
 
@@ -207,10 +264,10 @@ func TestNewRegistry_EmptyIssuerName(t *testing.T) {
 	cfg := refid.Config{
 		Issuers: []refid.IssuerConfig{{
 			Issuer:  "",
-			Formats: []refid.FormatConfig{{IDType: "x", Segments: []refid.SegmentConfig{{Type: "literal", Value: "x"}}}},
+			Formats: []refid.FormatConfig{{IDType: "x", Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeLiteral, Value: "x"}}}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for empty issuer name, got nil")
 	}
@@ -226,11 +283,11 @@ func TestGenerate_LiteralOnly(t *testing.T) {
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "simple",
-				Segments: []refid.SegmentConfig{{Type: "literal", Value: "HELLO-WORLD"}},
+				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeLiteral, Value: "HELLO-WORLD"}},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, newMemStore())
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +302,7 @@ func TestGenerate_LiteralOnly(t *testing.T) {
 
 func TestGenerate_ApplicationID(t *testing.T) {
 	store := newMemStore()
-	reg, err := refid.NewRegistry(rtaConfig(), store)
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +328,7 @@ func TestGenerate_ApplicationID(t *testing.T) {
 
 func TestGenerate_PermitID_NeverResets(t *testing.T) {
 	store := newMemStore()
-	reg, err := refid.NewRegistry(rtaConfig(), store)
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +358,7 @@ func TestGenerate_PermitID_NeverResets(t *testing.T) {
 
 func TestGenerate_SequentialCounters(t *testing.T) {
 	store := newMemStore()
-	reg, err := refid.NewRegistry(rtaConfig(), store)
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +389,7 @@ func TestGenerate_SequentialCounters(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestGenerate_UnknownIssuer(t *testing.T) {
-	reg, err := refid.NewRegistry(rtaConfig(), newMemStore())
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +400,7 @@ func TestGenerate_UnknownIssuer(t *testing.T) {
 }
 
 func TestGenerate_UnknownIDType(t *testing.T) {
-	reg, err := refid.NewRegistry(rtaConfig(), newMemStore())
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +411,7 @@ func TestGenerate_UnknownIDType(t *testing.T) {
 }
 
 func TestGenerate_MissingListParam(t *testing.T) {
-	reg, err := refid.NewRegistry(rtaConfig(), newMemStore())
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +422,7 @@ func TestGenerate_MissingListParam(t *testing.T) {
 }
 
 func TestGenerate_InvalidListValue(t *testing.T) {
-	reg, err := refid.NewRegistry(rtaConfig(), newMemStore())
+	reg, err := refid.NewRegistry(rtaConfig(), refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,13 +442,13 @@ func TestGenerate_ValidationPreventsSideEffects(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "seq_before_list",
 				Segments: []refid.SegmentConfig{
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: 4},
-					{Type: "list", List: "office_location", Param: "officeCode"},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 4}},
+					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, store)
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,13 +473,13 @@ func TestGenerate_UnresolvedScopeKeyParam(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "custom",
 				Segments: []refid.SegmentConfig{
-					{Type: "literal", Value: "PREFIX-"},
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}:{officeCode}", Padding: 4},
+					{Type: refid.SegmentTypeLiteral, Value: "PREFIX-"},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}", Padding: 4}},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, newMemStore())
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,12 +499,12 @@ func TestSegment_DatePlaceholderVariants(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "date_variants",
 				Segments: []refid.SegmentConfig{
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}:{yyyy}:{yyyyMM}:{yyyyMMdd}", Padding: 4},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyy}:{yyyyMM}:{yyyyMMdd}", Padding: 4}},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, store)
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,12 +530,12 @@ func TestGenerate_CounterOverflow(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "seq",
 				Segments: []refid.SegmentConfig{
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: 2},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 2}},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, store)
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,12 +553,12 @@ func TestGenerate_CounterDoesNotAdvanceOnOverflow(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "seq",
 				Segments: []refid.SegmentConfig{
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: 1}, // max counter = 9
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 1}}, // max counter = 9
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, store)
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,17 +615,17 @@ func TestScopeKey_DailyReset(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "case_id",
 				Segments: []refid.SegmentConfig{
-					{Type: "literal", Value: "FCAU-"},
-					{Type: "list", List: "office_location", Param: "officeCode"},
-					{Type: "literal", Value: "-"},
-					{Type: "date", Layout: "20060102"},
-					{Type: "literal", Value: "-"},
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6},
+					{Type: refid.SegmentTypeLiteral, Value: "FCAU-"},
+					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
+					{Type: refid.SegmentTypeLiteral, Value: "-"},
+					{Type: refid.SegmentTypeDate, Layout: "20060102"},
+					{Type: refid.SegmentTypeLiteral, Value: "-"},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6}},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, store)
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,12 +668,12 @@ func TestGenerate_ConcurrentCallsNoDuplicates(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "seq",
 				Segments: []refid.SegmentConfig{
-					{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: 6},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 6}},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, store)
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,12 +737,12 @@ func TestSegment_Date_UsesUTC(t *testing.T) {
 			Formats: []refid.FormatConfig{{
 				IDType: "dated",
 				Segments: []refid.SegmentConfig{
-					{Type: "date", Layout: "20060102"},
+					{Type: refid.SegmentTypeDate, Layout: "20060102"},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, newMemStore())
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,13 +763,53 @@ func TestSegment_Literal_EmptyValueRejected(t *testing.T) {
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "bad",
-				Segments: []refid.SegmentConfig{{Type: "literal", Value: ""}},
+				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeLiteral, Value: ""}},
 			}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for empty literal value, got nil")
+	}
+}
+
+func TestSegment_Sequence_MissingStoreRejected(t *testing.T) {
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType:   "bad",
+				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 6}}},
+			}},
+		}},
+	}
+	_, err := refid.NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected error for sequence segment without a SequenceStore, got nil")
+	}
+}
+
+func TestNewRegistry_NoStoresNeededWithoutSequenceOrRandomSegments(t *testing.T) {
+	cfg := refid.Config{
+		Lists: map[string][]string{"office_location": {"COL"}},
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "TEST",
+			Formats: []refid.FormatConfig{{
+				IDType: "simple",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeLiteral, Value: "PREFIX-"},
+					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
+					{Type: refid.SegmentTypeDate, Layout: "20060102"},
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("expected no error when no sequence/random segments are used and no stores are supplied, got: %v", err)
+	}
+	if _, err := reg.Generate(context.Background(), "TEST", "simple", map[string]string{"officeCode": "COL"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -722,11 +819,11 @@ func TestSegment_Sequence_EmptyScopeKeyRejected(t *testing.T) {
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "bad",
-				Segments: []refid.SegmentConfig{{Type: "sequence", ScopeKey: "", Padding: 6}},
+				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "", Padding: 6}}},
 			}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for empty sequence scopeKey, got nil")
 	}
@@ -740,11 +837,11 @@ func TestSegment_Sequence_InvalidPaddingRejected(t *testing.T) {
 				Issuer: "TEST",
 				Formats: []refid.FormatConfig{{
 					IDType:   "bad",
-					Segments: []refid.SegmentConfig{{Type: "sequence", ScopeKey: "{issuer}:{idType}", Padding: pad}},
+					Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: pad}}},
 				}},
 			}},
 		}
-		_, err := refid.NewRegistry(cfg, newMemStore())
+		_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 		if err == nil {
 			t.Errorf("expected error for sequence padding %d, got nil", pad)
 		}
@@ -757,11 +854,11 @@ func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "bad",
-				Segments: []refid.SegmentConfig{{Type: "date", Layout: ""}},
+				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: ""}},
 			}},
 		}},
 	}
-	_, err := refid.NewRegistry(cfg, newMemStore())
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for empty date layout, got nil")
 	}
@@ -778,13 +875,15 @@ func randomConfig(charset string, length, maxAttempts int) refid.Config {
 			Formats: []refid.FormatConfig{{
 				IDType: "voucher",
 				Segments: []refid.SegmentConfig{
-					{Type: "literal", Value: "V-"},
+					{Type: refid.SegmentTypeLiteral, Value: "V-"},
 					{
-						Type:        "random",
-						ScopeKey:    "{issuer}:{idType}",
-						Charset:     charset,
-						Length:      length,
-						MaxAttempts: maxAttempts,
+						Type: refid.SegmentTypeRandom,
+						Random: &refid.RandomSegmentConfig{
+							ScopeKey:    "{issuer}:{idType}",
+							Charset:     charset,
+							Length:      length,
+							MaxAttempts: maxAttempts,
+						},
 					},
 				},
 			}},
@@ -793,7 +892,7 @@ func randomConfig(charset string, length, maxAttempts int) refid.Config {
 }
 
 func TestGenerate_Random_Numeric(t *testing.T) {
-	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 0), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -813,7 +912,7 @@ func TestGenerate_Random_Numeric(t *testing.T) {
 }
 
 func TestGenerate_Random_Alpha(t *testing.T) {
-	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlpha, 8, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlpha, 8, 0), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -831,7 +930,7 @@ func TestGenerate_Random_Alpha(t *testing.T) {
 
 func TestGenerate_Random_NoDuplicatesWithinScope(t *testing.T) {
 	// Small charset/length forces frequent collisions, exercising the retry path.
-	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 2, 50), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 2, 50), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +949,7 @@ func TestGenerate_Random_NoDuplicatesWithinScope(t *testing.T) {
 }
 
 func TestGenerate_Random_Exhausted(t *testing.T) {
-	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 4, 3), newMemStore(), refid.WithRandomStore(collidingRandomStore{}))
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 4, 3), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(collidingRandomStore{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -861,7 +960,7 @@ func TestGenerate_Random_Exhausted(t *testing.T) {
 }
 
 func TestGenerate_ConcurrentRandomCallsNoDuplicates(t *testing.T) {
-	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlphanumeric, 3, 200), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	reg, err := refid.NewRegistry(randomConfig(refid.CharsetAlphanumeric, 3, 200), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,22 +1001,22 @@ func TestGenerate_ConcurrentRandomCallsNoDuplicates(t *testing.T) {
 
 func TestSegment_Random_EmptyScopeKeyRejected(t *testing.T) {
 	cfg := randomConfig(refid.CharsetNumeric, 6, 0)
-	cfg.Issuers[0].Formats[0].Segments[1].ScopeKey = ""
-	_, err := refid.NewRegistry(cfg, newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	cfg.Issuers[0].Formats[0].Segments[1].Random.ScopeKey = ""
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err == nil {
 		t.Fatal("expected error for empty random scopeKey, got nil")
 	}
 }
 
 func TestSegment_Random_MissingStoreRejected(t *testing.T) {
-	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 0), newMemStore())
+	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 0), refid.WithSequenceStore(newMemStore()))
 	if err == nil {
 		t.Fatal("expected error for random segment without a RandomStore, got nil")
 	}
 }
 
 func TestSegment_Random_InvalidCharsetRejected(t *testing.T) {
-	_, err := refid.NewRegistry(randomConfig("bogus", 6, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	_, err := refid.NewRegistry(randomConfig("bogus", 6, 0), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err == nil {
 		t.Fatal("expected error for invalid charset, got nil")
 	}
@@ -926,7 +1025,7 @@ func TestSegment_Random_InvalidCharsetRejected(t *testing.T) {
 func TestSegment_Random_InvalidLengthRejected(t *testing.T) {
 	invalidLengths := []int{-1, 0}
 	for _, length := range invalidLengths {
-		_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, length, 0), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+		_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, length, 0), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 		if err == nil {
 			t.Errorf("expected error for random length %d, got nil", length)
 		}
@@ -934,7 +1033,7 @@ func TestSegment_Random_InvalidLengthRejected(t *testing.T) {
 }
 
 func TestSegment_Random_NegativeMaxAttemptsRejected(t *testing.T) {
-	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, -1), newMemStore(), refid.WithRandomStore(newMemRandomStore()))
+	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, -1), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err == nil {
 		t.Fatal("expected error for negative maxAttempts, got nil")
 	}

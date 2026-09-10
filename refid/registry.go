@@ -9,23 +9,26 @@
 // Each ID format is defined as an ordered list of typed segments (literal, list,
 // date, sequence, random) that are concatenated at generation time. Formats are
 // grouped by issuer and identified by an idType, and are looked up from a
-// Registry by (issuer, idType).
+// Registry by (issuer, idType). A format may contain at most one stateful
+// segment (sequence or random) — see "Stateful segment limit" below.
 //
 // # Usage
 //
 //	cfg, err := refid.LoadConfig("refid_config.yaml")
 //	store, err := postgres.New(db) // github.com/OpenNSW/core/refid/store/postgres
-//	reg, err := refid.NewRegistry(cfg, store)
+//	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
 //
 //	id, err := reg.Generate(ctx, "RTA", "application_id", map[string]string{
 //	    "officeCode": "COL",
 //	})
 //	// id == "RTA-APP-COL-20260817-000042"
 //
-// If cfg uses any random segments, pass a RandomStore via WithRandomStore:
+// WithSequenceStore and WithRandomStore are both optional — only supply the
+// one(s) backing segment types actually used in cfg. If cfg uses random
+// segments, also pass a RandomStore:
 //
 //	randomStore, err := postgres.NewRandom(db)
-//	reg, err := refid.NewRegistry(cfg, store, refid.WithRandomStore(randomStore))
+//	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store), refid.WithRandomStore(randomStore))
 //
 // # Config format
 //
@@ -66,6 +69,20 @@
 // the charset/length combination is too small for the number of values
 // already issued in that scope; widen the charset or length, or narrow the
 // scope key (e.g. add {yyyyMMdd}).
+//
+// # Stateful segment limit
+//
+// Generate has no transaction or rollback across segments: it validates all
+// segments, then renders them in order, and a sequence or random segment's
+// store call (a counter increment, a random value reservation) takes effect
+// immediately as a side effect of rendering. If a format had two or more
+// stateful segments and a later one failed during render (e.g. a sequence
+// segment overflowing, or a random segment exhausting its retries), an
+// earlier stateful segment's already-committed side effect would be
+// permanently orphaned — for a random segment, that permanently wastes one
+// value from its bounded charset/length space for no returned ID. To rule
+// this out, NewRegistry rejects any format with more than one sequence or
+// random segment combined.
 package refid
 
 import (
@@ -98,7 +115,18 @@ type Registry interface {
 type RegistryOption func(*registryConfig)
 
 type registryConfig struct {
-	randomStore RandomStore
+	sequenceStore SequenceStore
+	randomStore   RandomStore
+}
+
+// WithSequenceStore supplies the SequenceStore used to back "sequence"
+// segments. It is only required if the config contains at least one sequence
+// segment; NewRegistry returns an error at compile time if one is used
+// without this option set.
+func WithSequenceStore(store SequenceStore) RegistryOption {
+	return func(rc *registryConfig) {
+		rc.sequenceStore = store
+	}
 }
 
 // WithRandomStore supplies the RandomStore used to back "random" segments.
@@ -135,10 +163,11 @@ type registry struct {
 //   - a segment that references an undefined list name
 //   - a segment with missing required fields (e.g. empty scopeKey, empty layout)
 //   - an unrecognised segment type
+//   - more than one stateful (sequence or random) segment in a single format
 //
 // Fail-fast at startup: every error that would surface at generation time is
 // caught here instead.
-func NewRegistry(cfg Config, store SequenceStore, opts ...RegistryOption) (Registry, error) {
+func NewRegistry(cfg Config, opts ...RegistryOption) (Registry, error) {
 	var rc registryConfig
 	for _, opt := range opts {
 		opt(&rc)
@@ -161,7 +190,7 @@ func NewRegistry(cfg Config, store SequenceStore, opts ...RegistryOption) (Regis
 				return nil, fmt.Errorf("refid: duplicate format (%q, %q)", issuerCfg.Issuer, fmtCfg.IDType)
 			}
 
-			compiled, err := compileFormat(fmtCfg, issuerCfg.Issuer, cfg.Lists, store, rc.randomStore)
+			compiled, err := compileFormat(fmtCfg, issuerCfg.Issuer, cfg.Lists, rc.sequenceStore, rc.randomStore)
 			if err != nil {
 				return nil, fmt.Errorf("refid: compiling format (%q, %q): %w", issuerCfg.Issuer, fmtCfg.IDType, err)
 			}
@@ -216,39 +245,58 @@ func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, s
 	}
 
 	segs := make([]segment, 0, len(cfg.Segments))
+	statefulCount := 0
 	for i, sc := range cfg.Segments {
 		seg, err := compileSegment(sc, issuer, cfg.IDType, lists, store, randomStore)
 		if err != nil {
 			return nil, fmt.Errorf("segment[%d] (type=%q): %w", i, sc.Type, err)
 		}
+		if seg.isStateful() {
+			statefulCount++
+		}
 		segs = append(segs, seg)
 	}
+
+	// A format may contain at most one stateful segment (sequence or random).
+	// Generate renders segments in order with no rollback: if a stateful
+	// segment's store call commits (a counter increment, a random value
+	// reservation) and a later segment then fails, the earlier side effect
+	// is permanently orphaned — for a random segment this permanently wastes
+	// one value from its bounded charset/length space. Capping formats at one
+	// stateful segment rules this out entirely, since every other segment
+	// type is a pure function of (params, now) and cannot fail during render
+	// once the validation pass has already succeeded. See segment.isStateful.
+	if statefulCount > 1 {
+		return nil, fmt.Errorf("format has %d stateful (sequence/random) segments; at most 1 is allowed per format", statefulCount)
+	}
+
 	return &compiledFormat{segments: segs}, nil
 }
 
 // compileSegment dispatches to the appropriate constructor based on sc.Type.
 func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]string, store SequenceStore, randomStore RandomStore) (segment, error) {
 	switch sc.Type {
-	case "literal":
+	case SegmentTypeLiteral:
 		return newLiteralSegment(sc)
 
-	case "list":
+	case SegmentTypeList:
 		values, ok := lists[sc.List]
 		if !ok {
 			return nil, fmt.Errorf("list %q is not defined in config", sc.List)
 		}
 		return newListSegment(sc, values)
 
-	case "date":
+	case SegmentTypeDate:
 		return newDateSegment(sc)
 
-	case "sequence":
+	case SegmentTypeSequence:
 		return newSequenceSegment(sc, issuer, idType, store)
 
-	case "random":
+	case SegmentTypeRandom:
 		return newRandomSegment(sc, issuer, idType, randomStore)
 
 	default:
-		return nil, fmt.Errorf("unknown segment type %q; must be one of: literal, list, date, sequence, random", sc.Type)
+		return nil, fmt.Errorf("unknown segment type %q; must be one of: %s, %s, %s, %s, %s",
+			sc.Type, SegmentTypeLiteral, SegmentTypeList, SegmentTypeDate, SegmentTypeSequence, SegmentTypeRandom)
 	}
 }
