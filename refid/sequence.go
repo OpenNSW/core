@@ -9,8 +9,9 @@ import "context"
 // Each distinct scope key gets its own counter, starting at 1.
 //
 // The refid/store/postgres and refid/store/sqlite subpackages each provide
-// an implementation via New. Any caller that needs a different backend
-// (Redis, in-memory for tests, etc.) can provide their own implementation.
+// an implementation via their NewSequence constructor. Any caller that needs
+// a different backend (Redis, in-memory for tests, etc.) can provide their
+// own implementation.
 type SequenceStore interface {
 	// Next atomically increments the counter for the given scope key and returns
 	// the new value, provided the current counter is less than max.
