@@ -102,6 +102,8 @@ Reserved placeholders:
 > [!NOTE]
 > Curly braces `{` and `}` are reserved syntax for placeholder delimiters in `scopeKey` templates.
 
+See [docs/PATTERNS.md](docs/PATTERNS.md) for a catalog of ID shapes (constant IDs, multi-list, multi-sequence, non-default segment ordering, etc.) and reset cadences, each with a runnable example config.
+
 ---
 
 ## Database Setup
