@@ -10,8 +10,9 @@ import "context"
 // own independent set of reserved values.
 //
 // The refid/store/postgres and refid/store/sqlite subpackages each provide
-// an implementation via NewRandom. Any caller that needs a different backend
-// (Redis, in-memory for tests, etc.) can provide their own implementation.
+// an implementation via their NewRandom constructor. Any caller that needs a
+// different backend (Redis, in-memory for tests, etc.) can provide their own
+// implementation.
 type RandomStore interface {
 	// Reserve atomically records value as issued under scopeKey. If value is
 	// already reserved under the same scope key, Reserve returns

@@ -48,14 +48,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open db: %v", err)
 	}
-	if err := postgres.Migrate(ctx, db); err != nil {
+	if err := postgres.MigrateSequence(ctx, db); err != nil {
 		log.Fatalf("migration failed: %v", err)
 	}
 
 	// 3. Initialize Registry. WithSequenceStore/WithRandomStore are both
 	// optional — supply only the store(s) backing segment types your config
 	// actually uses (this example's config has no random segments).
-	store, err := postgres.New(db)
+	store, err := postgres.NewSequence(db)
 	if err != nil {
 		log.Fatalf("failed to create store: %v", err)
 	}
@@ -145,11 +145,11 @@ CREATE TABLE IF NOT EXISTS refid_sequences (
 );
 ```
 
-Initialize it automatically via `postgres.Migrate(ctx, db)`. To use a custom table name:
+Initialize it automatically via `postgres.MigrateSequence(ctx, db)`. To use a custom table name:
 
 ```go
-store, err := postgres.New(db, postgres.WithTableName("custom_sequences"))
-err = postgres.Migrate(ctx, db, postgres.WithTableName("custom_sequences"))
+store, err := postgres.NewSequence(db, postgres.WithTableName("custom_sequences"))
+err = postgres.MigrateSequence(ctx, db, postgres.WithTableName("custom_sequences"))
 ```
 
 `db` is a `*sql.DB` you opened yourself — the queries use PostgreSQL's native `$1` placeholders, so any PostgreSQL driver works. The Quickstart above uses pgx.
@@ -178,8 +178,8 @@ Same schema shapes and API for both `SequenceStore` and `RandomStore`. Import a 
 import _ "modernc.org/sqlite" // registers the "sqlite" driver
 
 db, err := sql.Open("sqlite", "refid.db")
-if err := sqlite.Migrate(ctx, db); err != nil { ... }
-store, err := sqlite.New(db)
+if err := sqlite.MigrateSequence(ctx, db); err != nil { ... }
+store, err := sqlite.NewSequence(db)
 
 if err := sqlite.MigrateRandom(ctx, db); err != nil { ... }
 randomStore, err := sqlite.NewRandom(db)

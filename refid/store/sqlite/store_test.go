@@ -16,11 +16,11 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
 )
 
-// TestStore_Integration tests Migrate and the SequenceStore against a fresh
-// on-disk SQLite database in a temp directory. Unlike the Postgres backend's
-// POSTGRES_TEST_DSN-gated integration test, this runs unconditionally — no
-// service container or environment gating is needed.
-func TestStore_Integration(t *testing.T) {
+// TestSequenceStore_Integration tests MigrateSequence and the SequenceStore
+// against a fresh on-disk SQLite database in a temp directory. Unlike the
+// Postgres backend's POSTGRES_TEST_DSN-gated integration test, this runs
+// unconditionally — no service container or environment gating is needed.
+func TestSequenceStore_Integration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "refid_test.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -30,20 +30,20 @@ func TestStore_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Migrate default table
-	if err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatalf("Migrate failed: %v", err)
+	if err := sqlite.MigrateSequence(ctx, db); err != nil {
+		t.Fatalf("MigrateSequence failed: %v", err)
 	}
 
 	// 2. Migrate custom table
 	customTable := "refid_integration_test_seqs"
-	if err := sqlite.Migrate(ctx, db, sqlite.WithTableName(customTable)); err != nil {
-		t.Fatalf("Migrate with custom table failed: %v", err)
+	if err := sqlite.MigrateSequence(ctx, db, sqlite.WithTableName(customTable)); err != nil {
+		t.Fatalf("MigrateSequence with custom table failed: %v", err)
 	}
 
 	// 3. Create store and test Next increments
-	store, err := sqlite.New(db, sqlite.WithTableName(customTable))
+	store, err := sqlite.NewSequence(db, sqlite.WithTableName(customTable))
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf("NewSequence failed: %v", err)
 	}
 	scope := "RTA:app_id:COL:20260826"
 
@@ -79,7 +79,7 @@ func TestStore_Integration(t *testing.T) {
 	}
 }
 
-func TestNew_InvalidTableName(t *testing.T) {
+func TestConstructors_InvalidTableName(t *testing.T) {
 	invalidNames := []string{
 		"users; DROP TABLE users;--",
 		"refid table",
@@ -89,11 +89,11 @@ func TestNew_InvalidTableName(t *testing.T) {
 	}
 
 	for _, name := range invalidNames {
-		if err := sqlite.Migrate(context.Background(), nil, sqlite.WithTableName(name)); err == nil {
-			t.Errorf("expected Migrate error for invalid table name %q, got nil", name)
+		if err := sqlite.MigrateSequence(context.Background(), nil, sqlite.WithTableName(name)); err == nil {
+			t.Errorf("expected MigrateSequence error for invalid table name %q, got nil", name)
 		}
-		if _, err := sqlite.New(nil, sqlite.WithTableName(name)); err == nil {
-			t.Errorf("expected New error for invalid table name %q, got nil", name)
+		if _, err := sqlite.NewSequence(nil, sqlite.WithTableName(name)); err == nil {
+			t.Errorf("expected NewSequence error for invalid table name %q, got nil", name)
 		}
 		if err := sqlite.MigrateRandom(context.Background(), nil, sqlite.WithTableName(name)); err == nil {
 			t.Errorf("expected MigrateRandom error for invalid table name %q, got nil", name)

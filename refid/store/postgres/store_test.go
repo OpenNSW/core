@@ -16,11 +16,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
-// TestStore_Integration tests Migrate and the SequenceStore against a live
-// PostgreSQL instance if POSTGRES_TEST_DSN is provided in the environment.
+// TestSequenceStore_Integration tests MigrateSequence and the SequenceStore
+// against a live PostgreSQL instance if POSTGRES_TEST_DSN is provided in the
+// environment.
 //
 // Example DSN: "host=localhost port=5432 user=postgres password=postgres dbname=refid_test sslmode=disable"
-func TestStore_Integration(t *testing.T) {
+func TestSequenceStore_Integration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("skipping Postgres integration test; set POSTGRES_TEST_DSN to run")
@@ -37,23 +38,23 @@ func TestStore_Integration(t *testing.T) {
 	}
 
 	// 1. Migrate default table
-	if err := postgres.Migrate(ctx, db); err != nil {
-		t.Fatalf("Migrate failed: %v", err)
+	if err := postgres.MigrateSequence(ctx, db); err != nil {
+		t.Fatalf("MigrateSequence failed: %v", err)
 	}
 
 	// 2. Migrate custom table
 	customTable := "refid_integration_test_seqs"
-	if err := postgres.Migrate(ctx, db, postgres.WithTableName(customTable)); err != nil {
-		t.Fatalf("Migrate with custom table failed: %v", err)
+	if err := postgres.MigrateSequence(ctx, db, postgres.WithTableName(customTable)); err != nil {
+		t.Fatalf("MigrateSequence with custom table failed: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = db.Exec("DROP TABLE IF EXISTS " + customTable)
 	})
 
 	// 3. Create store and test Next increments
-	store, err := postgres.New(db, postgres.WithTableName(customTable))
+	store, err := postgres.NewSequence(db, postgres.WithTableName(customTable))
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf("NewSequence failed: %v", err)
 	}
 	scope := "RTA:app_id:COL:20260826"
 
@@ -89,7 +90,7 @@ func TestStore_Integration(t *testing.T) {
 	}
 }
 
-func TestNew_InvalidTableName(t *testing.T) {
+func TestConstructors_InvalidTableName(t *testing.T) {
 	invalidNames := []string{
 		"users; DROP TABLE users;--",
 		"refid table",
@@ -99,11 +100,11 @@ func TestNew_InvalidTableName(t *testing.T) {
 	}
 
 	for _, name := range invalidNames {
-		if err := postgres.Migrate(context.Background(), nil, postgres.WithTableName(name)); err == nil {
-			t.Errorf("expected Migrate error for invalid table name %q, got nil", name)
+		if err := postgres.MigrateSequence(context.Background(), nil, postgres.WithTableName(name)); err == nil {
+			t.Errorf("expected MigrateSequence error for invalid table name %q, got nil", name)
 		}
-		if _, err := postgres.New(nil, postgres.WithTableName(name)); err == nil {
-			t.Errorf("expected New error for invalid table name %q, got nil", name)
+		if _, err := postgres.NewSequence(nil, postgres.WithTableName(name)); err == nil {
+			t.Errorf("expected NewSequence error for invalid table name %q, got nil", name)
 		}
 		if err := postgres.MigrateRandom(context.Background(), nil, postgres.WithTableName(name)); err == nil {
 			t.Errorf("expected MigrateRandom error for invalid table name %q, got nil", name)

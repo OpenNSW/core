@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Lanka Software Foundation
 
 // Package postgres provides PostgreSQL-backed implementations of
-// refid.SequenceStore (via New) and refid.RandomStore (via NewRandom) using
-// database/sql and raw SQL — no ORM. Import a PostgreSQL driver (e.g.
-// github.com/jackc/pgx/v5/stdlib), open a connection with sql.Open, and pass
-// the resulting *sql.DB to New or NewRandom.
+// refid.SequenceStore (via NewSequence) and refid.RandomStore (via
+// NewRandom) using database/sql and raw SQL — no ORM. Import a PostgreSQL
+// driver (e.g. github.com/jackc/pgx/v5/stdlib), open a connection with
+// sql.Open, and pass the resulting *sql.DB to NewSequence or NewRandom.
 package postgres
 
 import (
@@ -18,10 +18,11 @@ import (
 	"github.com/OpenNSW/core/refid/store/internal/sqlident"
 )
 
-// DefaultTableName is the default table name used for sequence counters.
-const DefaultTableName = "refid_sequences"
+// DefaultSequenceTableName is the default table name used for sequence counters.
+const DefaultSequenceTableName = "refid_sequences"
 
-// Option configures optional behavior for a PostgreSQL SequenceStore.
+// Option configures optional behavior for a PostgreSQL SequenceStore or
+// RandomStore.
 type Option func(*config)
 
 type config struct {
@@ -29,11 +30,13 @@ type config struct {
 	err       error
 }
 
-func defaultConfig() config { return config{tableName: DefaultTableName} }
+func defaultSequenceConfig() config { return config{tableName: DefaultSequenceTableName} }
 
-// WithTableName overrides the default table name ("refid_sequences"). An
-// invalid name (must match [a-zA-Z_][a-zA-Z0-9_]*) is recorded and surfaced
-// as an error from New or Migrate — never a panic.
+// WithTableName overrides the default table name ("refid_sequences" for
+// NewSequence/MigrateSequence, "refid_random" for NewRandom/MigrateRandom).
+// An invalid name (must match [a-zA-Z_][a-zA-Z0-9_]*) is recorded and
+// surfaced as an error from the constructor or migrate function — never a
+// panic.
 func WithTableName(name string) Option {
 	return func(cfg *config) {
 		if name == "" {
@@ -47,20 +50,20 @@ func WithTableName(name string) Option {
 	}
 }
 
-// store is a PostgreSQL-backed implementation of refid.SequenceStore. It
-// uses a single atomic upsert-and-increment query, so Next never holds a
+// sequenceStore is a PostgreSQL-backed implementation of refid.SequenceStore.
+// It uses a single atomic upsert-and-increment query, so Next never holds a
 // transaction or lock open beyond that one statement.
-type store struct {
+type sequenceStore struct {
 	db    *sql.DB
 	query string // built once at construction time from the table name
 }
 
-// New returns a refid.SequenceStore backed by PostgreSQL. db must already be
-// opened against the pgx driver (see the package doc). By default it
-// targets the "refid_sequences" table; override with WithTableName. New
-// returns an error (never panics) if an option is invalid.
-func New(db *sql.DB, opts ...Option) (refid.SequenceStore, error) {
-	cfg := defaultConfig()
+// NewSequence returns a refid.SequenceStore backed by PostgreSQL. db must
+// already be opened against the pgx driver (see the package doc). By default
+// it targets the "refid_sequences" table; override with WithTableName.
+// NewSequence returns an error (never panics) if an option is invalid.
+func NewSequence(db *sql.DB, opts ...Option) (refid.SequenceStore, error) {
+	cfg := defaultSequenceConfig()
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -76,13 +79,13 @@ ON CONFLICT (scope_key) DO UPDATE
       updated_at = now()
 WHERE %s.counter < $2
 RETURNING counter`, t, t, t)
-	return &store{db: db, query: query}, nil
+	return &sequenceStore{db: db, query: query}, nil
 }
 
-// Migrate creates the sequence-counter table if it does not already exist.
-// Pass WithTableName to migrate a custom table name.
-func Migrate(ctx context.Context, db *sql.DB, opts ...Option) error {
-	cfg := defaultConfig()
+// MigrateSequence creates the sequence-counter table if it does not already
+// exist. Pass WithTableName to migrate a custom table name.
+func MigrateSequence(ctx context.Context, db *sql.DB, opts ...Option) error {
+	cfg := defaultSequenceConfig()
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -104,7 +107,7 @@ CREATE TABLE IF NOT EXISTS %s (
 // Next implements refid.SequenceStore using a single atomic
 // upsert-and-increment statement: no explicit transaction, no lock held
 // beyond this one call.
-func (s *store) Next(ctx context.Context, scopeKey string, max int64) (int64, error) {
+func (s *sequenceStore) Next(ctx context.Context, scopeKey string, max int64) (int64, error) {
 	var counter int64
 	err := s.db.QueryRowContext(ctx, s.query, scopeKey, max).Scan(&counter)
 	if err != nil {
