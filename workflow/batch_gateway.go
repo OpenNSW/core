@@ -99,9 +99,8 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	// 6. Spawn child workflows per partition.
 	children := g.spawnBatchChildren(ctx, partitions, partitionOrder, node.ID, joinNodeID, scopePath, itemsVar)
 
-	// Record spawned child IDs on the node now, before awaiting completion below — same
-	// rationale as the SPLIT_TASK path in dynamic_split.go: admin/ops tooling needs these
-	// regardless of whether (or how) the children finish.
+	// Record spawned child IDs on the node now, before awaiting completion below, so
+	// admin/ops tooling can find them regardless of whether (or how) the children finish.
 	childIDs := make([]string, 0, len(children))
 	for _, c := range children {
 		childIDs = append(childIDs, c.WorkflowID)
