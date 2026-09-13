@@ -5,8 +5,11 @@ package refid
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -22,6 +25,15 @@ import (
 type segment interface {
 	validate(params map[string]string, now time.Time) error
 	render(ctx context.Context, params map[string]string, now time.Time) (string, error)
+
+	// isStateful reports whether render performs a durable, non-rollback-able
+	// side effect (a sequence counter increment, a random value reservation).
+	// compileFormat uses this to cap a format at one stateful segment: since
+	// every other segment type is a pure function of (params, now) and cannot
+	// fail during render once validate has already passed, capping the count
+	// at one rules out a later segment failing after an earlier one has
+	// already committed its side effect.
+	isStateful() bool
 }
 
 // -----------------------------------------------------------------------
@@ -40,6 +52,8 @@ func (s *literalSegment) validate(_ map[string]string, _ time.Time) error {
 func (s *literalSegment) render(_ context.Context, _ map[string]string, _ time.Time) (string, error) {
 	return s.value, nil
 }
+
+func (s *literalSegment) isStateful() bool { return false }
 
 // newLiteralSegment constructs a literal segment and validates it has a value.
 func newLiteralSegment(cfg SegmentConfig) (*literalSegment, error) {
@@ -77,6 +91,8 @@ func (s *listSegment) render(_ context.Context, params map[string]string, now ti
 	return params[s.paramKey], nil
 }
 
+func (s *listSegment) isStateful() bool { return false }
+
 // newListSegment constructs a list segment from config and the resolved allowed values.
 func newListSegment(cfg SegmentConfig, values []string) (*listSegment, error) {
 	if cfg.Param == "" {
@@ -108,6 +124,8 @@ func (s *dateSegment) validate(_ map[string]string, _ time.Time) error {
 func (s *dateSegment) render(_ context.Context, _ map[string]string, now time.Time) (string, error) {
 	return now.Format(s.layout), nil
 }
+
+func (s *dateSegment) isStateful() bool { return false }
 
 // newDateSegment constructs a date segment and validates that a layout is provided.
 func newDateSegment(cfg SegmentConfig) (*dateSegment, error) {
@@ -163,23 +181,157 @@ func (s *sequenceSegment) render(ctx context.Context, params map[string]string, 
 	return fmt.Sprintf("%0*d", s.padding, counter), nil
 }
 
+func (s *sequenceSegment) isStateful() bool { return true }
+
 // newSequenceSegment constructs a sequence segment, associating it with the
 // store and binding the issuer/idType from the enclosing format.
 func newSequenceSegment(cfg SegmentConfig, issuer, idType string, store SequenceStore) (*sequenceSegment, error) {
-	if cfg.ScopeKey == "" {
+	if cfg.Sequence == nil {
+		return nil, fmt.Errorf("refid: sequence segment requires a non-nil sequence config")
+	}
+	if cfg.Sequence.ScopeKey == "" {
 		return nil, fmt.Errorf("refid: sequence segment requires a non-empty scopeKey")
 	}
 	if store == nil {
 		return nil, fmt.Errorf("refid: sequence segment requires a non-nil SequenceStore")
 	}
-	if cfg.Padding < 1 || cfg.Padding > 18 {
-		return nil, fmt.Errorf("refid: sequence segment padding must be between 1 and 18, got %d", cfg.Padding)
+	if cfg.Sequence.Padding < 1 || cfg.Sequence.Padding > 18 {
+		return nil, fmt.Errorf("refid: sequence segment padding must be between 1 and 18, got %d", cfg.Sequence.Padding)
 	}
 	return &sequenceSegment{
 		issuer:       issuer,
 		idType:       idType,
-		scopeKeyTmpl: cfg.ScopeKey,
-		padding:      cfg.Padding,
+		scopeKeyTmpl: cfg.Sequence.ScopeKey,
+		padding:      cfg.Sequence.Padding,
+		store:        store,
+	}, nil
+}
+
+// -----------------------------------------------------------------------
+// randomSegment
+// -----------------------------------------------------------------------
+
+// Charset names accepted by a random segment's Charset config field.
+const (
+	CharsetNumeric      = "numeric"
+	CharsetAlpha        = "alpha"
+	CharsetAlphanumeric = "alphanumeric"
+)
+
+// randomAlphabets maps each supported charset name to its character set.
+var randomAlphabets = map[string]string{
+	CharsetNumeric:      "0123456789",
+	CharsetAlpha:        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	CharsetAlphanumeric: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+}
+
+// defaultRandomMaxAttempts is used when a random segment's config does not
+// set MaxAttempts.
+const defaultRandomMaxAttempts = 10
+
+// maxRandomMaxAttempts caps a random segment's configured MaxAttempts. Without
+// a cap, a large value would let Generate loop through many crypto/rand draws
+// and store round-trips in a single call before finally returning
+// ErrRandomExhausted, turning a misconfiguration into a latency/cost problem
+// at generation time instead of a fail-fast NewRegistry error.
+const maxRandomMaxAttempts = 100
+
+// randomSegment generates a fixed-length random string from a charset and
+// reserves it in a RandomStore to guarantee uniqueness within its scope,
+// retrying with a new value on collision.
+//
+// The scope key template accepts the same placeholders as sequenceSegment;
+// see resolveScopeKey.
+type randomSegment struct {
+	issuer       string
+	idType       string
+	scopeKeyTmpl string
+	length       int
+	alphabet     string
+	maxAttempts  int
+	store        RandomStore
+}
+
+func (s *randomSegment) validate(params map[string]string, now time.Time) error {
+	_, err := resolveScopeKey(s.scopeKeyTmpl, s.issuer, s.idType, params, now)
+	return err
+}
+
+func (s *randomSegment) render(ctx context.Context, params map[string]string, now time.Time) (string, error) {
+	key, err := resolveScopeKey(s.scopeKeyTmpl, s.issuer, s.idType, params, now)
+	if err != nil {
+		return "", err
+	}
+
+	for attempt := 0; attempt < s.maxAttempts; attempt++ {
+		value, err := randomString(s.alphabet, s.length)
+		if err != nil {
+			return "", fmt.Errorf("refid: failed to generate random value: %w", err)
+		}
+
+		err = s.store.Reserve(ctx, key, value)
+		if err == nil {
+			return value, nil
+		}
+		if !errors.Is(err, ErrRandomCollision) {
+			return "", err
+		}
+	}
+
+	return "", fmt.Errorf("%w: scope %q, length %d, charset yielded no free value after %d attempts",
+		ErrRandomExhausted, key, s.length, s.maxAttempts)
+}
+
+func (s *randomSegment) isStateful() bool { return true }
+
+// randomString returns a random string of length characters drawn uniformly
+// from alphabet, using a cryptographically secure random source.
+func randomString(alphabet string, length int) (string, error) {
+	b := make([]byte, length)
+	max := big.NewInt(int64(len(alphabet)))
+	for i := range b {
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		b[i] = alphabet[n.Int64()]
+	}
+	return string(b), nil
+}
+
+// newRandomSegment constructs a random segment, associating it with the
+// store and binding the issuer/idType from the enclosing format.
+func newRandomSegment(cfg SegmentConfig, issuer, idType string, store RandomStore) (*randomSegment, error) {
+	if cfg.Random == nil {
+		return nil, fmt.Errorf("refid: random segment requires a non-nil random config")
+	}
+	if cfg.Random.ScopeKey == "" {
+		return nil, fmt.Errorf("refid: random segment requires a non-empty scopeKey")
+	}
+	if store == nil {
+		return nil, fmt.Errorf("refid: random segment requires a non-nil RandomStore")
+	}
+	if cfg.Random.Length < 1 {
+		return nil, fmt.Errorf("refid: random segment length must be at least 1, got %d", cfg.Random.Length)
+	}
+	alphabet, ok := randomAlphabets[cfg.Random.Charset]
+	if !ok {
+		return nil, fmt.Errorf("refid: random segment has unknown charset %q; must be one of: numeric, alpha, alphanumeric", cfg.Random.Charset)
+	}
+	if cfg.Random.MaxAttempts < 0 || cfg.Random.MaxAttempts > maxRandomMaxAttempts {
+		return nil, fmt.Errorf("refid: random segment maxAttempts must be between 0 and %d, got %d", maxRandomMaxAttempts, cfg.Random.MaxAttempts)
+	}
+	maxAttempts := cfg.Random.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = defaultRandomMaxAttempts
+	}
+	return &randomSegment{
+		issuer:       issuer,
+		idType:       idType,
+		scopeKeyTmpl: cfg.Random.ScopeKey,
+		length:       cfg.Random.Length,
+		alphabet:     alphabet,
+		maxAttempts:  maxAttempts,
 		store:        store,
 	}, nil
 }

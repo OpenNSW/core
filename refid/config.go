@@ -47,10 +47,20 @@ type FormatConfig struct {
 	Segments []SegmentConfig `yaml:"segments"`
 }
 
+// Segment type names accepted by SegmentConfig.Type.
+const (
+	SegmentTypeLiteral  = "literal"
+	SegmentTypeList     = "list"
+	SegmentTypeDate     = "date"
+	SegmentTypeSequence = "sequence"
+	SegmentTypeRandom   = "random"
+)
+
 // SegmentConfig is the raw configuration for a single segment. Fields are
 // interpreted according to Type; unused fields are ignored.
 type SegmentConfig struct {
-	// Type is one of: "literal", "list", "date", "sequence".
+	// Type is one of the SegmentType* constants: SegmentTypeLiteral,
+	// SegmentTypeList, SegmentTypeDate, SegmentTypeSequence, SegmentTypeRandom.
 	Type string `yaml:"type"`
 
 	// Value is the fixed text for a literal segment.
@@ -67,17 +77,49 @@ type SegmentConfig struct {
 	// date segments.
 	Layout string `yaml:"layout,omitempty"`
 
-	// ScopeKey is a template string for sequence segments. Placeholders are
-	// resolved at generation time. Curly braces '{' and '}' are reserved as
-	// placeholder delimiters in scope keys. See the Registry documentation for
-	// the full placeholder reference.
-	ScopeKey string `yaml:"scopeKey,omitempty"`
+	// Sequence holds the settings for a sequence segment. Required (non-nil)
+	// when Type is "sequence".
+	Sequence *SequenceSegmentConfig `yaml:"sequence,omitempty"`
 
-	// Padding is the minimum number of digits for a sequence segment's counter.
-	// The counter is zero-padded to this width. Must be between 1 and 18.
-	// If the counter exceeds the maximum value representable with Padding digits,
+	// Random holds the settings for a random segment. Required (non-nil) when
+	// Type is "random".
+	Random *RandomSegmentConfig `yaml:"random,omitempty"`
+}
+
+// SequenceSegmentConfig holds the settings for a sequence segment.
+type SequenceSegmentConfig struct {
+	// ScopeKey is a template string determining the durable counter's scope.
+	// Placeholders are resolved at generation time. Curly braces '{' and '}'
+	// are reserved as placeholder delimiters in scope keys. See the Registry
+	// documentation for the full placeholder reference.
+	ScopeKey string `yaml:"scopeKey"`
+
+	// Padding is the minimum number of digits for the counter. The counter is
+	// zero-padded to this width. Must be between 1 and 18. If the counter
+	// exceeds the maximum value representable with Padding digits,
 	// ErrCounterOverflow is returned.
-	Padding int `yaml:"padding,omitempty"`
+	Padding int `yaml:"padding"`
+}
+
+// RandomSegmentConfig holds the settings for a random segment.
+type RandomSegmentConfig struct {
+	// ScopeKey is a template string determining the scope within which
+	// generated values must be unique. Placeholders are resolved at
+	// generation time; see the Registry documentation for the full
+	// placeholder reference.
+	ScopeKey string `yaml:"scopeKey"`
+
+	// Charset selects the alphabet to draw characters from.
+	// One of: "numeric", "alpha", "alphanumeric".
+	Charset string `yaml:"charset"`
+
+	// Length is the number of characters to generate.
+	Length int `yaml:"length"`
+
+	// MaxAttempts caps the number of collision retries before Generate
+	// returns ErrRandomExhausted. Defaults to 10 if unset; must be between
+	// 0 and 100.
+	MaxAttempts int `yaml:"maxAttempts,omitempty"`
 }
 
 // LoadConfig reads and parses a YAML configuration file at the given path.
