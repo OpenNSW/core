@@ -40,6 +40,9 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	if err := ValidateBatchGateways(def); err != nil {
 		return nil, fmt.Errorf("workflow definition validation failed: %w", err)
 	}
+	if err := ValidateParallelGateways(def); err != nil {
+		return nil, fmt.Errorf("workflow definition validation failed: %w", err)
+	}
 
 	instance := &WorkflowInstance{
 		ID:                workflow.GetInfo(ctx).WorkflowExecution.ID,
@@ -436,46 +439,10 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		return fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID)
 
 	case GatewayTypeParallelSplit:
-		nodeInfo.Status = NodeStatusCompleted
-		nodeInfo.UpdatedAt = workflow.Now(ctx)
-		var futures []workflow.Future
-		for _, e := range outEdges {
-			match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
-			if err != nil {
-				return err
-			}
-			if match {
-				f, s := workflow.NewFuture(ctx)
-				edge := e // Capture locally for coroutine
-				workflow.Go(ctx, func(c workflow.Context) {
-					err := g.transitionTo(c, edge)
-					s.Set(nil, err)
-				})
-				futures = append(futures, f)
-			}
-		}
-		for _, f := range futures {
-			if err := f.Get(ctx, nil); err != nil {
-				return err
-			}
-		}
-		return nil
+		return g.handleParallelSplitGateway(ctx, nodeInfo, node, outEdges)
 
 	case GatewayTypeParallelJoin:
-		for _, e := range inEdges {
-			if g.edgeTokens[e.ID] <= 0 {
-				return nil // Wait for other branches
-			}
-		}
-		for _, e := range inEdges {
-			g.edgeTokens[e.ID]-- // Consume tokens
-		}
-		if len(outEdges) > 0 {
-			nodeInfo.Status = NodeStatusCompleted
-			nodeInfo.UpdatedAt = workflow.Now(ctx)
-			return g.transitionTo(ctx, outEdges[0])
-		}
-		return nil
+		return g.handleParallelJoinGateway(ctx, nodeInfo, node, outEdges)
 
 	case GatewayTypeExclusiveJoin:
 		consumed := false

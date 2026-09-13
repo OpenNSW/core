@@ -161,6 +161,7 @@ type Node struct {
 	Signaling    *SignalingConfig    `json:"signaling,omitempty"`
 	BatchGateway *BatchGatewayConfig `json:"batch_gateway,omitempty"`
 	BatchJoin    *BatchJoinConfig    `json:"batch_join,omitempty"`
+	ParallelJoin *ParallelJoinConfig `json:"parallel_join,omitempty"`
 }
 
 // Edge represents a directed connection between two nodes.
@@ -217,6 +218,59 @@ type BatchJoinConfig struct {
 	// IDField is the field name within each item used as the unique identifier.
 	// Must match the paired BATCH_SPLIT's id_field. Defaults to "id" if empty.
 	IDField string `json:"id_field,omitempty"`
+}
+
+// ParallelJoinConfig configures how a PARALLEL_JOIN gateway isolates its branches and
+// merges their final workflow variable states back into the parent scope.
+//
+// WARNING: CONFLICT RESOLUTION AND LAST-WRITE-WINS (LWW)
+// When concurrent parallel branches write conflicting data, the engine cannot infer intent
+// and applies a deterministic "last-write-wins" policy. Precedence is determined strictly by
+// branch edge order (sorted ascending by source edge ID; later branches in that order overwrite
+// earlier ones), NOT wall-clock completion time.
+//
+// Specifically, LAST-WRITE-WINS applies in the following three places:
+//  1. Conflicting item fields in MergeByID: If two branches modify the SAME field on the SAME
+//     item (e.g. branch A sets item["status"]="PASS" and branch B sets item["status"]="FAIL"),
+//     the later branch's field value overwrites the earlier one.
+//  2. Conflicting map keys: If two branches set the SAME leaf key in a map[string]any, the
+//     later branch's value overwrites the earlier one.
+//  3. Scalars and unlisted arrays: Any scalar variable (string, number, boolean) or slice not
+//     listed in MergeByID that is written by multiple branches will be completely overwritten
+//     by the later branch.
+//
+// Recommendation for workflow authors: Ensure concurrent parallel branches write to distinct
+// variable paths or distinct field names on shared items if overwriting cannot be tolerated.
+//
+// Execution and Reconciliation Model:
+// Each matching outgoing edge of the paired PARALLEL_SPLIT runs as its own child workflow
+// with a deep-copied, isolated set of WorkflowVariables — no branch can see another
+// branch's writes while any of them are still running. When all branches complete,
+// PARALLEL_JOIN reconciles their (possibly divergent) final states back into one:
+//
+//   - map[string]any values are deep-merged key by key (recursive map merge):
+//     each branch's mutated sub-fields combine, so two branches changing different
+//     fields of the same object both survive.
+//   - Variables listed in MergeByID (each a []map[string]any) are merged element-by-element
+//     by that id_field across ALL branches — not "one branch's array replaces another's":
+//     for a given item ID, the fields each branch's copy of that item carries are unioned
+//     into one item, so lab writing sample_test_result and visual writing visual_result to
+//     the same underlying item both survive regardless of which branch finishes last. A
+//     field two branches BOTH carry a (possibly different) value for is a genuine conflict
+//     this cannot resolve: branches are applied in a fixed, deterministic order (sorted by
+//     source edge ID) and the last one wins for that field — give each branch its own field
+//     name if that ambiguity isn't acceptable.
+//   - Any other variable (scalar, or array not listed in MergeByID) falls back to the same
+//     fixed deterministic branch order, last one wins.
+type ParallelJoinConfig struct {
+	// GatewayNodeID is the node ID of the paired PARALLEL_SPLIT gateway.
+	GatewayNodeID string `json:"gateway_node_id"`
+
+	// MergeByID maps a top-level workflow variable name (holding a []map[string]any shared by
+	// multiple branches) to the field name within each item used as its unique ID.
+	// Nested dot-paths are not currently supported; see ValidateParallelGateways.
+	// TODO: Support nested dot-paths (e.g. "order.items") in MergeByID and mergeVariablesInto.
+	MergeByID map[string]string `json:"merge_by_id,omitempty"`
 }
 
 // VarScopePath is the workflow variable key holding the hierarchical scope path string
