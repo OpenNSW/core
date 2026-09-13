@@ -21,8 +21,9 @@ type batchPartition struct {
 
 // batchChild holds the future of a spawned child workflow for a partition edge.
 type batchChild struct {
-	EdgeID string
-	Future workflow.ChildWorkflowFuture
+	EdgeID     string
+	WorkflowID string
+	Future     workflow.ChildWorkflowFuture
 }
 
 // handleBatchSplitGateway partitions the current item slice and spawns one child workflow per
@@ -97,6 +98,15 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 
 	// 6. Spawn child workflows per partition.
 	children := g.spawnBatchChildren(ctx, partitions, partitionOrder, node.ID, joinNodeID, scopePath, itemsVar)
+
+	// Record spawned child IDs on the node now, before awaiting completion below, so
+	// admin/ops tooling can find them regardless of whether (or how) the children finish.
+	childIDs := make([]string, 0, len(children))
+	for _, c := range children {
+		childIDs = append(childIDs, c.WorkflowID)
+	}
+	sort.Strings(childIDs)
+	nodeInfo.ChildWorkflowIDs = childIDs
 
 	// 7. Wait for all child workflows and merge results by item ID.
 	mergedItems, err := collectAndMergeBatchResults(ctx, children, items, itemsVar, idField, node.ID)
@@ -222,7 +232,7 @@ func (g *graphInterpreter) spawnBatchChildren(
 		})
 
 		future := workflow.ExecuteChildWorkflow(childCtx, "GraphInterpreterWorkflow", subDef, childVars)
-		children = append(children, batchChild{EdgeID: edgeID, Future: future})
+		children = append(children, batchChild{EdgeID: edgeID, WorkflowID: childWorkflowID, Future: future})
 	}
 
 	return children

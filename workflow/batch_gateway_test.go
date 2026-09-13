@@ -112,6 +112,10 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 	items, ok := result.WorkflowVariables["commodities"].([]any)
 	s.True(ok, "commodities should be a []any after merge")
 	s.Len(items, 3, "all 3 items should be reunified after batch join")
+
+	// The BATCH_SPLIT node must record both partition child workflow IDs, sorted by edge ID.
+	s.Equal([]string{"batch-test-1--gw_type--e3", "batch-test-1--gw_type--e4"},
+		result.NodeInfo["gw_type"].ChildWorkflowIDs)
 }
 
 // --- Test 2: Single item traversal ---
