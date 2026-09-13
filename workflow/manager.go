@@ -73,6 +73,13 @@ type NodeInfo struct {
 	// informational: if a node parks with this populated, the Activity has already run, so
 	// an admin should prefer AdminActionOverride over AdminActionRetry to avoid re-running it.
 	CachedTaskResult map[string]any `json:"cached_task_result,omitempty"`
+
+	// ChildWorkflowIDs lists the workflow IDs of any child GraphInterpreterWorkflow executions
+	// spawned by this node (SPLIT_TASK or BATCH_SPLIT). It is set once, at spawn time, and is
+	// not derived from the children's current status — so an ID remains listed here even after
+	// that child workflow completes. A caller can query each ID with the same GetStatus query
+	// used on this workflow to walk the execution tree to arbitrary depth.
+	ChildWorkflowIDs []string `json:"child_workflow_ids,omitempty"`
 }
 
 // WorkflowInstance holds the dynamic runtime state of the workflow execution.

@@ -63,6 +63,16 @@ func (g *graphInterpreter) handleSplitTaskNode(ctx workflow.Context, nodeInfo *N
 		return err
 	}
 
+	// Record spawned child IDs on the node now, before any of them complete —
+	// monitorChildWorkflows deletes entries from activeBranches as branches finish, but this
+	// snapshot is what admin/ops tooling uses to find children regardless of their status.
+	childIDs := make([]string, 0, len(activeBranches))
+	for id := range activeBranches {
+		childIDs = append(childIDs, id)
+	}
+	sort.Strings(childIDs)
+	nodeInfo.ChildWorkflowIDs = childIDs
+
 	// 3. Monitor executions and collect outputs/errors
 	aggregatedResults := make([]map[string]any, len(activeBranches))
 	if err := g.monitorChildWorkflows(ctx, activeBranches, aggregatedResults, config, nodeInfo, node.ID); err != nil {
