@@ -77,8 +77,8 @@ const (
 	VarParentWorkflowID = "_parent_workflow_id"
 	// VarRootWorkflowID contains the workflow ID of the top-level (root) execution. It is seeded
 	// once when the root GraphInterpreterWorkflow starts and carried unchanged through every
-	// level of nesting, so a descendant at any depth can read the true root directly instead of
-	// deriving it from its own workflow ID.
+	// level of nesting, so a descendant at any depth can read it directly without walking a
+	// parent-to-parent chain.
 	VarRootWorkflowID = "_root_workflow_id"
 	// VarBranchID contains the unique branch ID assigned to the specific child workflow branch.
 	VarBranchID = "_branch_id"
