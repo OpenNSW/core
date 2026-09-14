@@ -79,6 +79,24 @@ func TestFormatChildWorkflowID(t *testing.T) {
 			t.Error("expected the same nodeID/branchID pair under different ancestor paths to produce different IDs")
 		}
 	})
+
+	t.Run("oversized root is capped instead of overflowing the result", func(t *testing.T) {
+		longRoot := strings.Repeat("consignment-id-", 20) // well over maxWorkflowIDLen on its own
+		id := FormatChildWorkflowID(longRoot, longRoot, "node", "branch")
+		if len(id) > maxWorkflowIDLen {
+			t.Errorf("id length = %d, want <= %d (id: %q)", len(id), maxWorkflowIDLen, id)
+		}
+	})
+
+	t.Run("different oversized roots don't collide once capped", func(t *testing.T) {
+		rootA := strings.Repeat("a", 300)
+		rootB := strings.Repeat("b", 300)
+		a := FormatChildWorkflowID(rootA, rootA, "node", "branch")
+		b := FormatChildWorkflowID(rootB, rootB, "node", "branch")
+		if a == b {
+			t.Error("expected different oversized roots to still produce different IDs after capping")
+		}
+	})
 }
 
 func TestParseMappingKey(t *testing.T) {
