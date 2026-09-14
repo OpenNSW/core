@@ -29,3 +29,5 @@ require (
 	github.com/aws/smithy-go v1.28.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 )
+
+replace github.com/OpenNSW/core/shared => ../shared
