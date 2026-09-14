@@ -196,6 +196,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
+			VarRootWorkflowID:   g.rootWorkflowID(),
 			VarSplitNodeID:      node.ID,
 			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{
@@ -280,7 +281,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 			err := wf.Get(ctx, &childOutput)
 
 			if err != nil {
-				executionError = fmt.Errorf("dynamic execution track %s halted abnormally: %w", targetID, err)
+				executionError = fmt.Errorf("dynamic execution track %s (workflow %s) halted abnormally: %w", branchInfo.BranchID, targetID, err)
 				failedBranchesErrors = append(failedBranchesErrors, executionError)
 				aggregatedResults[branchInfo.Index] = map[string]any{
 					"error":     err.Error(),

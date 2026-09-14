@@ -41,6 +41,10 @@ type TaskPayload struct {
 	TaskTemplateID string
 	// Inputs contains the specific subset of WorkflowVariables mapped to this task's requirements.
 	Inputs map[string]any
+	// RootWorkflowID is the workflow ID of the top-level execution. WorkflowID alone doesn't
+	// identify the root for a deeply nested child, so the engine propagates this explicitly from
+	// the root through every level of nesting (see VarRootWorkflowID).
+	RootWorkflowID string
 }
 
 // NodeStatus represents the status of a specific workflow node.

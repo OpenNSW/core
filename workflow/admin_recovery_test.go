@@ -52,7 +52,7 @@ func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
 	require.Empty(t, instance.NodeInfo["task"].LastError)
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything)
 }
 
 // TestAdminRetryResolvesInputMappingError parks on a missing input mapping, then resolves it
@@ -69,7 +69,7 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -110,7 +110,7 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -168,9 +168,9 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "first"}, nil).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "second"}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -323,7 +323,7 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -397,9 +397,9 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
 	branchWorkflowID := FormatBatchChildWorkflowID("default-test-workflow-id", "split", "e2")
@@ -427,7 +427,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	require.Contains(t, env.GetWorkflowError().Error(), "boom")
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything)
 }
 
 // TestAdminOverrideResolvesWaitForSignalOutputMappingError verifies that when a
