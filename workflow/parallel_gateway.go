@@ -69,7 +69,7 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 		subDef := extractSubGraph(g.def, e.TargetID, joinNodeID)
 		childVars := deepcopy.Map(baseVars)
 
-		childWorkflowID := FormatBatchChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, edgeID)
+		childWorkflowID := FormatBatchChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, edgeID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: childWorkflowID,
 		})

@@ -21,31 +21,19 @@ func parseMappingKey(rawKey string) (key string, optional bool) {
 	return rawKey, false
 }
 
-// FormatChildWorkflowID constructs a deterministic child workflow ID from the parent's workflow
-// ID, the gateway node ID, and the branch ID.
+// FormatChildWorkflowID constructs a deterministic child workflow ID from the root workflow ID,
+// the parent's own workflow ID, the gateway node ID, and the branch ID.
 //
-// The result is always "<root>--<16-hex-char hash>": each level's hash folds in the parent's own
-// path hash, not just this level's nodeID/branchID, so the ID uniquely commits to the full
+// The result is always "<root>--<16-hex-char hash>": each level's hash folds in the parent's full
+// workflow ID, not just this level's nodeID/branchID, so the ID uniquely commits to the full
 // ancestor chain no matter how deep the nesting goes. Fixed-width output keeps the ID within
 // Temporal's varchar(255) current_executions.workflow_id column regardless of branch depth.
 //
-// The root segment stays an unmangled, "--"-delimited prefix so it remains identifiable in the
-// database (e.g. for querying current_executions by consignment). Code that needs the root
-// programmatically should read VarRootWorkflowID, which the engine propagates explicitly, rather
-// than parsing this ID.
-func FormatChildWorkflowID(parentWorkflowID, nodeID, branchID string) string {
-	root, parentPath := splitRootAndPath(parentWorkflowID)
-	sum := sha256.Sum256([]byte(parentPath + "|" + nodeID + "|" + branchID))
-	return root + "--" + hex.EncodeToString(sum[:8])
-}
-
-// splitRootAndPath splits a workflow ID into its root segment (everything before the first "--")
-// and the path hash that follows it. An ID with no "--" is itself the root, with an empty path.
-func splitRootAndPath(workflowID string) (root, path string) {
-	if idx := strings.Index(workflowID, "--"); idx != -1 {
-		return workflowID[:idx], workflowID[idx+2:]
-	}
-	return workflowID, ""
+// rootWorkflowID is taken as given rather than parsed out of parentWorkflowID — callers already
+// have it via VarRootWorkflowID, which the engine propagates explicitly to every level of nesting.
+func FormatChildWorkflowID(rootWorkflowID, parentWorkflowID, nodeID, branchID string) string {
+	sum := sha256.Sum256([]byte(parentWorkflowID + "|" + nodeID + "|" + branchID))
+	return rootWorkflowID + "--" + hex.EncodeToString(sum[:8])
 }
 
 // ParseSplitTaskItem parses a raw interface item into a SplitTaskItem.
@@ -86,6 +74,6 @@ func ParseSplitTaskItem(itemRaw any) (SplitTaskItem, error) {
 // and PARALLEL_SPLIT branches. See FormatChildWorkflowID: the hash chain folds in full ancestry,
 // which is what prevents collisions when the same partition key appears at different gateway
 // levels.
-func FormatBatchChildWorkflowID(parentWorkflowID, nodeID, partitionKey string) string {
-	return FormatChildWorkflowID(parentWorkflowID, nodeID, partitionKey)
+func FormatBatchChildWorkflowID(rootWorkflowID, parentWorkflowID, nodeID, partitionKey string) string {
+	return FormatChildWorkflowID(rootWorkflowID, parentWorkflowID, nodeID, partitionKey)
 }

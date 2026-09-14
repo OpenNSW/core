@@ -346,7 +346,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	// time, per Temporal's test environment defaults) before giving up and returning the
 	// error to the child workflow, so the abort signals must be scheduled well past that.
 	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
-		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, "m_fanout", branchID)
+		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "m_fanout", branchID)
 		env.RegisterDelayedCallback(func() {
 			err := env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
 				NodeID: "c_task",

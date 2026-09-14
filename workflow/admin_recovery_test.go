@@ -402,7 +402,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
-	branchWorkflowID := FormatBatchChildWorkflowID("default-test-workflow-id", "split", "e2")
+	branchWorkflowID := FormatBatchChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
 
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(branchWorkflowID, "GetStatus")

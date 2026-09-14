@@ -206,7 +206,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 			},
 		}
 
-		deterministicChildID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		deterministicChildID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: deterministicChildID,
 		})
@@ -223,7 +223,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 	// Wait for all child workflows to start to ensure their execution environments (and signal handlers) are initialized.
 	// Iterate prepared (insertion order) rather than the map to guarantee deterministic replay.
 	for _, p := range prepared {
-		childID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		childID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		var childExec workflow.Execution
 		if err := activeBranches[childID].Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
 			return nil, fmt.Errorf("failed to start child workflow %s: %w", childID, err)

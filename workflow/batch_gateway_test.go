@@ -1372,7 +1372,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
 
-	childWorkflowID := FormatBatchChildWorkflowID(parentWorkflowID, "gw_split", "e2")
+	childWorkflowID := FormatBatchChildWorkflowID(parentWorkflowID, parentWorkflowID, "gw_split", "e2")
 
 	// 1. Verify that the child's node is parked awaiting admin intervention
 	env.RegisterDelayedCallback(func() {
