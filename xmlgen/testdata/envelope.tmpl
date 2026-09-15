@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:m="urn:example:messages">
+  <soap:Header>
+    <m:Trace xml:lang="en" m:id="{{ .trace_id }}">{{ .trace_id }}</m:Trace>
+  </soap:Header>
+  <soap:Body>
+    <m:SubmitRequest>
+      <m:Reference>{{ part .reference "/" 0 }}-{{ part .reference "/" 3 }}</m:Reference>
+      <m:SubmittedAt>{{ date .submitted_on "2006-01-02" "02/01/2006" }}</m:SubmittedAt>
+      {{- range .documents }}
+      <m:Document xmlns:d="urn:example:doc">
+        <d:Id>{{ .id }}</d:Id>
+        <d:Title>{{ .title }}</d:Title>
+      </m:Document>
+      {{- end }}
+    </m:SubmitRequest>
+  </soap:Body>
+</soap:Envelope>

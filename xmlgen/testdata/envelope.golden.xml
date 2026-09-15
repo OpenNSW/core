@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:m="urn:example:messages">
+  <soap:Header>
+    <m:Trace xml:lang="en" m:id="T-0001">T-0001</m:Trace>
+  </soap:Header>
+  <soap:Body>
+    <m:SubmitRequest>
+      <m:Reference>INV-00042</m:Reference>
+      <m:SubmittedAt>04/03/2026</m:SubmittedAt>
+      <m:Document xmlns:d="urn:example:doc">
+        <d:Id>D-1</d:Id>
+        <d:Title>Widget specification &amp; notes</d:Title>
+      </m:Document>
+      <m:Document xmlns:d="urn:example:doc">
+        <d:Id>D-2</d:Id>
+        <d:Title>Ünïcødé &lt;attachment&gt;</d:Title>
+      </m:Document>
+    </m:SubmitRequest>
+  </soap:Body>
+</soap:Envelope>
