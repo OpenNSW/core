@@ -153,7 +153,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	}
 	initialData["_task_id"] = taskID
 
-	// root_workflow_id is the top-level consignment ID, propagated by the engine through every
+	// root_workflow_id is the top-level workflow's ID, propagated by the engine through every
 	// level of nesting (see engine.VarRootWorkflowID).
 	rootWorkflowID := payload.RootWorkflowID
 
