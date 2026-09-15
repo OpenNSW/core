@@ -160,6 +160,14 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	// Validate results content
 	s.Equal("APPROVED_PHYTO", results[0].(map[string]any)["phyto_status"])
 	s.Equal("APPROVED_HEALTH", results[1].(map[string]any)["health_status"])
+
+	// The SPLIT_TASK node must record both spawned child workflow IDs, sorted, even though
+	// both branches have long since completed by the time this result is read — admin/ops
+	// tooling relies on this list surviving past branch completion.
+	childIDs := resultState.NodeInfo["m_fanout_oga"].ChildWorkflowIDs
+	s.Len(childIDs, 2)
+	s.True(strings.HasSuffix(childIDs[0], "--m_fanout_oga--oga-health"))
+	s.True(strings.HasSuffix(childIDs[1], "--m_fanout_oga--oga-phyto"))
 }
 
 func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
