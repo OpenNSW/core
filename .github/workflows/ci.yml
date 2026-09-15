@@ -562,6 +562,41 @@ jobs:
           POSTGRES_TEST_DSN: "host=localhost port=5432 user=postgres password=postgres dbname=refid_test sslmode=disable"
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+  # The xmlgen/ package is its own Go module, so the root ./... jobs above do not
+  # cover it. Run its quality checks and tests independently.
+  xmlgen-module:
+    name: XMLGen Module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: xmlgen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'xmlgen/go.mod'
+          cache-dependency-path: xmlgen/go.sum
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: xmlgen
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
   # STAGE 3: Parallel security + vuln scans.
   govulncheck:
     name: Vulnerability Scan
