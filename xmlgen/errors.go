@@ -36,6 +36,23 @@ var (
 	// number of arguments to lookup.
 	ErrHelper = errors.New("xmlgen: template helper failed")
 
+	// ErrInvalidResolverName is returned when a resolver's name is empty, is
+	// not a valid Go identifier, or its ResolveFunc is nil. Names are checked
+	// before they reach text/template, which panics on a bad name rather than
+	// returning an error.
+	ErrInvalidResolverName = errors.New("xmlgen: resolver name is not a valid identifier")
+
+	// ErrReservedResolverName is returned when a resolver's name collides with
+	// a text/template builtin or with a function xmlgen defines itself. A
+	// caller function silently shadows a builtin, so this is rejected rather
+	// than allowed to change what index or printf mean inside a template.
+	ErrReservedResolverName = errors.New("xmlgen: resolver name is reserved")
+
+	// ErrResolver is returned when a caller-supplied resolver returns an
+	// error. The resolver's own error is wrapped, so errors.Is also matches
+	// the caller's sentinel.
+	ErrResolver = errors.New("xmlgen: resolver returned an error")
+
 	// ErrRender is returned when template execution fails for any other reason.
 	ErrRender = errors.New("xmlgen: template execution failed")
 

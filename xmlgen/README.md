@@ -108,6 +108,66 @@ Text outside an action is never touched, which is how an empty-value marker is w
 > An element or attribute *name* built from data is never safe: escaping applies to values, not to
 > the markup around them.
 
+## Helpers
+
+Always available, pure, and deterministic.
+
+| Helper | Example | Result |
+|---|---|---|
+| `part` | `{{ part .ref "/" 0 }}` on `"OFF1/A/42/2026"` | `OFF1` — past the end gives `""`, not an error |
+| `split` | `{{ range split .codes "," }}` | iterate the fields |
+| `join` | `{{ join .tags "-" }}` | `a-b-c` |
+| `date` | `{{ date .day "2006-01-02" "1/2/06" }}` on `"2026-03-04"` | `3/4/26` — a value that does not match the input layout is an error, never a guess |
+| `decimal` | `{{ decimal .fob 2 }}` on `1400` | `1400.00` — exact, see below |
+| `lookup` | `{{ lookup .flag "yes" "1" "no" "0" }}` | `1` — an unmapped value passes through unchanged |
+| `zero` | `{{ if zero .gain }}` | true for nil, `""`, `false`, and numeric zero |
+| `coalesce` | `{{ coalesce .a .b "n/a" }}` | first value present |
+| `trim` | `{{ trim .name }}` | surrounding whitespace removed |
+
+`zero` exists because JSON numbers are carried as `json.Number`, which is a string underneath, so
+`{{ if .quantity }}` is true even when the quantity is `0`. Use `{{ if zero .quantity }}`.
+
+`decimal` holds the value exactly rather than as a `float64`, so it does not undo at the last step
+the exactness `UseNumber` preserves from the JSON text. An integer past 2^53 keeps every digit
+(`9007199254740993` does not shift to `…992`), and a half rounds away from zero — commercial
+rounding, applied to the digits as written rather than to their nearest binary approximation, so
+`2.355` gives `2.36` where a float would give `2.35`. A magnitude beyond roughly 1200 digits is
+refused rather than expanded.
+
+An absent value stays absent throughout. A missing key, a JSON `null` and an empty string all render
+as nothing rather than as `0.00` or a zero date — writing a figure the data never carried would be a
+silent change of the document. A value that really is `0` still formats as `0.00`.
+
+## Resolvers
+
+Most templates need none — the helpers cover formatting. Supply a resolver for a value that cannot
+be computed from the data, such as a lookup against a code list or another service:
+
+```go
+doc, err := xmlgen.Generate(ctx, tmpl, data, xmlgen.WithResolvers(xmlgen.Resolvers{
+    "codelist": func(ctx context.Context, args ...any) (any, error) {
+        return store.Describe(ctx, args[0].(string), args[1].(string))
+    },
+}))
+```
+
+```xml
+<Origin>{{ codelist "country" .origin }}</Origin>
+```
+
+Each resolver is registered under its own name, so a template calling one that was not supplied
+fails when the template is **parsed** — not at execution, if and when a branch happens to reach it.
+Arguments arrive as the caller's own Go values (`string`, `json.Number`, `map[string]any`, `nil`),
+and the return value is escaped like any other.
+
+> [!IMPORTANT]
+> A resolver must not have durable side effects. `text/template` calls a function once per
+> *evaluated* occurrence and skips occurrences in branches it does not take, so minting a reference
+> number inside `{{ if .isTransit }}…{{ end }}` would make the counter depend on the shape of the
+> template, and a retried render would advance it again. Mint the number before calling `Generate`
+> and put it in the data. If you must call one from a template, bind it once:
+> `{{ $ref := refnum }}` and then use `{{ $ref }}`.
+
 ## Validation
 
 Output is checked as a document before it is returned, and never rewritten — so the bytes stay
@@ -119,16 +179,23 @@ element, no `DOCTYPE`, and no namespace prefix that was never declared. The last
 namespace — so a typo'd `soapp:Body` would otherwise reach the far end before anyone noticed.
 `SkipNamespaceCheck` turns that off for a fragment whose declarations live elsewhere.
 
+`Validate` parses a template without rendering it, for checking templates as they are stored or
+sweeping a directory in CI, so a broken one fails at deploy rather than at submission.
+
 ## Errors
 
 Every failure matches a sentinel with `errors.Is`: `ErrParseTemplate`, `ErrInvalidData`,
-`ErrUnsupportedValue`, `ErrMissingKey`, `ErrHelper`, `ErrRender`, `ErrOutputTooLarge`,
-`ErrMalformedXML`, `ErrMultipleRoots`, `ErrDoctypeNotAllowed`, `ErrUndeclaredNamespace`.
+`ErrUnsupportedValue`, `ErrMissingKey`, `ErrHelper`, `ErrResolver`, `ErrRender`,
+`ErrOutputTooLarge`, `ErrMalformedXML`, `ErrMultipleRoots`, `ErrDoctypeNotAllowed`,
+`ErrUndeclaredNamespace`, `ErrInvalidResolverName`, `ErrReservedResolverName`. A resolver's own
+error stays reachable, so `errors.Is(err, ErrResolver)` and `errors.Is(err, yourSentinel)` are both
+true.
 
 ## Options
 
 | Option | Effect |
 |---|---|
+| `WithResolvers(r)` | caller functions a template may call by name |
 | `WithStrictKeys()` | a referenced-but-absent key becomes an error; for tests and CI |
 | `WithMaxOutputBytes(n)` | caps the document; default 32 MiB, negative removes the cap |
 | `SkipNamespaceCheck()` | allows undeclared prefixes |

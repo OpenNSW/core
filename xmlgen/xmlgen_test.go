@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/OpenNSW/core/xmlgen"
@@ -189,6 +190,43 @@ func TestGenerate_Limits(t *testing.T) {
 		_, err := xmlgen.Generate(ctx, []byte(`<R>{{ .v }}</R>`), map[string]any{"v": "x"})
 		require.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+func TestValidate(t *testing.T) {
+	t.Run("accepts a template that only uses built-ins", func(t *testing.T) {
+		require.NoError(t, xmlgen.Validate([]byte(`<R>{{ date .d "2006-01-02" "1/2/06" }}</R>`)))
+	})
+
+	t.Run("reports a syntax error", func(t *testing.T) {
+		require.ErrorIs(t, xmlgen.Validate([]byte(`<R>{{ if }}</R>`)), xmlgen.ErrParseTemplate)
+	})
+
+	t.Run("reports a function the template is not allowed to call", func(t *testing.T) {
+		require.ErrorIs(t, xmlgen.Validate([]byte(`<R>{{ codelist .x }}</R>`)), xmlgen.ErrParseTemplate)
+		require.NoError(t, xmlgen.Validate([]byte(`<R>{{ codelist .x }}</R>`), "codelist"))
+	})
+
+	t.Run("needs no data", func(t *testing.T) {
+		require.NoError(t, xmlgen.Validate([]byte(`<R>{{ .anything.at.all }}</R>`)))
+	})
+}
+
+func TestGenerate_Concurrent(t *testing.T) {
+	const tmpl = `<R><V>{{ .v }}</V><L>{{ lookup .v "a" "1" }}</L></R>`
+
+	var wg sync.WaitGroup
+	for i := range 200 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v := string(rune('a' + i%26))
+			out, err := xmlgen.Generate(context.Background(), []byte(tmpl), map[string]any{"v": v},
+				withResolver("noop", func(context.Context, ...any) (any, error) { return nil, nil }))
+			assert.NoError(t, err)
+			assert.Contains(t, string(out), "<V>"+v+"</V>")
+		}()
+	}
+	wg.Wait()
 }
 
 type countingWriter struct{ n int }
