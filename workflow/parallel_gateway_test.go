@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,14 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranches
 	s.Equal("clean", byID["item-1"]["visual_result"], "item-1 must keep visual's contribution")
 	s.Equal("pass", byID["item-2"]["lab_result"], "item-2 must keep lab's contribution")
 	s.Equal("clean", byID["item-2"]["visual_result"], "item-2 must keep visual's contribution")
+
+	// The PARALLEL_SPLIT node must record both branch child workflow IDs, sorted.
+	expectedChildIDs := []string{
+		FormatChildWorkflowID("parallel-merge-test-1", "parallel-merge-test-1", "psplit", "e3"),
+		FormatChildWorkflowID("parallel-merge-test-1", "parallel-merge-test-1", "psplit", "e4"),
+	}
+	sort.Strings(expectedChildIDs)
+	s.Equal(expectedChildIDs, result.NodeInfo["psplit"].ChildWorkflowIDs)
 }
 
 // TestParallelSplit_GenericMapMerge_DisjointFieldsSurvive covers a shared variable that is a
