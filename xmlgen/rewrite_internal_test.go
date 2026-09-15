@@ -5,6 +5,7 @@ package xmlgen
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,7 +35,7 @@ func TestInjectEscaping_RewritesEveryPrintingAction(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpl, err := compile([]byte(tc.in), options{})
+			tmpl, err := compile(context.Background(), []byte(tc.in), options{})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, tmpl.Root.String())
 		})
@@ -48,7 +49,7 @@ func TestInjectEscaping_RewritesEveryPrintingAction(t *testing.T) {
 // calls. xmlgen never clones — but a future refactor might, and this says what
 // happens when it does.
 func TestInjectEscaping_SurvivesClone(t *testing.T) {
-	tmpl, err := compile([]byte(`<R>{{ .v }}</R>`), options{})
+	tmpl, err := compile(context.Background(), []byte(`<R>{{ .v }}</R>`), options{})
 	require.NoError(t, err)
 
 	clone, err := tmpl.Clone()
@@ -65,4 +66,13 @@ func TestInjectEscaping_SurvivesClone(t *testing.T) {
 func TestStripBOM(t *testing.T) {
 	assert.Equal(t, []byte("<R/>"), stripBOM([]byte("\xef\xbb\xbf<R/>")))
 	assert.Equal(t, []byte("<R/>"), stripBOM([]byte("<R/>")))
+}
+
+func TestGoodName(t *testing.T) {
+	for _, ok := range []string{"codelist", "code_list", "c1", "_x", "Ünïcode"} {
+		assert.True(t, goodName(ok), "%q should be accepted", ok)
+	}
+	for _, bad := range []string{"", "code-list", "1abc", "my func", "a.b"} {
+		assert.False(t, goodName(bad), "%q should be rejected", bad)
+	}
 }

@@ -65,6 +65,7 @@ import (
 const defaultMaxOutputBytes int64 = 32 << 20 // 32 MiB
 
 type options struct {
+	resolvers          Resolvers
 	strictKeys         bool
 	maxOutputBytes     int64
 	skipNamespaceCheck bool
@@ -72,6 +73,14 @@ type options struct {
 
 // Option configures a render.
 type Option func(*options)
+
+// WithResolvers supplies caller functions a template may call by name. They
+// are for values that cannot be computed from the data — a lookup against a
+// code list or another service. Formatting is already covered by the built-in
+// helpers, so most templates need none.
+func WithResolvers(r Resolvers) Option {
+	return func(o *options) { o.resolvers = r }
+}
 
 // WithStrictKeys makes a key the template references but the data does not
 // contain an error rather than an empty element.
@@ -133,14 +142,34 @@ func GenerateTo(ctx context.Context, w io.Writer, tmpl []byte, data any, opts ..
 	return err
 }
 
-// compile parses a template and rewrites it for escaping.
-func compile(tmpl []byte, opts options) (*template.Template, error) {
-	// Funcs must precede Parse: only then does a call to a function the
-	// template names but xmlgen does not define fail at parse time rather than
-	// at execution, on whichever branch happens to reach it.
-	t := template.New("xmlgen").Funcs(helperFuncs())
+// Validate reports whether tmpl is a usable xmlgen template, without
+// rendering it. resolverNames are the names it is allowed to call beyond the
+// built-in helpers; a call to anything else is reported here.
+//
+// It is for load-time checks — validating a template as it is stored, or a CI
+// sweep over a template directory — so a broken template fails at deploy
+// rather than when someone submits. It cannot detect data problems; only
+// Generate can.
+func Validate(tmpl []byte, resolverNames ...string) error {
+	resolvers := make(Resolvers, len(resolverNames))
+	for _, n := range resolverNames {
+		resolvers[n] = func(context.Context, ...any) (any, error) { return nil, nil }
+	}
+	_, err := compile(context.Background(), tmpl, options{resolvers: resolvers})
+	return err
+}
 
-	var err error
+// compile parses a template and rewrites it for escaping.
+func compile(ctx context.Context, tmpl []byte, opts options) (*template.Template, error) {
+	funcs, err := buildFuncMap(ctx, opts.resolvers)
+	if err != nil {
+		return nil, err
+	}
+
+	// Funcs must precede Parse: only then does a call to a function that was
+	// never supplied fail at parse time rather than at execution, on whichever
+	// branch happens to reach it.
+	t := template.New("xmlgen").Funcs(funcs)
 	if opts.strictKeys {
 		t = t.Option("missingkey=error")
 	}
@@ -155,7 +184,7 @@ func compile(tmpl []byte, opts options) (*template.Template, error) {
 }
 
 func generate(ctx context.Context, tmpl []byte, data any, opts options) ([]byte, error) {
-	t, err := compile(tmpl, opts)
+	t, err := compile(ctx, tmpl, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +214,9 @@ func executionError(w *limitWriter, err error) error {
 	// real reason was recorded when the write was refused.
 	if w.err != nil {
 		return w.err
+	}
+	if re, ok := asResolverError(err); ok {
+		return fmt.Errorf("%w: %s: %w", ErrResolver, re.name, re.err)
 	}
 	if looksLikeMissingKey(err) {
 		return fmt.Errorf("%w: %w", ErrMissingKey, err)
