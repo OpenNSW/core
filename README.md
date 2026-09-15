@@ -36,6 +36,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`trace`](trace/README.md) | HTTP request trace propagation and context-based trace ID correlation |
 | [`uiprojector`](uiprojector/README.md) | Zone-based, metadata-driven UI rendering from workflow state and business data |
 | [`workflow`](workflow/README.md) | JSON DSL-driven Temporal workflow graph interpreter |
+| [`xmlgen`](xmlgen/README.md) | XML document generation from a static template and structured data, with automatic escaping |
 
 ## Requirements
 
