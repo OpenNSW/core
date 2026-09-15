@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+{{- with .invoice }}
+<INVOICE id="{{ .document_id }}">
+<Draft/>
+<Currency/>
+<Version>{{ $.schema_version }}</Version>
+<Issuer>
+<registration_number>{{ .issuer_registration_no }}</registration_number>
+<tax_id>{{ .issuer_tax_id }}</tax_id>
+<Customer>{{ .customer_name }}</Customer>
+</Issuer>
+<Reference_info>
+<Reference_prefix>{{ part .reference " " 0 }}</Reference_prefix>
+<Reference_year>{{ part .reference " " 1 }}</Reference_year>
+<Reference_series>{{ part .reference " " 2 }}</Reference_series>
+<Reference_number>{{ part .reference " " 3 }}</Reference_number>
+<Reference_check>{{ part .reference " " 9 }}</Reference_check>
+</Reference_info>
+<Header>
+<Category>{{ .category }}</Category>
+<Approved>{{ lookup .approved "yes" "1" "no" "0" }}</Approved>
+<Issued_date>{{ date .issued_on "2006-01-02" "1/2/06" }}</Issued_date>
+<Due_date>{{ date .due_on "2006-01-02" "1/2/06" }}</Due_date>
+<Tax_rate>{{ decimal .tax_rate 2 }}</Tax_rate>
+</Header>
+{{- range .lines.sheet }}
+<Line>
+<sku>{{ .sku }}</sku>
+<description>{{ .description }}</description>
+<qty>{{ .qty }}</qty>
+<unit_price>{{ .unit_price }}</unit_price>
+<amount>{{ .amount }}</amount>
+</Line>
+{{- end }}
+<Summary>
+<Totals>
+<Total_qty>{{ .lines.derivations.total_qty.value }}</Total_qty>
+<Total_amount>{{ .lines.derivations.total_amount.value }}</Total_amount>
+<Average_price>{{ decimal .lines.derivations.average_price.value 4 }}</Average_price>
+</Totals>
+</Summary>
+<Billing>
+<Address>{{ .billing_address }}</Address>
+<Notes>{{ if zero .notes }}<null/>{{ else }}{{ .notes }}{{ end }}</Notes>
+</Billing>
+<Adjustments>
+<Credit_note>{{ if zero .credit_note }}<null/>{{ else }}{{ .credit_note }}{{ end }}</Credit_note>
+</Adjustments>
+</INVOICE>
+{{- end }}
