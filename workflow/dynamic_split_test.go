@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -104,11 +105,11 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything).Return(map[string]any{
 		"inspection_status": "APPROVED_PHYTO",
 	}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything).Return(map[string]any{
 		"inspection_status": "APPROVED_HEALTH",
 	}, nil)
 
@@ -164,10 +165,13 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	// The SPLIT_TASK node must record both spawned child workflow IDs, sorted, even though
 	// both branches have long since completed by the time this result is read — admin/ops
 	// tooling relies on this list surviving past branch completion.
-	childIDs := resultState.NodeInfo["m_fanout_oga"].ChildWorkflowIDs
-	s.Len(childIDs, 2)
-	s.True(strings.HasSuffix(childIDs[0], "--m_fanout_oga--oga-health"))
-	s.True(strings.HasSuffix(childIDs[1], "--m_fanout_oga--oga-phyto"))
+	const defaultTestWorkflowID = "default-test-workflow-id"
+	expectedChildIDs := []string{
+		FormatChildWorkflowID(defaultTestWorkflowID, defaultTestWorkflowID, "m_fanout_oga", "oga-health"),
+		FormatChildWorkflowID(defaultTestWorkflowID, defaultTestWorkflowID, "m_fanout_oga", "oga-phyto"),
+	}
+	sort.Strings(expectedChildIDs)
+	s.Equal(expectedChildIDs, resultState.NodeInfo["m_fanout_oga"].ChildWorkflowIDs)
 }
 
 func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
@@ -227,7 +231,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "simple_child_workflow").Return(childDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything).Return(map[string]any{
 		"processed_status": "DONE_SUCCESS",
 	}, nil)
 
@@ -326,7 +330,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "failing_child_workflow").Return(childDef, nil)
 
 	// Mock Task Activity to fail
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything).Return(nil, errors.New("task failed intentionally"))
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything).Return(nil, errors.New("task failed intentionally"))
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -354,7 +358,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	// time, per Temporal's test environment defaults) before giving up and returning the
 	// error to the child workflow, so the abort signals must be scheduled well past that.
 	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
-		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, "m_fanout", branchID)
+		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "m_fanout", branchID)
 		env.RegisterDelayedCallback(func() {
 			err := env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
 				NodeID: "c_task",
@@ -377,8 +381,8 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	err := env.GetWorkflowError()
 	s.Error(err)
 	s.Contains(err.Error(), "multiple branches failed")
-	s.Contains(err.Error(), "branch-1-0 halted abnormally")
-	s.Contains(err.Error(), "branch-2-1 halted abnormally")
+	s.Contains(err.Error(), "dynamic execution track branch-1-0 ")
+	s.Contains(err.Error(), "dynamic execution track branch-2-1 ")
 
 	var resultState WorkflowInstance
 	err = env.GetWorkflowResult(&resultState)
@@ -505,11 +509,11 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything).Return(map[string]any{
 		"inspection_status": "APPROVED_CLEAN",
 	}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything).Return(map[string]any{
 		"health_clearance": "PASSED_SECURE",
 	}, nil)
 

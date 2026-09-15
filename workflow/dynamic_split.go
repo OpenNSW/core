@@ -209,6 +209,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
+			VarRootWorkflowID:   g.rootWorkflowID(),
 			VarSplitNodeID:      node.ID,
 			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{
@@ -218,7 +219,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 			},
 		}
 
-		deterministicChildID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		deterministicChildID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: deterministicChildID,
 		})
@@ -239,7 +240,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 	// can still record every branch that was actually spawned.
 	var startErrors []error
 	for _, p := range prepared {
-		childID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		childID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		var childExec workflow.Execution
 		if err := activeBranches[childID].Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
 			startErrors = append(startErrors, fmt.Errorf("failed to start child workflow %s: %w", childID, err))
@@ -305,7 +306,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 			err := wf.Get(ctx, &childOutput)
 
 			if err != nil {
-				executionError = fmt.Errorf("dynamic execution track %s halted abnormally: %w", targetID, err)
+				executionError = fmt.Errorf("dynamic execution track %s (workflow %s) halted abnormally: %w", branchInfo.BranchID, targetID, err)
 				failedBranchesErrors = append(failedBranchesErrors, executionError)
 				aggregatedResults[branchInfo.Index] = map[string]any{
 					"error":     err.Error(),

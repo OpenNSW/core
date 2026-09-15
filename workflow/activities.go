@@ -39,7 +39,7 @@ func (a *Activities) FetchWorkflowDefinitionActivity(_ context.Context, template
 }
 
 // ExecuteTaskActivity pushes the task to your application and sleeps waiting for it or completes synchronously
-func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any) (map[string]any, error) {
+func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, rootWorkflowID string) (map[string]any, error) {
 	info := activity.GetInfo(ctx)
 	payload := TaskPayload{
 		WorkflowID:     info.WorkflowExecution.ID,
@@ -47,6 +47,7 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 		NodeID:         info.ActivityID, // this is Node.ID which was passed in workflow.WithActivityOptions(ctx, nodeActOpts)
 		TaskTemplateID: taskTemplateID,
 		Inputs:         inputs,
+		RootWorkflowID: rootWorkflowID,
 	}
 
 	// Trigger custom code block. ExecuteTaskActivityHandler can return error ErrResultPending to pause the workflow

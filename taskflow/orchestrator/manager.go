@@ -153,13 +153,9 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	}
 	initialData["_task_id"] = taskID
 
-	// root_workflow_id is the top-level consignment ID — the first segment of
-	// parent_workflow_id before any "--" separator introduced by SPLIT_TASK
-	// child workflow IDs (format: "{root}--{nodeID}--{branchID}").
-	rootWorkflowID := payload.WorkflowID
-	if idx := strings.Index(payload.WorkflowID, "--"); idx != -1 {
-		rootWorkflowID = payload.WorkflowID[:idx]
-	}
+	// root_workflow_id is the top-level workflow's ID, propagated by the engine through every
+	// level of nesting (see engine.VarRootWorkflowID).
+	rootWorkflowID := payload.RootWorkflowID
 
 	record := store.TaskRecord{
 		TaskID:           taskID,
