@@ -5,16 +5,26 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
+
+// ErrWorkflowNotFound is returned by Manager.GetStatus when the backing engine has no queryable
+// execution for the given ID. This covers an ID that was never used, but also one whose execution
+// is no longer queryable for any other reason (e.g. its history has aged out of the engine's
+// retention) — a Manager implementation cannot always tell the two apart. Callers should check
+// for ErrWorkflowNotFound with errors.Is rather than inspecting the underlying runtime's error
+// types, so they stay agnostic to whatever engine backs the Manager.
+var ErrWorkflowNotFound = errors.New("workflow execution not found")
 
 // ExecutionStatus defines the allowed states for a workflow instance.
 type ExecutionStatus string
@@ -144,7 +154,8 @@ type Manager interface {
 	TaskUpdate(ctx context.Context, workflowID, runID string, update UpdateEvent) error
 
 	// GetStatus retrieves a running workflow's in-memory state (the WorkflowInstance), including
-	// current variables, and audit trails.
+	// current variables, and audit trails. Returns ErrWorkflowNotFound if there is no queryable
+	// current execution for workflowID — see ErrWorkflowNotFound's doc for what that covers.
 	GetStatus(ctx context.Context, workflowID string) (*WorkflowInstance, error)
 }
 
@@ -252,6 +263,10 @@ func (m *temporalManagerImpl) ResolveAdminIntervention(ctx context.Context, work
 func (m *temporalManagerImpl) GetStatus(ctx context.Context, workflowID string) (*WorkflowInstance, error) {
 	val, err := m.temporalClient.QueryWorkflow(ctx, workflowID, "", "GetStatus")
 	if err != nil {
+		var notFound *serviceerror.NotFound
+		if errors.As(err, &notFound) {
+			return nil, fmt.Errorf("%w: %w", ErrWorkflowNotFound, err)
+		}
 		return nil, err
 	}
 
