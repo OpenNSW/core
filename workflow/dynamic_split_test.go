@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -164,10 +165,13 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	// The SPLIT_TASK node must record both spawned child workflow IDs, sorted, even though
 	// both branches have long since completed by the time this result is read — admin/ops
 	// tooling relies on this list surviving past branch completion.
-	childIDs := resultState.NodeInfo["m_fanout_oga"].ChildWorkflowIDs
-	s.Len(childIDs, 2)
-	s.True(strings.HasSuffix(childIDs[0], "--m_fanout_oga--oga-health"))
-	s.True(strings.HasSuffix(childIDs[1], "--m_fanout_oga--oga-phyto"))
+	const defaultTestWorkflowID = "default-test-workflow-id"
+	expectedChildIDs := []string{
+		FormatChildWorkflowID(defaultTestWorkflowID, defaultTestWorkflowID, "m_fanout_oga", "oga-health"),
+		FormatChildWorkflowID(defaultTestWorkflowID, defaultTestWorkflowID, "m_fanout_oga", "oga-phyto"),
+	}
+	sort.Strings(expectedChildIDs)
+	s.Equal(expectedChildIDs, resultState.NodeInfo["m_fanout_oga"].ChildWorkflowIDs)
 }
 
 func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {

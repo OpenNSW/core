@@ -384,7 +384,7 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 // matching branch runs as its own child workflow (see parallel_gateway.go), so a node parked
 // for admin inside one branch (task_a, here) shows up in that child's own status and signal
 // channel, not the parent's (similar to BATCH_SPLIT partitions).
-// The child's deterministic ID is FormatBatchChildWorkflowID(parentID, splitNodeID, edgeID);
+// The child's deterministic ID is FormatChildWorkflowID(rootID, parentID, splitNodeID, edgeID);
 // parallelWorkflowJSON's split->task_a edge is "e2".
 func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
@@ -402,7 +402,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
-	branchWorkflowID := FormatBatchChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
+	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
 
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(branchWorkflowID, "GetStatus")

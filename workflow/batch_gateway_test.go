@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -114,9 +115,13 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 	s.True(ok, "commodities should be a []any after merge")
 	s.Len(items, 3, "all 3 items should be reunified after batch join")
 
-	// The BATCH_SPLIT node must record both partition child workflow IDs, sorted by edge ID.
-	s.Equal([]string{"batch-test-1--gw_type--e3", "batch-test-1--gw_type--e4"},
-		result.NodeInfo["gw_type"].ChildWorkflowIDs)
+	// The BATCH_SPLIT node must record both partition child workflow IDs, sorted.
+	expectedChildIDs := []string{
+		FormatChildWorkflowID("batch-test-1", "batch-test-1", "gw_type", "e3"),
+		FormatChildWorkflowID("batch-test-1", "batch-test-1", "gw_type", "e4"),
+	}
+	sort.Strings(expectedChildIDs)
+	s.Equal(expectedChildIDs, result.NodeInfo["gw_type"].ChildWorkflowIDs)
 }
 
 // --- Test 2: Single item traversal ---
@@ -1376,7 +1381,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
 
-	childWorkflowID := FormatBatchChildWorkflowID(parentWorkflowID, parentWorkflowID, "gw_split", "e2")
+	childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "gw_split", "e2")
 
 	// 1. Verify that the child's node is parked awaiting admin intervention
 	env.RegisterDelayedCallback(func() {

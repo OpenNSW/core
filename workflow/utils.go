@@ -101,11 +101,3 @@ func ParseSplitTaskItem(itemRaw any) (SplitTaskItem, error) {
 
 	return item, nil
 }
-
-// FormatBatchChildWorkflowID constructs a deterministic child workflow ID for batch partitions
-// and PARALLEL_SPLIT branches. See FormatChildWorkflowID: the hash chain folds in full ancestry,
-// which is what prevents collisions when the same partition key appears at different gateway
-// levels.
-func FormatBatchChildWorkflowID(rootWorkflowID, parentWorkflowID, nodeID, partitionKey string) string {
-	return FormatChildWorkflowID(rootWorkflowID, parentWorkflowID, nodeID, partitionKey)
-}
