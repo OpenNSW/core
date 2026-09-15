@@ -25,4 +25,25 @@ func TestTemporalManagerImpl_GetStatus_NotFound(t *testing.T) {
 
 	require.Nil(t, instance)
 	require.True(t, errors.Is(err, ErrWorkflowNotFound))
+	// The original Temporal error's message must survive the wrap, so logs aren't
+	// left with just the generic sentinel text.
+	require.Contains(t, err.Error(), "workflow not found")
+}
+
+// TestTemporalManagerImpl_GetStatus_OtherErrorPassesThrough guards against a future change
+// widening the NotFound type check and accidentally reclassifying an unrelated Temporal error
+// (e.g. a permission or internal error) as ErrWorkflowNotFound.
+func TestTemporalManagerImpl_GetStatus_OtherErrorPassesThrough(t *testing.T) {
+	mockClient := &mocks.Client{}
+	underlying := serviceerror.NewInternal("temporal internal error")
+	mockClient.On("QueryWorkflow", mock.Anything, "some-workflow", "", "GetStatus").
+		Return(nil, underlying)
+
+	m := &temporalManagerImpl{temporalClient: mockClient}
+
+	instance, err := m.GetStatus(context.Background(), "some-workflow")
+
+	require.Nil(t, instance)
+	require.False(t, errors.Is(err, ErrWorkflowNotFound))
+	require.Equal(t, underlying, err)
 }
