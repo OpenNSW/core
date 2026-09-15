@@ -18,12 +18,12 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// ErrWorkflowNotFound is returned by Manager.GetStatus when Temporal has no queryable current
-// execution for the given ID. This includes an ID that was never used, but also a completed
-// workflow whose history has passed the namespace's retention window — Temporal no longer
-// distinguishes the two once that happens. Callers should check for it with errors.Is rather
-// than inspecting the underlying runtime's error types, so they stay agnostic to whatever engine
-// backs the Manager.
+// ErrWorkflowNotFound is returned by Manager.GetStatus when the backing engine has no queryable
+// execution for the given ID. This covers an ID that was never used, but also one whose execution
+// is no longer queryable for any other reason (e.g. its history has aged out of the engine's
+// retention) — a Manager implementation cannot always tell the two apart. Callers should check
+// for ErrWorkflowNotFound with errors.Is rather than inspecting the underlying runtime's error
+// types, so they stay agnostic to whatever engine backs the Manager.
 var ErrWorkflowNotFound = errors.New("workflow execution not found")
 
 // ExecutionStatus defines the allowed states for a workflow instance.
