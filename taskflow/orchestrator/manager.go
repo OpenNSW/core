@@ -351,10 +351,16 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 			record.Data[subTemplate.OutputNamespace] = withoutSystemVars(payload)
 		}
 	}
-	tm.db.SaveTask(ctx, record)
-
 	tm.logger.InfoContext(ctx, "waking active activity", "activity_id", record.SubTaskNodeID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
 
+	// TaskDone is intentionally called before SaveTask. Temporal enforces
+	// exactly-once completion per activity (CompleteActivityByID fails for
+	// any caller after the first), so on a duplicate/racing CompleteTaskStep
+	// call for the same step, only the winner reaches SaveTask below — the
+	// loser returns here without persisting its (possibly stale) Data. Do not
+	// reorder this without re-adding an equivalent guard: swapping it back
+	// re-opens a lost-update race where the loser's write can land after the
+	// winner's and silently overwrite it.
 	err = tm.taskWorkflowManager.TaskDone(
 		ctx,
 		record.TaskWorkflowID,
@@ -365,6 +371,8 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	if err != nil {
 		return fmt.Errorf("failed to resume task workflow: %w", err)
 	}
+
+	tm.db.SaveTask(ctx, record)
 
 	// 2. Run POST_RESUME Extensions (Non-Blocking, Immutable, Async)
 	if tm.extensionsRegistry != nil && len(subTemplate.Extensions) > 0 {
