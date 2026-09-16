@@ -4,7 +4,10 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +57,95 @@ func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
 
 	env.AssertExpectations(t)
 	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything)
+}
+
+// TestAdminParkNotifiesHostAppOnFreshExecution pins that parking a node actually invokes
+// AdminParkActivity. Every other park test in this file registers the activity without asserting
+// it's called, so on its own none of them would catch notifyAdminPark silently not being invoked.
+func TestAdminParkNotifiesHostAppOnFreshExecution(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionOverride,
+			Reason: "supplying the missing value directly",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+// TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes pins the join in
+// parkNodeForAdmin that waits for notifyAdminPark's background coroutine before acting on a
+// resolution. AdminParkActivity here sleeps 300ms (real time, not workflow virtual time) before
+// failing, while the resolution signal arrives after just 1ms — so the resolution reliably wins
+// the race and the workflow tries to complete while the notification coroutine is still
+// in-flight. Temporal abandons (does not drain) a workflow.Go coroutine that hasn't finished when
+// the workflow function returns, so without the join this test reproduces the bug deterministically:
+// the workflow completes in milliseconds without ever recording the notification's eventual
+// failure on AuditTrail.
+func TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ AdminParkPayload) error {
+			time.Sleep(300 * time.Millisecond)
+			return errors.New("notification sink unavailable")
+		}).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionOverride,
+			Reason: "racing the slow notification",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+
+	trail := strings.Join(instance.AuditTrail, "\n")
+	require.Contains(t, trail, "admin park notification failed")
+	require.Contains(t, trail, "notification sink unavailable")
+	require.Less(t, strings.Index(trail, "admin park notification failed"), strings.Index(trail, "admin resolution: OVERRIDE"),
+		"the notification's failure must be recorded before the resolution it raced against")
+
+	env.AssertExpectations(t)
 }
 
 // TestAdminRetryResolvesInputMappingError parks on a missing input mapping, then resolves it

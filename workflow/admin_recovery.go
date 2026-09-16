@@ -156,9 +156,18 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		g.instance.AuditTrail = append(g.instance.AuditTrail,
 			fmt.Sprintf("node %s parked for admin intervention: %s", node.ID, nodeInfo.LastError))
-		g.notifyAdminPark(ctx, node, nodeInfo)
+
+		notified := g.notifyAdminPark(ctx, node, nodeInfo)
 
 		sig, err := g.awaitAdminResolution(ctx, node.ID)
+		// Join notifyAdminPark's background coroutine before acting on the resolution (on every
+		// path below, including returns): a prompt signal could otherwise let parkNodeForAdmin
+		// return, and Temporal abandons workflow.Go coroutines that haven't finished when the
+		// workflow function returns — dropping a handler error notifyAdminPark hasn't yet
+		// recorded on AuditTrail. Joining here only after the resolution arrives, rather than
+		// unconditionally up front, keeps this from blocking node parking on the notification
+		// (see notifyAdminPark's own doc for why that ordering matters).
+		_ = notified.Get(ctx, nil)
 		if err != nil {
 			nodeInfo.Status = NodeStatusFailed
 			return &terminalAdminError{err: err}
@@ -233,7 +242,14 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 // Best-effort beyond that: bounded by adminParkNotificationTimeout, and any failure (timeout, no
 // handler registered — which AdminParkActivity itself treats as success, or the handler
 // returning an error) is recorded on the workflow's own AuditTrail rather than propagated.
-func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nodeInfo *NodeInfo) {
+//
+// The returned Future settles once the coroutine has fully finished, including that AuditTrail
+// append — not merely once the Activity call itself returns. Temporal abandons a workflow.Go
+// coroutine outright if the workflow function returns before the coroutine finishes, so a caller
+// that only cared about the Activity call completing could still race the append: callers must
+// join this Future (see parkNodeForAdmin) before letting the workflow reach a point where it
+// might return.
+func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nodeInfo *NodeInfo) workflow.Future {
 	payload := AdminParkPayload{
 		WorkflowID:       workflow.GetInfo(ctx).WorkflowExecution.ID,
 		RunID:            workflow.GetInfo(ctx).WorkflowExecution.RunID,
@@ -244,15 +260,24 @@ func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nod
 		Cause:            nodeInfo.LastError,
 		CachedTaskResult: nodeInfo.CachedTaskResult,
 	}
+	future, settable := workflow.NewFuture(ctx)
 	workflow.Go(ctx, func(gCtx workflow.Context) {
 		actCtx := workflow.WithActivityOptions(gCtx, workflow.ActivityOptions{
 			StartToCloseTimeout: adminParkNotificationTimeout,
+			// A best-effort, fire-and-record notification isn't worth retrying: a permanently
+			// failing handler would otherwise retry indefinitely under Temporal's default retry
+			// policy (unbounded without a ScheduleToCloseTimeout), and since parkNodeForAdmin now
+			// joins this call's completion before proceeding, an indefinite retry loop here would
+			// hang the whole node — not just this notification — waiting on it.
+			RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 1},
 		})
 		if err := workflow.ExecuteActivity(actCtx, "AdminParkActivity", payload).Get(gCtx, nil); err != nil {
 			g.instance.AuditTrail = append(g.instance.AuditTrail,
 				fmt.Sprintf("node %s: admin park notification failed: %s", node.ID, err.Error()))
 		}
+		settable.Set(nil, nil)
 	})
+	return future
 }
 
 // completeParkedNode marks a parked node Completed and transitions onward via its first
