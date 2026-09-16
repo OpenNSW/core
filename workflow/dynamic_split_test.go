@@ -37,6 +37,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 
 	// 1. Define the first child workflow definition (Phyto)
@@ -181,6 +182,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 
 	// 1. Define a simple child workflow definition
@@ -282,6 +284,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 
 	// Define simple child workflow definition that will fail
@@ -419,6 +422,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 
 	// 1. Define the internal Phyto Workflow Graph Structure (Publish Side)
@@ -575,6 +579,7 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -766,6 +771,7 @@ func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 
 	childDef := WorkflowDefinition{
@@ -812,6 +818,7 @@ func (s *NSWEngineTestSuite) TestChildBranchCompletionHandlerErrorDoesNotHang() 
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
 
 	childDef := WorkflowDefinition{

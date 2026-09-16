@@ -37,6 +37,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// The workflow: start → load_items → BATCH_SPLIT → (food_inspect | goods_inspect) → BATCH_JOIN → issue_cert → end
 	masterDef := WorkflowDefinition{
@@ -132,6 +133,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_SingleItem() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "single_item_batch",
@@ -195,6 +197,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_UnmatchedItemNoDefault_Fails() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "unmatched_test",
@@ -253,6 +256,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MissingItemID_Fails() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "missing_id_test",
@@ -308,6 +312,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_DuplicateItemID_Fails() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "dup_id_test",
@@ -363,6 +368,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_DefaultEdgeCatchAll() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "default_edge_test",
@@ -433,6 +439,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_EmptyItems_SkipsToJoin() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "empty_items_test",
@@ -754,6 +761,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Depth-2 nesting:
 	// start → load → BATCH_SPLIT(gw_test) → (visual_inspect | lab branch) → BATCH_JOIN(join_test) → issue_cert → end
@@ -919,6 +927,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_EdgeConditionSeesWorkflowVars() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "wf_vars_in_condition",
@@ -991,6 +1000,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ReplayDeterminism() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "replay_batch_test",
@@ -1091,6 +1101,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MaxDepthExceeded_Fails() {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "max_depth_test",
@@ -1146,6 +1157,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fail
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "corrupt_child_items_test",
@@ -1212,6 +1224,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "missing_id_child_test",
@@ -1278,6 +1291,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsDuplicateItemIDAcross
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "dup_id_partitions_test",
@@ -1351,6 +1365,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	def := WorkflowDefinition{
 		ID:   "batch_child_abort_test",

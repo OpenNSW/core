@@ -57,6 +57,31 @@ type TaskPayload struct {
 	RootWorkflowID string
 }
 
+// AdminParkPayload carries the context of a node parking in NodeStatusAwaitingAdmin, delivered
+// to an AdminParkHandler so the host application can decide how to surface the event — log it,
+// emit a metric, persist it, page someone, etc. The engine itself takes no position on that; see
+// AdminParkHandler.
+type AdminParkPayload struct {
+	// WorkflowID is the unique identifier for the workflow execution that parked.
+	WorkflowID string
+	// RunID is the unique identifier for this specific execution attempt.
+	RunID string
+	// RootWorkflowID is the workflow ID of the top-level execution (see TaskPayload.RootWorkflowID).
+	RootWorkflowID string
+	// NodeID is the ID of the graph node that parked.
+	NodeID string
+	// NodeType is the type of the node that parked (TASK, GATEWAY, etc.).
+	NodeType string
+	// TaskTemplateID identifies the task template the parked node was running. Empty for
+	// non-TASK nodes (e.g. a GATEWAY parked on "no matching conditions").
+	TaskTemplateID string
+	// Cause is the error message that caused the node to park (NodeInfo.LastError).
+	Cause string
+	// CachedTaskResult holds the Activity's raw result if it had already completed before the
+	// node parked (see NodeInfo.CachedTaskResult) — nil if execution never reached that point.
+	CachedTaskResult map[string]any
+}
+
 // NodeStatus represents the status of a specific workflow node.
 type NodeStatus string
 
@@ -143,6 +168,15 @@ type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
 // providing the final, accumulated state of the workflow variables.
 type WorkflowCompletionHandler func(workflowID string, finalWorkflowVariables map[string]any) error
 
+// AdminParkHandler is invoked once every time a node parks in NodeStatusAwaitingAdmin —
+// including a re-park after a failed AdminActionRetry, since that's newly actionable
+// information. It hands the host application full control over how to surface the event (log,
+// metric, DB write, page, etc.); the engine itself does not prescribe a mechanism. Registering
+// one is optional — a nil handler (the default) means the engine takes no notification action
+// at all, and parking still proceeds correctly either way. A handler error is recorded on the
+// workflow's own AuditTrail but never blocks the park or the admin resolution flow.
+type AdminParkHandler func(AdminParkPayload) error
+
 // Manager acts as the bridge between the external host application and the underlying
 // execution engine. It handles workflow lifecycles, external task routing,
 // and state queries.
@@ -187,6 +221,11 @@ type TemporalManager interface {
 	// RegisterDefinitionHandler registers the handler function for fetching sub-workflow definitions.
 	RegisterDefinitionHandler(handler func(templateID string) (WorkflowDefinition, error))
 
+	// RegisterAdminParkHandler registers the handler invoked whenever a node parks for admin
+	// intervention. Optional — see AdminParkHandler's doc for what a nil/unregistered handler
+	// means.
+	RegisterAdminParkHandler(handler AdminParkHandler)
+
 	// StartWorker connects the internal Temporal Worker to the Temporal Server and
 	// begins polling the task queue for workflow and activity tasks.
 	StartWorker() error
@@ -229,6 +268,7 @@ func NewTemporalManager(
 	w.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	w.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	w.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
+	w.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	m.worker = w
 	m.activities = acts
@@ -238,6 +278,10 @@ func NewTemporalManager(
 
 func (m *temporalManagerImpl) RegisterDefinitionHandler(handler func(templateID string) (WorkflowDefinition, error)) {
 	m.activities.FetchWorkflowDefinitionHandler = handler
+}
+
+func (m *temporalManagerImpl) RegisterAdminParkHandler(handler AdminParkHandler) {
+	m.activities.AdminParkHandler = handler
 }
 
 func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def WorkflowDefinition, initialWorkflowVariables map[string]any) error {

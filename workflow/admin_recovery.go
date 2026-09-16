@@ -6,12 +6,18 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/OpenNSW/core/shared/maputil"
 )
+
+// adminParkNotificationTimeout bounds how long parkNodeForAdmin waits on the AdminParkActivity
+// before giving up on this attempt's notification and parking anyway. Notification is
+// best-effort: a slow or broken handler must never hold up the node actually parking.
+const adminParkNotificationTimeout = 30 * time.Second
 
 // terminalAdminError wraps an error that has already been through parkNodeForAdmin and was
 // deliberately given up on (AdminActionAbort, or the resolution channel itself failed). It
@@ -150,6 +156,7 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		g.instance.AuditTrail = append(g.instance.AuditTrail,
 			fmt.Sprintf("node %s parked for admin intervention: %s", node.ID, nodeInfo.LastError))
+		g.notifyAdminPark(ctx, node, nodeInfo)
 
 		sig, err := g.awaitAdminResolution(ctx, node.ID)
 		if err != nil {
@@ -212,6 +219,40 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			continue
 		}
 	}
+}
+
+// notifyAdminPark fires AdminParkActivity in a background coroutine so the host application's
+// registered AdminParkHandler (if any) can surface this park event however it chooses, without
+// making the caller yield first. That matters: the caller must reach awaitAdminResolution's
+// pendingAdminResolutions registration in the same tick, with no yield in between — a signal
+// (whether a real admin action or, as a batch/parallel gateway test's zero-delay callback
+// demonstrated, a near-instant one) arriving before that registration exists is silently dropped
+// by startAdminResolutionDispatcher. Blocking here on the notification first, even briefly,
+// reopens exactly that window.
+//
+// Best-effort beyond that: bounded by adminParkNotificationTimeout, and any failure (timeout, no
+// handler registered — which AdminParkActivity itself treats as success, or the handler
+// returning an error) is recorded on the workflow's own AuditTrail rather than propagated.
+func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nodeInfo *NodeInfo) {
+	payload := AdminParkPayload{
+		WorkflowID:       workflow.GetInfo(ctx).WorkflowExecution.ID,
+		RunID:            workflow.GetInfo(ctx).WorkflowExecution.RunID,
+		RootWorkflowID:   g.rootWorkflowID(),
+		NodeID:           node.ID,
+		NodeType:         string(node.Type),
+		TaskTemplateID:   node.TaskTemplateID,
+		Cause:            nodeInfo.LastError,
+		CachedTaskResult: nodeInfo.CachedTaskResult,
+	}
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		actCtx := workflow.WithActivityOptions(gCtx, workflow.ActivityOptions{
+			StartToCloseTimeout: adminParkNotificationTimeout,
+		})
+		if err := workflow.ExecuteActivity(actCtx, "AdminParkActivity", payload).Get(gCtx, nil); err != nil {
+			g.instance.AuditTrail = append(g.instance.AuditTrail,
+				fmt.Sprintf("node %s: admin park notification failed: %s", node.ID, err.Error()))
+		}
+	})
 }
 
 // completeParkedNode marks a parked node Completed and transitions onward via its first

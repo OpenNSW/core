@@ -28,6 +28,7 @@ func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
@@ -69,6 +70,7 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -110,6 +112,7 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -168,6 +171,7 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "first"}, nil).Once()
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
@@ -222,6 +226,7 @@ func TestAdminSkipContinuesPastParkedNode(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
@@ -262,6 +267,7 @@ func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -323,6 +329,7 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -396,6 +403,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
@@ -468,6 +476,7 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// 1. Send the signal, but omit the "missing_key" key to trigger output mapping failure
@@ -546,6 +555,7 @@ func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Cancel the workflow shortly after it starts blocking on the signal
 	env.RegisterDelayedCallback(func() {

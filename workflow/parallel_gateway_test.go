@@ -81,6 +81,7 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranches
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	mockWorkflowCompletedIgnoringChildren(env)
 
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
@@ -155,6 +156,7 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_GenericMapMerge_DisjointFie
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	mockWorkflowCompletedIgnoringChildren(env)
 
 	def := WorkflowDefinition{
@@ -215,6 +217,7 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_SameFieldConflict_LastBranc
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	mockWorkflowCompletedIgnoringChildren(env)
 
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
@@ -262,6 +265,7 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_ItemMissingID_Fai
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	mockWorkflowCompletedIgnoringChildren(env)
 
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
@@ -310,6 +314,7 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_InvalidItemType_F
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	mockWorkflowCompletedIgnoringChildren(env)
 
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})

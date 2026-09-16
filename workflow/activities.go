@@ -28,6 +28,10 @@ type Activities struct {
 	// FetchWorkflowDefinitionHandler is invoked to dynamically retrieve the workflow definition structure
 	// for a given template ID during SPLIT_TASK execution.
 	FetchWorkflowDefinitionHandler func(templateID string) (WorkflowDefinition, error)
+
+	// AdminParkHandler is invoked whenever a node parks for admin intervention. See the
+	// AdminParkHandler type doc for what a nil handler means.
+	AdminParkHandler AdminParkHandler
 }
 
 // FetchWorkflowDefinitionActivity is a Temporal activity that retrieves the workflow definition for a template ID.
@@ -64,4 +68,14 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 // WorkflowCompletedActivity is a Temporal activity that executes when a workflow completes successfully.
 func (a *Activities) WorkflowCompletedActivity(_ context.Context, workflowID string, finalContext map[string]any) error {
 	return a.WorkflowCompletedActivityHandler(workflowID, finalContext)
+}
+
+// AdminParkActivity is a Temporal activity that notifies the host application whenever a node
+// parks for admin intervention. It is a no-op if no AdminParkHandler is registered — unlike the
+// other handlers here, notification is optional, so an unset handler is not an error.
+func (a *Activities) AdminParkActivity(_ context.Context, payload AdminParkPayload) error {
+	if a.AdminParkHandler == nil {
+		return nil
+	}
+	return a.AdminParkHandler(payload)
 }
