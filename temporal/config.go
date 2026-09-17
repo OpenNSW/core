@@ -17,21 +17,21 @@ import (
 // Host/Port are kept separate to make configuration via environment variables
 // easier and more explicit.
 type Config struct {
-	Host      string
-	Port      int
-	Namespace string
+	Host      string `yaml:"host"`
+	Port      int    `yaml:"port"`
+	Namespace string `yaml:"namespace"`
 }
 
 // Validate ensures the Temporal configuration is usable.
 func (c Config) Validate() error {
 	if c.Host == "" {
-		return fmt.Errorf("TEMPORAL_HOST is required")
+		return fmt.Errorf("temporal host is required")
 	}
-	if err := validation.TCPPort("TEMPORAL_PORT", c.Port); err != nil {
+	if err := validation.TCPPort("temporal port", c.Port); err != nil {
 		return err
 	}
 	if c.Namespace == "" {
-		return fmt.Errorf("TEMPORAL_NAMESPACE is required")
+		return fmt.Errorf("temporal namespace is required")
 	}
 	return nil
 }

@@ -22,11 +22,20 @@ The returned `client.Client` is the standard Temporal Go SDK client. Pass it to 
 
 ## Config
 
-| Field | Type | Description |
-|---|---|---|
-| `Host` | `string` | Temporal server hostname |
-| `Port` | `int` | Temporal server port (default `7233`) |
-| `Namespace` | `string` | Temporal namespace (default `"default"`) |
+| Field       | YAML key    | Type     | Description                              |
+|-------------|-------------|----------|------------------------------------------|
+| `Host`      | `host`      | `string` | Temporal server hostname                 |
+| `Port`      | `port`      | `int`    | Temporal server port (default `7233`)    |
+| `Namespace` | `namespace` | `string` | Temporal namespace (default `"default"`) |
+
+`Config` carries `yaml` struct tags, so it can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`):
+
+```yaml
+temporal:
+  host: localhost
+  port: 7233
+  namespace: default
+```
 
 ## Local development
 
