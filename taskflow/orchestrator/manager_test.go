@@ -82,6 +82,9 @@ func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) 
 func (m *mockTemporalManager) RegisterDefinitionHandler(_ func(templateID string) (engine.WorkflowDefinition, error)) {
 }
 
+func (m *mockTemporalManager) RegisterAdminParkHandler(_ engine.AdminParkHandler) {
+}
+
 type safeMockTaskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]store.TaskRecord
@@ -236,6 +239,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		NodeID:         "node-1",
 		TaskTemplateID: "test_template",
 		Inputs:         map[string]any{"userform.name": "Alice"},
+		RootWorkflowID: "parent-workflow",
 	}
 
 	if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
@@ -365,20 +369,19 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	}
 }
 
-// TestStartTask_DerivesRootWorkflowID verifies the consignment ID extraction:
-// for SPLIT_TASK child workflows (format "{root}--{nodeID}--{branchID}") the
-// root is the segment before the first "--"; a plain top-level workflow ID is
-// its own root.
-func TestStartTask_DerivesRootWorkflowID(t *testing.T) {
+// TestStartTask_PassesThroughRootWorkflowID verifies that RootWorkflowID on the
+// stored TaskRecord comes straight from payload.RootWorkflowID, as propagated by
+// the engine (see engine.VarRootWorkflowID) — StartTask no longer derives it by
+// parsing payload.WorkflowID.
+func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
 	cases := []struct {
-		name       string
-		workflowID string
-		wantRoot   string
+		name           string
+		workflowID     string
+		rootWorkflowID string
 	}{
 		{"top-level workflow", "consignment-123", "consignment-123"},
-		{"split-task child", "consignment-123--node-5--branch-2", "consignment-123"},
-		{"single separator", "root--child", "root"},
-		{"empty workflow id", "", ""},
+		{"nested child workflow", "consignment-123--a1b2c3d4e5f60789", "consignment-123"},
+		{"empty root workflow id", "consignment-123", ""},
 	}
 
 	for _, tc := range cases {
@@ -391,6 +394,7 @@ func TestStartTask_DerivesRootWorkflowID(t *testing.T) {
 				RunID:          "run-1",
 				NodeID:         "node-1",
 				TaskTemplateID: "test_template",
+				RootWorkflowID: tc.rootWorkflowID,
 			}
 			if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
 				t.Fatalf("StartTask failed: %v", err)
@@ -400,8 +404,8 @@ func TestStartTask_DerivesRootWorkflowID(t *testing.T) {
 			if !ok {
 				t.Fatal("expected task record to be saved")
 			}
-			if task.RootWorkflowID != tc.wantRoot {
-				t.Errorf("RootWorkflowID = %q, want %q", task.RootWorkflowID, tc.wantRoot)
+			if task.RootWorkflowID != tc.rootWorkflowID {
+				t.Errorf("RootWorkflowID = %q, want %q", task.RootWorkflowID, tc.rootWorkflowID)
 			}
 		})
 	}

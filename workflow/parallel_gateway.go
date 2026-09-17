@@ -15,8 +15,9 @@ import (
 
 // parallelBranch holds the future of a spawned child workflow for one PARALLEL_SPLIT branch.
 type parallelBranch struct {
-	EdgeID string
-	Future workflow.ChildWorkflowFuture
+	EdgeID     string
+	WorkflowID string
+	Future     workflow.ChildWorkflowFuture
 }
 
 // handleParallelSplitGateway runs each matching outgoing edge as its own isolated child
@@ -69,13 +70,22 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 		subDef := extractSubGraph(g.def, e.TargetID, joinNodeID)
 		childVars := deepcopy.Map(baseVars)
 
-		childWorkflowID := FormatBatchChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, edgeID)
+		childWorkflowID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, edgeID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: childWorkflowID,
 		})
 		future := workflow.ExecuteChildWorkflow(childCtx, "GraphInterpreterWorkflow", subDef, childVars)
-		branches = append(branches, parallelBranch{EdgeID: edgeID, Future: future})
+		branches = append(branches, parallelBranch{EdgeID: edgeID, WorkflowID: childWorkflowID, Future: future})
 	}
+
+	// Record spawned child IDs on the node now, before awaiting completion below, so
+	// admin/ops tooling can find them regardless of whether (or how) the children finish.
+	childIDs := make([]string, 0, len(branches))
+	for _, b := range branches {
+		childIDs = append(childIDs, b.WorkflowID)
+	}
+	sort.Strings(childIDs)
+	nodeInfo.ChildWorkflowIDs = childIDs
 
 	// 3. Wait for every branch, then reconcile their final states into one.
 	branchVars := make([]map[string]any, 0, len(branches))

@@ -4,7 +4,10 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +31,7 @@ func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
@@ -52,7 +56,96 @@ func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
 	require.Empty(t, instance.NodeInfo["task"].LastError)
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything)
+}
+
+// TestAdminParkNotifiesHostAppOnFreshExecution pins that parking a node actually invokes
+// AdminParkActivity. Every other park test in this file registers the activity without asserting
+// it's called, so on its own none of them would catch notifyAdminPark silently not being invoked.
+func TestAdminParkNotifiesHostAppOnFreshExecution(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionOverride,
+			Reason: "supplying the missing value directly",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+// TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes pins the join in
+// parkNodeForAdmin that waits for notifyAdminPark's background coroutine before acting on a
+// resolution. AdminParkActivity here sleeps 300ms (real time, not workflow virtual time) before
+// failing, while the resolution signal arrives after just 1ms — so the resolution reliably wins
+// the race and the workflow tries to complete while the notification coroutine is still
+// in-flight. Temporal abandons (does not drain) a workflow.Go coroutine that hasn't finished when
+// the workflow function returns, so without the join this test reproduces the bug deterministically:
+// the workflow completes in milliseconds without ever recording the notification's eventual
+// failure on AuditTrail.
+func TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ AdminParkPayload) error {
+			time.Sleep(300 * time.Millisecond)
+			return errors.New("notification sink unavailable")
+		}).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionOverride,
+			Reason: "racing the slow notification",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+
+	trail := strings.Join(instance.AuditTrail, "\n")
+	require.Contains(t, trail, "admin park notification failed")
+	require.Contains(t, trail, "notification sink unavailable")
+	require.Less(t, strings.Index(trail, "admin park notification failed"), strings.Index(trail, "admin resolution: OVERRIDE"),
+		"the notification's failure must be recorded before the resolution it raced against")
+
+	env.AssertExpectations(t)
 }
 
 // TestAdminRetryResolvesInputMappingError parks on a missing input mapping, then resolves it
@@ -69,7 +162,8 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything).
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -110,7 +204,8 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -168,9 +263,10 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "first"}, nil).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "second"}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -222,6 +318,7 @@ func TestAdminSkipContinuesPastParkedNode(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
@@ -262,6 +359,7 @@ func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -323,7 +421,8 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything).
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -384,7 +483,7 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 // matching branch runs as its own child workflow (see parallel_gateway.go), so a node parked
 // for admin inside one branch (task_a, here) shows up in that child's own status and signal
 // channel, not the parent's (similar to BATCH_SPLIT partitions).
-// The child's deterministic ID is FormatBatchChildWorkflowID(parentID, splitNodeID, edgeID);
+// The child's deterministic ID is FormatChildWorkflowID(rootID, parentID, splitNodeID, edgeID);
 // parallelWorkflowJSON's split->task_a edge is "e2".
 func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
@@ -396,13 +495,14 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
-	branchWorkflowID := FormatBatchChildWorkflowID("default-test-workflow-id", "split", "e2")
+	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
 
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(branchWorkflowID, "GetStatus")
@@ -427,7 +527,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	require.Contains(t, env.GetWorkflowError().Error(), "boom")
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything)
 }
 
 // TestAdminOverrideResolvesWaitForSignalOutputMappingError verifies that when a
@@ -468,6 +568,7 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// 1. Send the signal, but omit the "missing_key" key to trigger output mapping failure
@@ -546,6 +647,7 @@ func TestWaitForSignalCancellationCleanlyPropagates(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Cancel the workflow shortly after it starts blocking on the signal
 	env.RegisterDelayedCallback(func() {

@@ -37,22 +37,22 @@ func TestNew_InvalidConfig(t *testing.T) {
 		{
 			name:    "missing host",
 			cfg:     Config{Username: "u", Password: "p", Name: "db"},
-			wantErr: "DB_HOST is required",
+			wantErr: "database host is required",
 		},
 		{
 			name:    "missing username",
 			cfg:     Config{Host: "localhost", Password: "p", Name: "db"},
-			wantErr: "DB_USERNAME is required",
+			wantErr: "database username is required",
 		},
 		{
 			name:    "missing password",
 			cfg:     Config{Host: "localhost", Username: "u", Name: "db"},
-			wantErr: "DB_PASSWORD is required",
+			wantErr: "database password is required",
 		},
 		{
 			name:    "missing name",
 			cfg:     Config{Host: "localhost", Username: "u", Password: "p"},
-			wantErr: "DB_NAME is required",
+			wantErr: "database name is required",
 		},
 	}
 
@@ -90,10 +90,10 @@ func TestNew_ValidConfigNoServer(t *testing.T) {
 	// The error must NOT be a validation error — it should come from the
 	// connect/ping stage, proving Validate() passed.
 	validationErrors := []string{
-		"DB_HOST is required",
-		"DB_USERNAME is required",
-		"DB_PASSWORD is required",
-		"DB_NAME is required",
+		"database host is required",
+		"database username is required",
+		"database password is required",
+		"database name is required",
 	}
 	for _, ve := range validationErrors {
 		if err.Error() == ve {

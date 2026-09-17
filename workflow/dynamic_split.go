@@ -59,6 +59,19 @@ func (g *graphInterpreter) handleSplitTaskNode(ctx workflow.Context, nodeInfo *N
 
 	// 2. Spawn child workflow interpreters
 	activeBranches, err := g.spawnChildWorkflows(ctx, node, config, branchesData, iterKey)
+
+	// Record spawned child IDs on the node now, before checking the spawn error — a branch
+	// that failed to start after others already succeeded still leaves those others running,
+	// and this is the only place their IDs get recorded. monitorChildWorkflows deletes entries
+	// from activeBranches as branches finish, but this snapshot is what admin/ops tooling uses
+	// to find children regardless of their status.
+	childIDs := make([]string, 0, len(activeBranches))
+	for id := range activeBranches {
+		childIDs = append(childIDs, id)
+	}
+	sort.Strings(childIDs)
+	nodeInfo.ChildWorkflowIDs = childIDs
+
 	if err != nil {
 		return err
 	}
@@ -196,6 +209,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
+			VarRootWorkflowID:   g.rootWorkflowID(),
 			VarSplitNodeID:      node.ID,
 			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{
@@ -205,7 +219,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 			},
 		}
 
-		deterministicChildID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		deterministicChildID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: deterministicChildID,
 		})
@@ -220,13 +234,25 @@ func (g *graphInterpreter) spawnChildWorkflows(
 	}
 
 	// Wait for all child workflows to start to ensure their execution environments (and signal handlers) are initialized.
-	// Iterate prepared (insertion order) rather than the map to guarantee deterministic replay.
+	// Iterate prepared (insertion order) rather than the map to guarantee deterministic replay. Check
+	// every branch rather than returning on the first failure, so a single bad branch doesn't hide the
+	// start status of the others — and activeBranches is always returned, even on error, so the caller
+	// can still record every branch that was actually spawned.
+	var startErrors []error
 	for _, p := range prepared {
-		childID := FormatChildWorkflowID(parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		childID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		var childExec workflow.Execution
 		if err := activeBranches[childID].Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
-			return nil, fmt.Errorf("failed to start child workflow %s: %w", childID, err)
+			startErrors = append(startErrors, fmt.Errorf("failed to start child workflow %s: %w", childID, err))
 		}
+	}
+
+	if len(startErrors) > 0 {
+		msgs := make([]string, len(startErrors))
+		for i, e := range startErrors {
+			msgs[i] = e.Error()
+		}
+		return activeBranches, fmt.Errorf("failed to start %d of %d child workflows: [%s]", len(startErrors), len(prepared), strings.Join(msgs, "; "))
 	}
 
 	return activeBranches, nil
@@ -280,7 +306,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 			err := wf.Get(ctx, &childOutput)
 
 			if err != nil {
-				executionError = fmt.Errorf("dynamic execution track %s halted abnormally: %w", targetID, err)
+				executionError = fmt.Errorf("dynamic execution track %s (workflow %s) halted abnormally: %w", branchInfo.BranchID, targetID, err)
 				failedBranchesErrors = append(failedBranchesErrors, executionError)
 				aggregatedResults[branchInfo.Index] = map[string]any{
 					"error":     err.Error(),

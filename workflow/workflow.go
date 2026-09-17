@@ -53,6 +53,14 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		Edges:             make([]Edge, len(def.Edges)),
 	}
 
+	// Only the root execution reaches this with VarRootWorkflowID unset — every nested child is
+	// started with it already present in initialWorkflowVariables (copied through wholesale by
+	// BATCH_SPLIT/PARALLEL_SPLIT, or set explicitly by SPLIT_TASK), so this seeds it exactly once
+	// per workflow tree, at the true root.
+	if _, ok := instance.WorkflowVariables[VarRootWorkflowID]; !ok {
+		instance.WorkflowVariables[VarRootWorkflowID] = instance.ID
+	}
+
 	// Generate UUIDs deterministically
 	var generatedUUIDs map[string]string
 	if err := workflow.SideEffect(ctx, func(_ workflow.Context) interface{} {
@@ -382,6 +390,15 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 	return nil
 }
 
+// rootWorkflowID returns this execution's root workflow ID, propagated from the top-level
+// execution via VarRootWorkflowID (see GraphInterpreterWorkflow).
+func (g *graphInterpreter) rootWorkflowID() string {
+	if v, ok := g.instance.WorkflowVariables[VarRootWorkflowID].(string); ok && v != "" {
+		return v
+	}
+	return g.instance.ID
+}
+
 func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	inputs, err := g.mapTaskInputs(node.InputMapping)
 	if err != nil {
@@ -395,7 +412,7 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
 
-	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs).Get(ctx, &result)
+	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID()).Get(ctx, &result)
 	if err != nil {
 		return err
 	}
