@@ -29,22 +29,22 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name:    "missing host",
 			mutate:  func(c *Config) { c.Host = "" },
-			wantErr: "DB_HOST is required",
+			wantErr: "database host is required",
 		},
 		{
 			name:    "missing username",
 			mutate:  func(c *Config) { c.Username = "" },
-			wantErr: "DB_USERNAME is required",
+			wantErr: "database username is required",
 		},
 		{
 			name:    "missing password",
 			mutate:  func(c *Config) { c.Password = "" },
-			wantErr: "DB_PASSWORD is required",
+			wantErr: "database password is required",
 		},
 		{
 			name:    "missing name",
 			mutate:  func(c *Config) { c.Name = "" },
-			wantErr: "DB_NAME is required",
+			wantErr: "database name is required",
 		},
 	}
 
