@@ -22,13 +22,24 @@ const (
 )
 
 // helperFuncs returns the functions xmlgen defines itself: the escaping
-// functions, and error stubs over the three text/template builtins that escape
-// for HTML or JavaScript and so produce wrong output in XML.
+// functions, the built-in helper library, and error stubs over the three
+// text/template builtins that escape for HTML or JavaScript and so produce
+// wrong output in XML.
 func helperFuncs() template.FuncMap {
 	return template.FuncMap{
 		funcEscape: fnXML,
 		funcRaw:    fnRaw,
 		funcCDATA:  fnCDATA,
+
+		"split":    fnSplit,
+		"part":     fnPart,
+		"join":     fnJoin,
+		"date":     fnDate,
+		"decimal":  fnDecimal,
+		"lookup":   fnLookup,
+		"coalesce": fnCoalesce,
+		"trim":     fnTrim,
+		"zero":     fnZero,
 
 		"html":     disabled("html"),
 		"js":       disabled("js"),
