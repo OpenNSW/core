@@ -24,33 +24,33 @@ const (
 
 // Config holds database connection configuration.
 type Config struct {
-	Host                   string
-	Port                   int
-	Username               string
-	Password               string
-	Name                   string
-	SSLMode                string
-	MaxIdleConns           int
-	MaxOpenConns           int
-	MaxConnLifetimeSeconds int
+	Host                   string `yaml:"host"`
+	Port                   int    `yaml:"port"`
+	Username               string `yaml:"username"`
+	Password               string `yaml:"password"`
+	Name                   string `yaml:"name"`
+	SSLMode                string `yaml:"sslMode"`
+	MaxIdleConns           int    `yaml:"maxIdleConns"`
+	MaxOpenConns           int    `yaml:"maxOpenConns"`
+	MaxConnLifetimeSeconds int    `yaml:"maxConnLifetimeSeconds"`
 
 	// LogLevel controls GORM query logging verbosity.
 	// Defaults to LogError when not set (zero value).
-	LogLevel LogLevel
+	LogLevel LogLevel `yaml:"logLevel"`
 }
 
 func (c Config) Validate() error {
 	if c.Host == "" {
-		return fmt.Errorf("DB_HOST is required")
+		return fmt.Errorf("database host is required")
 	}
 	if c.Username == "" {
-		return fmt.Errorf("DB_USERNAME is required")
+		return fmt.Errorf("database username is required")
 	}
 	if c.Password == "" {
-		return fmt.Errorf("DB_PASSWORD is required")
+		return fmt.Errorf("database password is required")
 	}
 	if c.Name == "" {
-		return fmt.Errorf("DB_NAME is required")
+		return fmt.Errorf("database name is required")
 	}
 	return nil
 }
