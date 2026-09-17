@@ -125,6 +125,8 @@ Reserved placeholders:
 
 To rule this out, `NewRegistry` rejects any format with more than one `sequence`/`random` segment combined. A format can still mix any number of `literal`/`list`/`date` segments with at most one of `sequence` or `random`.
 
+See [docs/PATTERNS.md](docs/PATTERNS.md) for a catalog of the ID shapes these segments can produce — sequence-based, random-based, and stateless — each with a runnable example config.
+
 ---
 
 ## Database Setup
