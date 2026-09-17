@@ -212,6 +212,7 @@ func TestCustomsExportLCLFlow(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything, mock.Anything).
 		Return(map[string]any{"consignment_type": "LCL"}, nil).Once()
@@ -265,6 +266,7 @@ func TestParallelJoinFlow(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
@@ -309,6 +311,7 @@ func TestTaskNodeAppliesInputMapping(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
 		if len(inputs) != 1 {
@@ -344,6 +347,7 @@ func TestTaskNodeWithEmptyInputMappingPassesNoInputs(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_EMPTY_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
 		return len(inputs) == 0
@@ -374,6 +378,7 @@ func TestTaskNodeFailsWhenInputKeyMissing(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// The input mapping error parks the node for admin intervention. Abort it so the workflow fails.
 	env.RegisterDelayedCallback(func() {
@@ -402,6 +407,7 @@ func TestNodeOutputFlowsIntoSubsetInputMapping(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "NODE1_TASK", mock.Anything, mock.Anything).
 		Return(map[string]any{
@@ -449,6 +455,7 @@ func TestTaskNodeSkipsOptionalInputWhenMissing(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
 		if len(inputs) != 1 {
@@ -484,6 +491,7 @@ func TestTaskNodeAppliesOptionalInputWhenPresent(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
 		if len(inputs) != 2 {
@@ -515,6 +523,7 @@ func TestTaskNodeSkipsOptionalOutputWhenMissing(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_OUTPUTS", mock.Anything, mock.Anything).
 		Return(map[string]any{"task_email": "user@example.com"}, nil).Once()
@@ -548,6 +557,7 @@ func TestTaskNodeFailsWhenRequiredOutputMissing(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
@@ -579,6 +589,7 @@ func TestEdgesAreReturnedInWorkflowInstance(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Critical: ensure condition variable exists
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything, mock.Anything).
@@ -625,6 +636,7 @@ func TestEdgesReferenceValidNodeInstanceIDs(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
@@ -713,6 +725,7 @@ func TestEmitSignalStandaloneWarns(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// No _parent_workflow_id set, so the EMIT should warn and proceed without failing.
@@ -766,6 +779,7 @@ func TestEmitSignalInvalidPayloadType(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Node parks on the missing signal_name error; abort it to fail the workflow.
 	env.RegisterDelayedCallback(func() {
@@ -824,6 +838,7 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Mock SignalExternalWorkflow to fail for non-existent-parent
@@ -921,6 +936,7 @@ func TestTimerNodeLoopsUntilDelivered(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Not delivered twice, then delivered on the third poll.
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything).
@@ -961,6 +977,7 @@ func TestTimerNodeStopsAtAttemptCap(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Never delivered: the cap must stop the loop at exactly 3 polls.
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything).
@@ -1017,6 +1034,7 @@ func TestTimerNodeRejectsBadConfig(t *testing.T) {
 			acts := &Activities{}
 			env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 			env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+			env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 			// A misconfigured node parks for admin rather than failing outright,
 			// so the config error surfaces as LastError on the parked node.
@@ -1073,6 +1091,7 @@ func TestTimerNodeRequiresExactlyOneOutgoingEdge(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -1112,6 +1131,7 @@ func TestTimerNodeDefaultsCounterKeyToNodeID(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	start := env.Now()
@@ -1183,6 +1203,7 @@ func TestSignalingNodeRejectsBadConfig(t *testing.T) {
 			acts := &Activities{}
 			env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 			env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+			env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 			// A misconfigured node parks for admin; verify the error, then abort.
 			env.RegisterDelayedCallback(func() {

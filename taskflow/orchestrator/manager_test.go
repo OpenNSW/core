@@ -82,6 +82,9 @@ func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) 
 func (m *mockTemporalManager) RegisterDefinitionHandler(_ func(templateID string) (engine.WorkflowDefinition, error)) {
 }
 
+func (m *mockTemporalManager) RegisterAdminParkHandler(_ engine.AdminParkHandler) {
+}
+
 type safeMockTaskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]store.TaskRecord
