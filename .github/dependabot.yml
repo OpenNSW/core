@@ -17,6 +17,7 @@ updates:
       - "/uiprojector"
       - "/trace"
       - "/storage"
+      - "/json"
       - "/xmlgen"
     schedule:
       interval: "weekly"
