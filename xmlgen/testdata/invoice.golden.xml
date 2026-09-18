@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<INVOICE id="INV-2026-00042">
+<Draft/>
+<Currency/>
+<Version>1.0</Version>
+<Issuer>
+<registration_number>REG/001/2026</registration_number>
+<tax_id>1234567890000</tax_id>
+<Customer>Ünïcødé Tráder &lt;Pvt&gt; Ltd</Customer>
+</Issuer>
+<Reference_info>
+<Reference_prefix>INV</Reference_prefix>
+<Reference_year>2026</Reference_year>
+<Reference_series>A</Reference_series>
+<Reference_number>00042</Reference_number>
+<Reference_check></Reference_check>
+</Reference_info>
+<Header>
+<Category>STANDARD &amp; EXPRESS</Category>
+<Approved>1</Approved>
+<Issued_date>3/4/26</Issued_date>
+<Due_date>3/19/26</Due_date>
+<Tax_rate>15.00</Tax_rate>
+</Header>
+<Line>
+<sku>A-1</sku>
+<description>Widget</description>
+<qty>400</qty>
+<unit_price>1200</unit_price>
+<amount>480000</amount>
+</Line>
+<Line>
+<sku>B-2</sku>
+<description>Gadget &amp; Co</description>
+<qty>500</qty>
+<unit_price>1300</unit_price>
+<amount>650000</amount>
+</Line>
+<Line>
+<sku>C-3</sku>
+<description>Sprocket</description>
+<qty>8000</qty>
+<unit_price>1250</unit_price>
+<amount>10000000</amount>
+</Line>
+<Summary>
+<Totals>
+<Total_qty>8900</Total_qty>
+<Total_amount>11130000</Total_amount>
+<Average_price>1250.5618</Average_price>
+</Totals>
+</Summary>
+<Billing>
+<Address>12 EXAMPLE ROAD,&#x9;&#xA;SAMPLE TOWN.</Address>
+<Notes><null/></Notes>
+</Billing>
+<Adjustments>
+<Credit_note><null/></Credit_note>
+</Adjustments>
+</INVOICE>

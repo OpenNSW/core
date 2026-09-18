@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "invoice": {
+    "document_id": "INV-2026-00042",
+    "reference": "INV 2026 A 00042",
+    "issuer_registration_no": "REG/001/2026",
+    "issuer_tax_id": "1234567890000",
+    "customer_name": "Ünïcødé Tráder <Pvt> Ltd",
+    "category": "STANDARD & EXPRESS",
+    "approved": "yes",
+    "issued_on": "2026-03-04",
+    "due_on": "2026-03-19",
+    "tax_rate": 15,
+    "credit_note": 0,
+    "notes": "",
+    "billing_address": "12 EXAMPLE ROAD,\t\nSAMPLE TOWN.",
+    "lines": {
+      "sheet": [
+        {
+          "sku": "A-1",
+          "description": "Widget",
+          "qty": 400,
+          "unit_price": 1200,
+          "amount": 480000
+        },
+        {
+          "sku": "B-2",
+          "description": "Gadget & Co",
+          "qty": 500,
+          "unit_price": 1300,
+          "amount": 650000
+        },
+        {
+          "sku": "C-3",
+          "description": "Sprocket",
+          "qty": 8000,
+          "unit_price": 1250,
+          "amount": 10000000
+        }
+      ],
+      "derivations": {
+        "total_qty": { "label": "Total Quantity", "value": 8900 },
+        "total_amount": { "label": "Total Amount", "value": 11130000 },
+        "average_price": { "label": "Average Price", "value": 1250.5617977528089 }
+      }
+    }
+  }
+}
