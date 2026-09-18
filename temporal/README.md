@@ -22,11 +22,13 @@ The returned `client.Client` is the standard Temporal Go SDK client. Pass it to 
 
 ## Config
 
-| Field       | YAML key    | Type     | Description                              |
-|-------------|-------------|----------|------------------------------------------|
-| `Host`      | `host`      | `string` | Temporal server hostname                 |
-| `Port`      | `port`      | `int`    | Temporal server port (default `7233`)    |
-| `Namespace` | `namespace` | `string` | Temporal namespace (default `"default"`) |
+| Field       | YAML key    | Type     | Description                                             |
+|-------------|-------------|----------|----------------------------------------------------------|
+| `Host`      | `host`      | `string` | Temporal server hostname (required)                     |
+| `Port`      | `port`      | `int`    | Temporal server port, e.g. `7233` (required)             |
+| `Namespace` | `namespace` | `string` | Temporal namespace, e.g. `"default"` (required)          |
+
+All three fields are required — `Validate()` rejects an empty `Host`/`Namespace` or a `Port` of `0`. There are no implicit defaults; callers must supply explicit values (e.g. `7233` and `"default"` for local development against `temporal server start-dev`).
 
 `Config` carries `yaml` struct tags, so it can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`):
 
