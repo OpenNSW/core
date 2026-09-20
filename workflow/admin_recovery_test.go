@@ -19,8 +19,8 @@ import (
 )
 
 func TestApplyVariablesPatchIsDeterministicForOverlappingKeys(t *testing.T) {
-	// "a" replaces the whole map at a; "a.y" writes inside it. Applied in sorted order the parent
-	// always goes first, so both survive on every run.
+	// "a" is written first and "a.y" inside it. Applied in sorted order the parent always goes
+	// first, so both survive on every run.
 	patch := map[string]any{
 		"a":   map[string]any{"x": 1},
 		"a.y": 2,
@@ -30,6 +30,28 @@ func TestApplyVariablesPatchIsDeterministicForOverlappingKeys(t *testing.T) {
 		applyVariablesPatch(vars, patch)
 		require.Equal(t, map[string]any{"a": map[string]any{"x": 1, "y": 2}}, vars)
 	}
+}
+
+// TestApplyVariablesPatchMergesMapsAndReplacesOtherValues pins the write semantics the
+// WorkflowVariablesPatch comment describes.
+func TestApplyVariablesPatchMergesMapsAndReplacesOtherValues(t *testing.T) {
+	vars := map[string]any{
+		"review": map[string]any{"legacy": true, "outcome": "pending"},
+		"status": map[string]any{"code": 1},
+		"count":  1,
+	}
+
+	applyVariablesPatch(vars, map[string]any{
+		"review": map[string]any{"outcome": "approved"}, // map over map: merged, "legacy" kept
+		"status": "done",                                // scalar over map: replaced
+		"count":  2,
+	})
+
+	require.Equal(t, map[string]any{
+		"review": map[string]any{"legacy": true, "outcome": "approved"},
+		"status": "done",
+		"count":  2,
+	}, vars)
 }
 
 // TestAdminCompleteResolvesInputMappingError parks on a missing input mapping, then resolves
