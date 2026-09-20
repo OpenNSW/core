@@ -6,6 +6,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -58,15 +60,14 @@ type AdminResolutionAction string
 
 // Admin resolution actions.
 const (
-	// AdminActionRetry re-runs the node's handler from scratch. It is the admin's
-	// responsibility to ensure this is safe — e.g. a TASK node with a populated
-	// CachedTaskResult has already run its Activity, so retrying re-invokes it.
+	// AdminActionRetry applies WorkflowVariablesPatch, then re-runs the node's handler from
+	// scratch. It is the admin's responsibility to ensure this is safe — e.g. a TASK node with a
+	// populated CachedTaskResult has already run its Activity, so retrying re-invokes it.
 	AdminActionRetry AdminResolutionAction = "RETRY"
-	// AdminActionOverride merges Overrides directly into WorkflowVariables and marks
-	// the node completed without re-running anything. Always safe.
-	AdminActionOverride AdminResolutionAction = "OVERRIDE"
-	// AdminActionSkip marks the node completed without setting any variables.
-	AdminActionSkip AdminResolutionAction = "SKIP"
+	// AdminActionComplete applies WorkflowVariablesPatch and marks the node completed without
+	// running it (or re-running it): the patch stands in for the node's output. An empty patch
+	// just moves past the node. Always safe, but not allowed for GATEWAY nodes.
+	AdminActionComplete AdminResolutionAction = "COMPLETE"
 	// AdminActionAbort fails the node and the workflow with the original error.
 	AdminActionAbort AdminResolutionAction = "ABORT"
 )
@@ -81,9 +82,13 @@ type AdminResolutionSignal struct {
 	NodeID string `json:"nodeID"`
 	// Action determines how the node is resolved. See AdminResolutionAction constants.
 	Action AdminResolutionAction `json:"action"`
-	// Overrides are merged into WorkflowVariables for AdminActionOverride/AdminActionSkip,
-	// or merged in before retrying for AdminActionRetry.
-	Overrides map[string]any `json:"overrides,omitempty"`
+	// WorkflowVariablesPatch sets workflow variables before the action takes effect, for
+	// AdminActionRetry and AdminActionComplete. Keys are dotted paths (e.g. "review.outcome"),
+	// values replace whatever is at that path, and the paths are applied in sorted order. It is a
+	// patch, not the full variable set — variables not named here are untouched. It is not an
+	// RFC 6902 JSON Patch, and a nil value sets the path to nil rather than deleting it. The
+	// variables are workflow-wide and persist, so they affect every later node too.
+	WorkflowVariablesPatch map[string]any `json:"workflow_variables_patch,omitempty"`
 	// Reason is a free-text admin justification, appended to the workflow's AuditTrail.
 	Reason string `json:"reason,omitempty"`
 }
@@ -136,11 +141,11 @@ func (g *graphInterpreter) awaitAdminResolution(ctx workflow.Context, nodeID str
 
 // parkedErrorMessage builds the LastError text shown for a parked node. If the node's
 // Activity already completed successfully (cachedTaskResult is populated), it appends an
-// explicit warning so an admin doesn't blindly Retry and re-invoke it — Override is the
+// explicit warning so an admin doesn't blindly Retry and re-invoke it — Complete is the
 // safe choice in that case.
 func parkedErrorMessage(cause error, cachedTaskResult map[string]any) string {
 	if cachedTaskResult != nil {
-		return fmt.Sprintf("%s (WARNING: the Activity already completed successfully — use OVERRIDE instead of RETRY to avoid re-running it)", cause.Error())
+		return fmt.Sprintf("%s (WARNING: the Activity already completed successfully — use COMPLETE instead of RETRY to avoid re-running it)", cause.Error())
 	}
 	return cause.Error()
 }
@@ -180,29 +185,20 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			nodeInfo.Status = NodeStatusFailed
 			return &terminalAdminError{err: cause}
 
-		case AdminActionSkip:
+		case AdminActionComplete:
 			// GATEWAY nodes route to one of several outEdges based on conditions (or fan
 			// out to all of them for a parallel split) — blindly completing into
 			// outEdges[0] would ignore that routing entirely, silently taking the wrong
 			// branch or breaking a downstream parallel join. Steer the admin to Retry
 			// instead, which re-runs the gateway's real (side-effect-free) routing logic.
 			if node.Type == NodeTypeGateway {
-				workflow.GetLogger(ctx).Warn("skip is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "node_id", node.ID)
+				workflow.GetLogger(ctx).Warn("complete is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "node_id", node.ID)
 				continue
 			}
-			return g.completeParkedNode(ctx, nodeInfo, outEdges, nil)
-
-		case AdminActionOverride:
-			if node.Type == NodeTypeGateway {
-				workflow.GetLogger(ctx).Warn("override is not supported for GATEWAY nodes; use Retry after correcting variables, or Abort", "node_id", node.ID)
-				continue
-			}
-			return g.completeParkedNode(ctx, nodeInfo, outEdges, sig.Overrides)
+			return g.completeParkedNode(ctx, nodeInfo, outEdges, sig.WorkflowVariablesPatch)
 
 		case AdminActionRetry:
-			for k, v := range sig.Overrides {
-				maputil.SetNestedKey(g.instance.WorkflowVariables, k, v)
-			}
+			applyVariablesPatch(g.instance.WorkflowVariables, sig.WorkflowVariablesPatch)
 			nodeInfo.Status = NodeStatusRunning
 			nodeInfo.LastError = ""
 			// Clear any cached Activity result from the previous attempt before re-dispatching:
@@ -280,13 +276,18 @@ func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nod
 	return future
 }
 
-// completeParkedNode marks a parked node Completed and transitions onward via its first
-// outgoing edge, optionally merging overrides into WorkflowVariables first. overrides is nil
-// for AdminActionSkip (no variables touched) and sig.Overrides for AdminActionOverride.
-func (g *graphInterpreter) completeParkedNode(ctx workflow.Context, nodeInfo *NodeInfo, outEdges []Edge, overrides map[string]any) error {
-	for k, v := range overrides {
-		maputil.SetNestedKey(g.instance.WorkflowVariables, k, v)
+// applyVariablesPatch writes each dotted path in patch into vars, in sorted key order, so
+// overlapping keys (a and a.b) resolve the same way on every run.
+func applyVariablesPatch(vars, patch map[string]any) {
+	for _, k := range slices.Sorted(maps.Keys(patch)) {
+		maputil.SetNestedKey(vars, k, patch[k])
 	}
+}
+
+// completeParkedNode marks a parked node Completed and transitions onward via its first
+// outgoing edge, applying patch to WorkflowVariables first (a nil or empty patch changes nothing).
+func (g *graphInterpreter) completeParkedNode(ctx workflow.Context, nodeInfo *NodeInfo, outEdges []Edge, patch map[string]any) error {
+	applyVariablesPatch(g.instance.WorkflowVariables, patch)
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.LastError = ""
 	nodeInfo.CachedTaskResult = nil

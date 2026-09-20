@@ -18,10 +18,24 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
-// TestAdminOverrideResolvesInputMappingError parks on a missing input mapping, then resolves
-// it with AdminActionOverride. Override never re-runs the node's own logic, so the Activity
+func TestApplyVariablesPatchIsDeterministicForOverlappingKeys(t *testing.T) {
+	// "a" replaces the whole map at a; "a.y" writes inside it. Applied in sorted order the parent
+	// always goes first, so both survive on every run.
+	patch := map[string]any{
+		"a":   map[string]any{"x": 1},
+		"a.y": 2,
+	}
+	for range 50 {
+		vars := map[string]any{}
+		applyVariablesPatch(vars, patch)
+		require.Equal(t, map[string]any{"a": map[string]any{"x": 1, "y": 2}}, vars)
+	}
+}
+
+// TestAdminCompleteResolvesInputMappingError parks on a missing input mapping, then resolves
+// it with AdminActionComplete. Complete never runs the node's own logic, so the Activity
 // is not expected to be invoked.
-func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
+func TestAdminCompleteResolvesInputMappingError(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -37,7 +51,7 @@ func TestAdminOverrideResolvesInputMappingError(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task",
-			Action: AdminActionOverride,
+			Action: AdminActionComplete,
 			Reason: "supplying the missing value directly",
 		})
 	}, time.Millisecond)
@@ -79,7 +93,7 @@ func TestAdminParkNotifiesHostAppOnFreshExecution(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task",
-			Action: AdminActionOverride,
+			Action: AdminActionComplete,
 			Reason: "supplying the missing value directly",
 		})
 	}, time.Millisecond)
@@ -123,7 +137,7 @@ func TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes(t *testing.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task",
-			Action: AdminActionOverride,
+			Action: AdminActionComplete,
 			Reason: "racing the slow notification",
 		})
 	}, time.Millisecond)
@@ -142,14 +156,14 @@ func TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes(t *testing.
 	trail := strings.Join(instance.AuditTrail, "\n")
 	require.Contains(t, trail, "admin park notification failed")
 	require.Contains(t, trail, "notification sink unavailable")
-	require.Less(t, strings.Index(trail, "admin park notification failed"), strings.Index(trail, "admin resolution: OVERRIDE"),
+	require.Less(t, strings.Index(trail, "admin park notification failed"), strings.Index(trail, "admin resolution: COMPLETE"),
 		"the notification's failure must be recorded before the resolution it raced against")
 
 	env.AssertExpectations(t)
 }
 
 // TestAdminRetryResolvesInputMappingError parks on a missing input mapping, then resolves it
-// with AdminActionRetry supplying the missing variable as an override. Since the Activity
+// with AdminActionRetry supplying the missing variable in the variables patch. Since the Activity
 // never ran before the park (the failure was in input mapping), retrying re-runs the whole
 // node from scratch and the Activity is invoked exactly once.
 func TestAdminRetryResolvesInputMappingError(t *testing.T) {
@@ -169,9 +183,9 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID:    "task",
-			Action:    AdminActionRetry,
-			Overrides: map[string]any{"missing_global_var": "fixed-value"},
+			NodeID:                 "task",
+			Action:                 AdminActionRetry,
+			WorkflowVariablesPatch: map[string]any{"missing_global_var": "fixed-value"},
 		})
 	}, time.Millisecond)
 
@@ -191,10 +205,10 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
-// TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity parks on a missing
+// TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity parks on a missing
 // output mapping key — meaning the Activity already ran successfully. Resolving with
-// AdminActionOverride must supply the value directly without re-invoking the Activity again.
-func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *testing.T) {
+// AdminActionComplete must supply the value directly without re-invoking the Activity again.
+func TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -221,14 +235,14 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 		var instance WorkflowInstance
 		require.NoError(t, val.Get(&instance))
 		require.Contains(t, instance.NodeInfo["task"].LastError, "already completed successfully")
-		require.Contains(t, instance.NodeInfo["task"].LastError, "use OVERRIDE instead of RETRY")
+		require.Contains(t, instance.NodeInfo["task"].LastError, "use COMPLETE instead of RETRY")
 	}, 100*time.Millisecond)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID:    "task",
-			Action:    AdminActionOverride,
-			Overrides: map[string]any{"global_user_phone": "555-1234"},
+			NodeID:                 "task",
+			Action:                 AdminActionComplete,
+			WorkflowVariablesPatch: map[string]any{"global_user_phone": "555-1234"},
 		})
 	}, 200*time.Millisecond)
 
@@ -244,7 +258,7 @@ func TestAdminOverrideResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	require.Empty(t, instance.NodeInfo["task"].CachedTaskResult)
 
 	// .Once() above already enforces this, but AssertExpectations makes the intent explicit:
-	// the Activity that already ran must not be invoked a second time by the override.
+	// the Activity that already ran must not be invoked a second time by the complete.
 	env.AssertExpectations(t)
 }
 
@@ -293,9 +307,9 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID:    "task",
-			Action:    AdminActionOverride,
-			Overrides: map[string]any{"global_user_phone": "555-1234"},
+			NodeID:                 "task",
+			Action:                 AdminActionComplete,
+			WorkflowVariablesPatch: map[string]any{"global_user_phone": "555-1234"},
 		})
 	}, 200*time.Millisecond)
 
@@ -306,9 +320,9 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
-// TestAdminSkipContinuesPastParkedNode resolves a parked node with AdminActionSkip: no
-// variables are set, but the graph still continues past it to the END node.
-func TestAdminSkipContinuesPastParkedNode(t *testing.T) {
+// TestAdminCompleteWithEmptyPatchContinuesPastParkedNode resolves a parked node with
+// AdminActionComplete and no patch: no variables are set, but the graph still continues past it to the END node.
+func TestAdminCompleteWithEmptyPatchContinuesPastParkedNode(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -324,7 +338,7 @@ func TestAdminSkipContinuesPastParkedNode(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "task",
-			Action: AdminActionSkip,
+			Action: AdminActionComplete,
 		})
 	}, time.Millisecond)
 
@@ -341,7 +355,7 @@ func TestAdminSkipContinuesPastParkedNode(t *testing.T) {
 	require.Equal(t, NodeStatusCompleted, instance.NodeInfo["task"].Status)
 	require.NotContains(t, instance.WorkflowVariables, "local_key")
 
-	// END node's WorkflowCompletedActivity firing proves execution continued past the skip.
+	// END node's WorkflowCompletedActivity firing proves execution continued past the node.
 	env.AssertExpectations(t)
 }
 
@@ -407,11 +421,11 @@ const gatewayParkWorkflowJSON = `
   ]
 }`
 
-// TestAdminSkipAndOverrideRejectedForParkedGatewayNode proves that a parked GATEWAY node
-// cannot be resolved with Skip or Override (both would bypass the gateway's real routing
+// TestAdminCompleteRejectedForParkedGatewayNode proves that a parked GATEWAY node
+// cannot be resolved with Complete, with or without a patch (it would bypass the gateway's real routing
 // logic by blindly taking its first outgoing edge) — only Retry (after correcting the
 // missing variable) or Abort are accepted.
-func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
+func TestAdminCompleteRejectedForParkedGatewayNode(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -426,20 +440,20 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-	// Skip: rejected, node stays parked.
+	// Complete without a patch: rejected, node stays parked.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID: "gateway",
-			Action: AdminActionSkip,
+			Action: AdminActionComplete,
 		})
 	}, time.Millisecond)
 
-	// Override: rejected, node stays parked.
+	// Complete with a patch: rejected, node stays parked.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID:    "gateway",
-			Action:    AdminActionOverride,
-			Overrides: map[string]any{"decision": "pass"},
+			NodeID:                 "gateway",
+			Action:                 AdminActionComplete,
+			WorkflowVariablesPatch: map[string]any{"decision": "pass"},
 		})
 	}, 2*time.Millisecond)
 
@@ -456,9 +470,9 @@ func TestAdminSkipAndOverrideRejectedForParkedGatewayNode(t *testing.T) {
 	// correctly routes to task_pass.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID:    "gateway",
-			Action:    AdminActionRetry,
-			Overrides: map[string]any{"decision": "pass"},
+			NodeID:                 "gateway",
+			Action:                 AdminActionRetry,
+			WorkflowVariablesPatch: map[string]any{"decision": "pass"},
 		})
 	}, 4*time.Millisecond)
 
@@ -530,10 +544,10 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything)
 }
 
-// TestAdminOverrideResolvesWaitForSignalOutputMappingError verifies that when a
+// TestAdminCompleteResolvesWaitForSignalOutputMappingError verifies that when a
 // SIGNALING WAIT node parks due to an output mapping error, the received signal payload
-// is cached in NodeInfo.CachedTaskResult and can be successfully overridden by the admin.
-func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
+// is cached in NodeInfo.CachedTaskResult and can be successfully completed by the admin with a variables patch.
+func TestAdminCompleteResolvesWaitForSignalOutputMappingError(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -589,12 +603,12 @@ func TestAdminOverrideResolvesWaitForSignalOutputMappingError(t *testing.T) {
 		require.Equal(t, "value", instance.NodeInfo["wait"].CachedTaskResult["incorrect_key"])
 	}, 2*time.Millisecond)
 
-	// 3. Resolve the parked node with AdminActionOverride
+	// 3. Resolve the parked node with AdminActionComplete
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID:    "wait",
-			Action:    AdminActionOverride,
-			Overrides: map[string]any{"global_target": "resolved-value"},
+			NodeID:                 "wait",
+			Action:                 AdminActionComplete,
+			WorkflowVariablesPatch: map[string]any{"global_target": "resolved-value"},
 		})
 	}, 3*time.Millisecond)
 
