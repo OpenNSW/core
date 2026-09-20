@@ -54,6 +54,23 @@ func TestApplyVariablesPatchMergesMapsAndReplacesOtherValues(t *testing.T) {
 	}, vars)
 }
 
+// TestApplyVariablesPatchNilThenKeysDropsOtherFields covers the documented way to drop a map's
+// other fields: a nil for the map plus the fields to keep, which sorted order applies parent first.
+func TestApplyVariablesPatchNilThenKeysDropsOtherFields(t *testing.T) {
+	for range 20 {
+		vars := map[string]any{"review": map[string]any{"legacy": true, "outcome": "pending"}}
+
+		applyVariablesPatch(vars, map[string]any{"review": nil, "review.outcome": true})
+
+		require.Equal(t, map[string]any{"review": map[string]any{"outcome": true}}, vars)
+	}
+
+	// An empty map merges, so it clears nothing.
+	vars := map[string]any{"review": map[string]any{"legacy": true}}
+	applyVariablesPatch(vars, map[string]any{"review": map[string]any{}})
+	require.Equal(t, map[string]any{"review": map[string]any{"legacy": true}}, vars)
+}
+
 // TestAdminCompleteResolvesInputMappingError parks on a missing input mapping, then resolves
 // it with AdminActionComplete. Complete never runs the node's own logic, so the Activity
 // is not expected to be invoked.
