@@ -21,6 +21,16 @@ func parseMappingKey(rawKey string) (key string, optional bool) {
 	return rawKey, false
 }
 
+// describeVariables renders keys for a "required ... not found" message: "variable 'a'" for one,
+// "variables 'a', 'b'" for several.
+func describeVariables(keys []string) string {
+	noun := "variable"
+	if len(keys) > 1 {
+		noun = "variables"
+	}
+	return noun + " " + quoteKeys(keys)
+}
+
 // quoteKeys renders keys as 'a', 'b' for error messages.
 func quoteKeys(keys []string) string {
 	quoted := make([]string, len(keys))

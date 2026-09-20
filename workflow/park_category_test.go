@@ -531,3 +531,33 @@ func TestRetryOnParkedSignalWaitWaitsForANewSignal(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&instance))
 	require.Equal(t, "corrected", instance.WorkflowVariables["global_target"])
 }
+
+// TestSignalingEmitReportsAllMissingInputsSorted: an EMIT node with several missing required input
+// mappings reports all of them in sorted order, on every run.
+func TestSignalingEmitReportsAllMissingInputsSorted(t *testing.T) {
+	const emitJSON = `
+	{
+		"id": "emit-missing-inputs",
+		"name": "Emit Missing Inputs",
+		"version": 1,
+		"edges": [
+			{ "id": "e1", "source_id": "start", "target_id": "emit" },
+			{ "id": "e2", "source_id": "emit", "target_id": "end" }
+		],
+		"nodes": [
+			{ "id": "start", "type": "START" },
+			{ "id": "emit", "type": "SIGNALING", "signaling": { "type": "EMIT", "signal_name": "s" },
+			  "input_mapping": { "zeta": "z", "alpha": "a", "present": "p", "optional?": "o", "mid": "m" } },
+			{ "id": "end", "type": "END" }
+		]
+	}`
+	def := mustParseDefinition(t, emitJSON)
+
+	for range 5 {
+		parked := parkAndInspect(t, def, map[string]any{VarParentWorkflowID: "parent", "present": "x"}, "emit", nil)
+
+		require.Equal(t, NodeStatusAwaitingAdmin, parked.Status)
+		require.Equal(t, ParkCategoryInputMapping, parked.ParkCategory)
+		require.Contains(t, parked.LastError, "required global variables 'alpha', 'mid', 'zeta' not found")
+	}
+}

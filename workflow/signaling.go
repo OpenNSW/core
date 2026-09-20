@@ -7,8 +7,6 @@ import (
 	"fmt"
 
 	"go.temporal.io/sdk/workflow"
-
-	"github.com/OpenNSW/core/shared/maputil"
 )
 
 // handleSignalingNode executes a SIGNALING node (EMIT or WAIT sub-type).
@@ -87,18 +85,8 @@ func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, node *Node,
 	for k, v := range cfg.Payload {
 		payload[k] = v
 	}
-	if len(node.InputMapping) > 0 {
-		for rawGlobalKey, localKey := range node.InputMapping {
-			globalKey, optional := parseMappingKey(rawGlobalKey)
-			val, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, globalKey)
-			if !exists {
-				if optional {
-					continue
-				}
-				return withCategory(ParkCategoryInputMapping, fmt.Errorf("SIGNALING EMIT node %s: input mapping error: required global variable %q not found", node.ID, globalKey))
-			}
-			maputil.SetNestedKey(payload, localKey, val)
-		}
+	if err := g.applyInputMapping(payload, node.InputMapping); err != nil {
+		return fmt.Errorf("SIGNALING EMIT node %s: %w", node.ID, err)
 	}
 
 	msg := BroadcastMessage{

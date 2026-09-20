@@ -352,11 +352,20 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	return nil
 }
 
-// mapTaskInputs builds the task's inputs from the workflow variables. Keys are visited in sorted
-// order and every missing required variable is reported at once, so the error is the same on
-// every run.
+// mapTaskInputs builds the task's inputs from the workflow variables.
 func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[string]any, error) {
 	inputs := make(map[string]any, len(inputMapping))
+	if err := g.applyInputMapping(inputs, inputMapping); err != nil {
+		return nil, err
+	}
+	return inputs, nil
+}
+
+// applyInputMapping writes each mapped workflow variable into dst under its mapped key, for every
+// node type that reads input_mapping. Keys are visited in sorted order and every missing required
+// variable is reported at once, so the error is the same on every run. If it returns an error dst
+// may be partly written, so the caller must discard it.
+func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping map[string]string) error {
 	var missing []string
 	for _, rawGlobalKey := range slices.Sorted(maps.Keys(inputMapping)) {
 		globalKey, optional := parseMappingKey(rawGlobalKey)
@@ -367,17 +376,13 @@ func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[st
 			}
 			continue
 		}
-		maputil.SetNestedKey(inputs, inputMapping[rawGlobalKey], val)
+		maputil.SetNestedKey(dst, inputMapping[rawGlobalKey], val)
 	}
 	if len(missing) > 0 {
-		noun := "variable"
-		if len(missing) > 1 {
-			noun = "variables"
-		}
-		return nil, withCategory(ParkCategoryInputMapping, fmt.Errorf(
-			"input mapping error: required global %s %s not found in workflow variables for task node", noun, quoteKeys(missing)))
+		return withCategory(ParkCategoryInputMapping, fmt.Errorf(
+			"input mapping error: required global %s not found in workflow variables", describeVariables(missing)))
 	}
-	return inputs, nil
+	return nil
 }
 
 // mapTaskOutputs writes the task result into workflowVars per outputMapping. It is all-or-nothing:
@@ -407,12 +412,8 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 		writes = append(writes, write{globalKey: outputMapping[rawTaskKey], val: val})
 	}
 	if len(missing) > 0 {
-		noun := "variable"
-		if len(missing) > 1 {
-			noun = "variables"
-		}
 		return withCategory(ParkCategoryOutputMapping, fmt.Errorf(
-			"output mapping error: required task %s %s not found in task result", noun, quoteKeys(missing)))
+			"output mapping error: required task %s not found in task result", describeVariables(missing)))
 	}
 	for _, w := range writes {
 		maputil.SetNestedKey(workflowVars, w.globalKey, w.val)
