@@ -21,6 +21,15 @@ func parseMappingKey(rawKey string) (key string, optional bool) {
 	return rawKey, false
 }
 
+// quoteKeys renders keys as 'a', 'b' for error messages.
+func quoteKeys(keys []string) string {
+	quoted := make([]string, len(keys))
+	for i, k := range keys {
+		quoted[i] = "'" + k + "'"
+	}
+	return strings.Join(quoted, ", ")
+}
+
 const (
 	// maxWorkflowIDLen mirrors Temporal's Postgres schema limit on
 	// current_executions.workflow_id (varchar(255)).

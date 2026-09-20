@@ -104,9 +104,21 @@ type NodeInfo struct {
 	TaskTemplateID string      `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	Status         NodeStatus  `json:"status"`                     // Status of the node
 
+	// TODO: LastError, ParkCategory, InputMapping, OutputMapping and CachedTaskResult are all
+	// context for a parked node. Group them into one nested struct (e.g. NodeInfo.Park) instead of
+	// growing NodeInfo with flat fields.
+
 	// LastError holds the error that caused the node to enter NodeStatusAwaitingAdmin
 	// (or the terminal error if it was ultimately aborted). Cleared on successful resolution.
 	LastError string `json:"last_error,omitempty"`
+	// ParkCategory says why the node is parked. Set together with LastError; cleared on resolution.
+	ParkCategory ParkCategory `json:"park_category,omitempty"`
+	// InputMapping and OutputMapping are the node's mappings from its definition (workflow variable
+	// -> task input, task result -> workflow variable), so an admin can see which variables a
+	// RETRY reads and which a COMPLETE should write. Set together with LastError, only while the
+	// node is parked (not on every node); cleared on resolution.
+	InputMapping  map[string]string `json:"input_mapping,omitempty"`
+	OutputMapping map[string]string `json:"output_mapping,omitempty"`
 	// CachedTaskResult holds the most recent raw Activity result for a TASK node, set right
 	// after the Activity succeeds and cleared once the node fully completes. It is purely
 	// informational: if a node parks with this populated, the Activity has already run, so

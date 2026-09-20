@@ -24,15 +24,15 @@ import (
 // back into WorkflowVariables via the node's OutputMapping.
 func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	if len(outEdges) != 1 {
-		return fmt.Errorf("SIGNALING node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges))
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("SIGNALING node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges)))
 	}
 
 	cfg := node.Signaling
 	if cfg == nil {
-		return fmt.Errorf("SIGNALING node %s: signaling config is required", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("SIGNALING node %s: signaling config is required", node.ID))
 	}
 	if cfg.SignalName == "" {
-		return fmt.Errorf("SIGNALING node %s: signal_name is required", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("SIGNALING node %s: signal_name is required", node.ID))
 	}
 
 	switch cfg.Type {
@@ -47,7 +47,7 @@ func (g *graphInterpreter) handleSignalingNode(ctx workflow.Context, nodeInfo *N
 		}
 
 	default:
-		return fmt.Errorf("SIGNALING node %s: unknown signaling type %q", node.ID, cfg.Type)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("SIGNALING node %s: unknown signaling type %q", node.ID, cfg.Type))
 	}
 
 	nodeInfo.Status = NodeStatusCompleted
@@ -95,7 +95,7 @@ func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, node *Node,
 				if optional {
 					continue
 				}
-				return fmt.Errorf("SIGNALING EMIT node %s: input mapping error: required global variable %q not found", node.ID, globalKey)
+				return withCategory(ParkCategoryInputMapping, fmt.Errorf("SIGNALING EMIT node %s: input mapping error: required global variable %q not found", node.ID, globalKey))
 			}
 			maputil.SetNestedKey(payload, localKey, val)
 		}
@@ -113,7 +113,7 @@ func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, node *Node,
 			"node", node.ID, "parent", parentWorkflowID, "error", err)
 		g.instance.AuditTrail = append(g.instance.AuditTrail,
 			fmt.Sprintf("SIGNALING EMIT: failed to send signal to parent %s: %s", parentWorkflowID, err.Error()))
-		return fmt.Errorf("SIGNALING EMIT node %s: failed to send signal to parent %s: %w", node.ID, parentWorkflowID, err)
+		return withCategory(ParkCategoryTaskFailure, fmt.Errorf("SIGNALING EMIT node %s: failed to send signal to parent %s: %w", node.ID, parentWorkflowID, err))
 	}
 	return nil
 }

@@ -47,17 +47,17 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	// 1. Read items from workflow variables.
 	itemsRaw, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, itemsVar)
 	if !exists {
-		return fmt.Errorf("BATCH_SPLIT node %s: items variable %q not found in workflow variables", node.ID, itemsVar)
+		return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: items variable %q not found in workflow variables", node.ID, itemsVar))
 	}
 	items, err := toItemSlice(itemsRaw)
 	if err != nil {
-		return fmt.Errorf("BATCH_SPLIT node %s: %w", node.ID, err)
+		return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: %w", node.ID, err))
 	}
 
 	// 2. Find paired BATCH_JOIN to determine sub-graph boundaries.
 	joinNodeID := findPairedBatchJoin(g.def, node.ID)
 	if joinNodeID == "" {
-		return fmt.Errorf("BATCH_SPLIT node %s: no paired BATCH_JOIN found", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("BATCH_SPLIT node %s: no paired BATCH_JOIN found", node.ID))
 	}
 
 	if len(items) == 0 {
@@ -72,10 +72,10 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 		idVal := getItemID(item, idField)
 		idStr := fmt.Sprintf("%v", idVal)
 		if idVal == nil || idVal == "" || idStr == "" {
-			return fmt.Errorf("BATCH_SPLIT node %s: item at index %d is missing required ID field %q", node.ID, i, idField)
+			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: item at index %d is missing required ID field %q", node.ID, i, idField))
 		}
 		if firstIdx, exists := seenIDs[idStr]; exists {
-			return fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q found at index %d (first seen at index %d)", node.ID, idStr, i, firstIdx)
+			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q found at index %d (first seen at index %d)", node.ID, idStr, i, firstIdx))
 		}
 		seenIDs[idStr] = i
 	}
@@ -87,7 +87,7 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	}
 	depth := strings.Count(scopePath, "/") / 2
 	if depth >= DefaultMaxBatchDepth {
-		return fmt.Errorf("BATCH_SPLIT node %s: maximum batch nesting depth %d exceeded (scope_path=%q)", node.ID, DefaultMaxBatchDepth, scopePath)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("BATCH_SPLIT node %s: maximum batch nesting depth %d exceeded (scope_path=%q)", node.ID, DefaultMaxBatchDepth, scopePath))
 	}
 
 	// 5. Partition items across outEdges.
@@ -155,8 +155,8 @@ func partitionItems(
 			}
 			match, evalErr := EvaluateCondition(e.Condition, evalScope)
 			if evalErr != nil {
-				return nil, nil, fmt.Errorf("BATCH_SPLIT node %s: edge %s condition error for item %v: %w",
-					nodeID, e.ID, getItemID(item, idField), evalErr)
+				return nil, nil, withCategory(ParkCategoryGatewayCondition, fmt.Errorf("BATCH_SPLIT node %s: edge %s condition error for item %v: %w",
+					nodeID, e.ID, getItemID(item, idField), evalErr))
 			}
 			if match {
 				p, exists := partitionByEdge[e.ID]
@@ -187,13 +187,13 @@ func partitionItems(
 	}
 
 	if len(unmatchedItems) > 0 {
-		return nil, nil, fmt.Errorf("BATCH_SPLIT node %s: items unmatched by any edge condition and no default branch: %s",
-			nodeID, strings.Join(unmatchedItems, ", "))
+		return nil, nil, withCategory(ParkCategoryGatewayCondition, fmt.Errorf("BATCH_SPLIT node %s: items unmatched by any edge condition and no default branch: %s",
+			nodeID, strings.Join(unmatchedItems, ", ")))
 	}
 
 	if len(partitionByEdge) > DefaultMaxChildrenPerGateway {
-		return nil, nil, fmt.Errorf("BATCH_SPLIT node %s: partition count %d exceeds maximum %d",
-			nodeID, len(partitionByEdge), DefaultMaxChildrenPerGateway)
+		return nil, nil, withCategory(ParkCategoryDefinitionError, fmt.Errorf("BATCH_SPLIT node %s: partition count %d exceeds maximum %d",
+			nodeID, len(partitionByEdge), DefaultMaxChildrenPerGateway))
 	}
 
 	return partitionByEdge, partitionOrder, nil
@@ -250,34 +250,34 @@ func collectAndMergeBatchResults(
 	for _, child := range children {
 		var childOutput *WorkflowInstance
 		if err := child.Future.Get(ctx, &childOutput); err != nil {
-			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q failed: %w",
-				nodeID, child.EdgeID, err)
+			return nil, withCategory(ParkCategoryChildFailure, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q failed: %w",
+				nodeID, child.EdgeID, err))
 		}
 		if childOutput == nil {
-			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned nil output",
-				nodeID, child.EdgeID)
+			return nil, withCategory(ParkCategoryChildFailure, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned nil output",
+				nodeID, child.EdgeID))
 		}
 
 		childItemsRaw, exists := maputil.GetNestedKey(childOutput.WorkflowVariables, itemsVar)
 		if !exists {
-			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q missing items variable %q in output",
-				nodeID, child.EdgeID, itemsVar)
+			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q missing items variable %q in output",
+				nodeID, child.EdgeID, itemsVar))
 		}
 		childSlice, err := toItemSlice(childItemsRaw)
 		if err != nil {
-			return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned invalid items: %w",
-				nodeID, child.EdgeID, err)
+			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned invalid items: %w",
+				nodeID, child.EdgeID, err))
 		}
 		for _, item := range childSlice {
 			idVal := getItemID(item, idField)
 			idStr := fmt.Sprintf("%v", idVal)
 			if idVal == nil || idVal == "" || idStr == "" {
-				return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
-					nodeID, child.EdgeID, idField)
+				return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
+					nodeID, child.EdgeID, idField))
 			}
 			if _, alreadySeen := mergedItems[idStr]; alreadySeen {
-				return nil, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q returned across child partitions (from edge %q)",
-					nodeID, idStr, child.EdgeID)
+				return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q returned across child partitions (from edge %q)",
+					nodeID, idStr, child.EdgeID))
 			}
 			mergedItems[idStr] = item
 		}
@@ -301,7 +301,7 @@ func collectAndMergeBatchResults(
 func (g *graphInterpreter) handleBatchJoinGateway(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	config := node.BatchJoin
 	if config == nil || config.GatewayNodeID == "" {
-		return fmt.Errorf("BATCH_JOIN node %s: batch_join.gateway_node_id is required", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("BATCH_JOIN node %s: batch_join.gateway_node_id is required", node.ID))
 	}
 
 	nodeInfo.Status = NodeStatusCompleted

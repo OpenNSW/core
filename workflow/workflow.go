@@ -5,6 +5,8 @@ package engine
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -210,7 +212,7 @@ func (g *graphInterpreter) dispatchNodeHandler(ctx workflow.Context, nodeInfo *N
 	case NodeTypeEnd:
 		return g.handleEndNode(ctx, nodeInfo)
 	default:
-		return fmt.Errorf("unknown node type: %v", node.Type)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("unknown node type: %v", node.Type))
 	}
 }
 
@@ -247,7 +249,7 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 // handleStartNode transitions to the single outgoing edge and marks itself Completed.
 func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeInfo, outEdges []Edge) error {
 	if len(outEdges) == 0 {
-		return fmt.Errorf("START node has no outgoing edges")
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("START node has no outgoing edges"))
 	}
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
@@ -271,18 +273,18 @@ func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeI
 // account for the attempt it was on rather than lagging one behind.
 func (g *graphInterpreter) handleTimerNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	if node.Timer == nil || node.Timer.Duration == "" {
-		return fmt.Errorf("TIMER node %s: timer.duration is required", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: timer.duration is required", node.ID))
 	}
 	d, err := time.ParseDuration(node.Timer.Duration)
 	if err != nil {
-		return fmt.Errorf("TIMER node %s: invalid timer.duration %q: %w", node.ID, node.Timer.Duration, err)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: invalid timer.duration %q: %w", node.ID, node.Timer.Duration, err))
 	}
 	if d <= 0 {
-		return fmt.Errorf("TIMER node %s: timer.duration must be positive, got %s", node.ID, d)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: timer.duration must be positive, got %s", node.ID, d))
 	}
 	// A TIMER is a pure delay on a single path; branching belongs to a gateway.
 	if len(outEdges) != 1 {
-		return fmt.Errorf("TIMER node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges))
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges)))
 	}
 
 	counterKey := node.Timer.CounterKey
@@ -342,7 +344,7 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	if workflow.GetInfo(ctx).ParentWorkflowExecution == nil {
 		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("unable to complete workflow: %w", err)
+			return withCategory(ParkCategoryTaskFailure, fmt.Errorf("unable to complete workflow: %w", err))
 		}
 	}
 	nodeInfo.Status = NodeStatusCompleted
@@ -350,42 +352,69 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	return nil
 }
 
+// mapTaskInputs builds the task's inputs from the workflow variables. Keys are visited in sorted
+// order and every missing required variable is reported at once, so the error is the same on
+// every run.
 func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[string]any, error) {
 	inputs := make(map[string]any, len(inputMapping))
-	if len(inputMapping) == 0 {
-		return inputs, nil
-	}
-
-	for rawGlobalKey, localKey := range inputMapping {
+	var missing []string
+	for _, rawGlobalKey := range slices.Sorted(maps.Keys(inputMapping)) {
 		globalKey, optional := parseMappingKey(rawGlobalKey)
 		val, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, globalKey)
 		if !exists {
-			if optional {
-				continue
+			if !optional {
+				missing = append(missing, globalKey)
 			}
-			return nil, fmt.Errorf("input mapping error: required global variable '%s' not found in workflow variables for task node", globalKey)
+			continue
 		}
-		maputil.SetNestedKey(inputs, localKey, val)
+		maputil.SetNestedKey(inputs, inputMapping[rawGlobalKey], val)
 	}
-
+	if len(missing) > 0 {
+		noun := "variable"
+		if len(missing) > 1 {
+			noun = "variables"
+		}
+		return nil, withCategory(ParkCategoryInputMapping, fmt.Errorf(
+			"input mapping error: required global %s %s not found in workflow variables for task node", noun, quoteKeys(missing)))
+	}
 	return inputs, nil
 }
 
+// mapTaskOutputs writes the task result into workflowVars per outputMapping. It is all-or-nothing:
+// if any required field is missing from result, every missing one is reported (sorted) and nothing
+// is written, so a failed mapping never leaves workflowVars half updated.
 func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMapping map[string]string, result map[string]any) error {
 	if len(outputMapping) == 0 || result == nil {
 		return nil
 	}
 
-	for rawTaskKey, globalKey := range outputMapping {
+	type write struct {
+		globalKey string
+		val       any
+	}
+	var writes []write
+	var missing []string
+	for _, rawTaskKey := range slices.Sorted(maps.Keys(outputMapping)) {
 		taskKey, optional := parseMappingKey(rawTaskKey)
 		val, exists := maputil.GetNestedKey(result, taskKey)
 		if !exists {
-			if optional {
-				continue
+			if !optional {
+				missing = append(missing, taskKey)
 			}
-			return fmt.Errorf("output mapping error: required task variable '%s' not found in task result", taskKey)
+			continue
 		}
-		maputil.SetNestedKey(workflowVars, globalKey, val)
+		writes = append(writes, write{globalKey: outputMapping[rawTaskKey], val: val})
+	}
+	if len(missing) > 0 {
+		noun := "variable"
+		if len(missing) > 1 {
+			noun = "variables"
+		}
+		return withCategory(ParkCategoryOutputMapping, fmt.Errorf(
+			"output mapping error: required task %s %s not found in task result", noun, quoteKeys(missing)))
+	}
+	for _, w := range writes {
+		maputil.SetNestedKey(workflowVars, w.globalKey, w.val)
 	}
 	return nil
 }
@@ -414,7 +443,7 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID()).Get(ctx, &result)
 	if err != nil {
-		return err
+		return withCategory(ParkCategoryTaskFailure, err)
 	}
 
 	// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
@@ -445,7 +474,7 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		for _, e := range outEdges {
 			match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
 			if err != nil {
-				return err
+				return withCategory(ParkCategoryGatewayCondition, err)
 			}
 			if match {
 				nodeInfo.Status = NodeStatusCompleted
@@ -453,7 +482,7 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 				return g.transitionTo(ctx, e)
 			}
 		}
-		return fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID)
+		return withCategory(ParkCategoryGatewayCondition, fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID))
 
 	case GatewayTypeParallelSplit:
 		return g.handleParallelSplitGateway(ctx, nodeInfo, node, outEdges)
@@ -471,10 +500,10 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 			}
 		}
 		if !consumed {
-			return fmt.Errorf("exclusive join %s reached with no incoming token — invalid workflow definition", node.ID)
+			return withCategory(ParkCategoryDefinitionError, fmt.Errorf("exclusive join %s reached with no incoming token — invalid workflow definition", node.ID))
 		}
 		if len(outEdges) != 1 {
-			return fmt.Errorf("exclusive join %s must have exactly one outgoing edge, got %d — invalid workflow definition", node.ID, len(outEdges))
+			return withCategory(ParkCategoryDefinitionError, fmt.Errorf("exclusive join %s must have exactly one outgoing edge, got %d — invalid workflow definition", node.ID, len(outEdges)))
 		}
 		nodeInfo.Status = NodeStatusCompleted
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
@@ -487,6 +516,6 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		return g.handleBatchJoinGateway(ctx, nodeInfo, node, outEdges)
 
 	default:
-		return fmt.Errorf("unknown gateway type: %v", node.GatewayType)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("unknown gateway type: %v", node.GatewayType))
 	}
 }

@@ -161,6 +161,9 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 	for {
 		nodeInfo.Status = NodeStatusAwaitingAdmin
 		nodeInfo.LastError = parkedErrorMessage(cause, nodeInfo.CachedTaskResult)
+		nodeInfo.ParkCategory = categoryOf(cause)
+		nodeInfo.InputMapping = maps.Clone(node.InputMapping)
+		nodeInfo.OutputMapping = maps.Clone(node.OutputMapping)
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		g.instance.AuditTrail = append(g.instance.AuditTrail,
 			fmt.Sprintf("node %s parked for admin intervention: %s", node.ID, nodeInfo.LastError))
@@ -204,6 +207,9 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			applyVariablesPatch(g.instance.WorkflowVariables, sig.WorkflowVariablesPatch)
 			nodeInfo.Status = NodeStatusRunning
 			nodeInfo.LastError = ""
+			nodeInfo.ParkCategory = ""
+			nodeInfo.InputMapping = nil
+			nodeInfo.OutputMapping = nil
 			// Clear any cached Activity result from the previous attempt before re-dispatching:
 			// if this retry fails again before reaching the Activity (e.g. input mapping fails),
 			// the stale result must not linger and falsely suggest the Activity ran this time.
@@ -294,6 +300,9 @@ func (g *graphInterpreter) completeParkedNode(ctx workflow.Context, nodeInfo *No
 	applyVariablesPatch(g.instance.WorkflowVariables, patch)
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.LastError = ""
+	nodeInfo.ParkCategory = ""
+	nodeInfo.InputMapping = nil
+	nodeInfo.OutputMapping = nil
 	nodeInfo.CachedTaskResult = nil
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
 	if len(outEdges) > 0 {
