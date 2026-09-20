@@ -382,9 +382,10 @@ func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[st
 
 // mapTaskOutputs writes the task result into workflowVars per outputMapping. It is all-or-nothing:
 // if any required field is missing from result, every missing one is reported (sorted) and nothing
-// is written, so a failed mapping never leaves workflowVars half updated.
+// is written, so a failed mapping never leaves workflowVars half updated. A nil result is an empty
+// one, so it fails on every required field rather than silently skipping the mapping.
 func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMapping map[string]string, result map[string]any) error {
-	if len(outputMapping) == 0 || result == nil {
+	if len(outputMapping) == 0 {
 		return nil
 	}
 
@@ -446,6 +447,11 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		return withCategory(ParkCategoryTaskFailure, err)
 	}
 
+	// A nil result (the Activity returned nothing) becomes an empty one, so the cache below is
+	// non-nil and a park still shows the Activity already ran.
+	if result == nil {
+		result = map[string]any{}
+	}
 	// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
 	// fails) can see the Activity already ran and what it returned, rather than blindly
 	// retrying and re-invoking it.

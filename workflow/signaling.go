@@ -121,15 +121,18 @@ func (g *graphInterpreter) handleSignalingEmit(ctx workflow.Context, node *Node,
 // handleSignalingWait blocks the workflow coroutine until a signal with the
 // matching name is received. The received payload is written back into
 // WorkflowVariables using the node's OutputMapping. The received data is cached
-// on NodeInfo so that if output mapping fails and the node parks for admin, a
-// subsequent retry does not re-block waiting for the signal again.
+// on NodeInfo so that if output mapping fails, the park shows the signal already
+// arrived. AdminActionRetry clears that cache (see parkNodeForAdmin), discarding the
+// received signal: a retried node waits for a new one, which suits a sender that will
+// re-send corrected data. To resolve without re-waiting, use AdminActionComplete.
 func (g *graphInterpreter) handleSignalingWait(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, cfg *SignalingConfig) error {
 	signalName := cfg.SignalName
 
 	var signalData map[string]any
 
 	if nodeInfo.CachedTaskResult != nil {
-		// Signal already received on a previous attempt that parked in output mapping.
+		// Defensive: AdminActionRetry clears the cache before re-dispatching, so a retry
+		// does not normally get here.
 		signalData = nodeInfo.CachedTaskResult
 	} else {
 		signalChan := workflow.GetSignalChannel(ctx, signalName)
@@ -147,6 +150,11 @@ func (g *graphInterpreter) handleSignalingWait(ctx workflow.Context, nodeInfo *N
 		selector.Select(ctx)
 
 		if received {
+			// A null payload becomes an empty one, so the cache below is non-nil and a park still
+			// shows the signal already arrived.
+			if signalData == nil {
+				signalData = map[string]any{}
+			}
 			// Cache immediately so consumed signal data is preserved even if context was canceled,
 			// and so an admin reviewing a parked node (if output mapping fails) can see the signal
 			// already arrived and won't block again on retry.

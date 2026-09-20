@@ -84,6 +84,22 @@ func TestMapTaskOutputsOptionalKeysAreSkippedNotReported(t *testing.T) {
 	require.Equal(t, map[string]any{"user": map[string]any{"name": "Nimal"}}, vars)
 }
 
+func TestMapTaskOutputsTreatsNilResultAsEmpty(t *testing.T) {
+	vars := map[string]any{"existing": "kept"}
+	g := newMappingTestInterpreter(vars)
+
+	err := g.mapTaskOutputs(vars, map[string]string{"zeta": "g.zeta", "alpha": "g.alpha", "opt?": "g.opt"}, nil)
+
+	require.Error(t, err)
+	require.Equal(t, ParkCategoryOutputMapping, categoryOf(err))
+	require.Contains(t, err.Error(), "required task variables 'alpha', 'zeta' not found in task result")
+	require.Equal(t, map[string]any{"existing": "kept"}, vars)
+
+	// Only optional keys: nothing required is missing, so a nil result is fine.
+	require.NoError(t, g.mapTaskOutputs(vars, map[string]string{"opt?": "g.opt"}, nil))
+	require.Equal(t, map[string]any{"existing": "kept"}, vars)
+}
+
 func TestMapTaskOutputsWritesEverythingOnSuccess(t *testing.T) {
 	vars := map[string]any{}
 	g := newMappingTestInterpreter(vars)
@@ -409,4 +425,109 @@ func TestNodeInfoCarriesMappingsForParkedTask(t *testing.T) {
 
 	require.Equal(t, map[string]string{"task_phone": "global_user_phone"}, parked.OutputMapping)
 	require.Empty(t, parked.InputMapping)
+}
+
+// TestNilActivityResultWithRequiredMappingParks: an Activity that returns nothing must not let a
+// node with required output mappings complete, and the park must still say the Activity already ran.
+func TestNilActivityResultWithRequiredMappingParks(t *testing.T) {
+	def := mustParseDefinition(t, missingRequiredOutputWorkflowJSON)
+	parked := parkAndInspect(t, def, map[string]any{}, "task", func(env *testsuite.TestWorkflowEnvironment) {
+		env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+			Return(nil, nil).Once()
+	})
+
+	require.Equal(t, NodeStatusAwaitingAdmin, parked.Status)
+	require.Equal(t, ParkCategoryOutputMapping, parked.ParkCategory)
+	require.Contains(t, parked.LastError, "required task variable 'task_phone' not found in task result")
+	require.Contains(t, parked.LastError, "already completed successfully")
+}
+
+// TestNullSignalPayloadWithRequiredMappingParks: a WAIT node whose signal carries a null payload
+// fails its required output mapping like any other missing field, and the park still shows the
+// signal already arrived.
+func TestNullSignalPayloadWithRequiredMappingParks(t *testing.T) {
+	const waitSignalJSON = `
+	{
+		"id": "wait-null-signal",
+		"name": "Wait Null Signal",
+		"version": 1,
+		"edges": [
+			{ "id": "e1", "source_id": "start", "target_id": "wait" },
+			{ "id": "e2", "source_id": "wait", "target_id": "end" }
+		],
+		"nodes": [
+			{ "id": "start", "type": "START" },
+			{ "id": "wait", "type": "SIGNALING", "signaling": { "type": "WAIT", "signal_name": "my_test_signal" },
+			  "output_mapping": { "needed": "global_target" } },
+			{ "id": "end", "type": "END" }
+		]
+	}`
+	def := mustParseDefinition(t, waitSignalJSON)
+
+	parked := parkAndInspect(t, def, map[string]any{}, "wait", func(env *testsuite.TestWorkflowEnvironment) {
+		env.RegisterDelayedCallback(func() { env.SignalWorkflow("my_test_signal", nil) }, time.Millisecond)
+	})
+
+	require.Equal(t, NodeStatusAwaitingAdmin, parked.Status)
+	require.Equal(t, ParkCategoryOutputMapping, parked.ParkCategory)
+	require.Contains(t, parked.LastError, "required task variable 'needed' not found in task result")
+	require.Contains(t, parked.LastError, "already completed successfully")
+}
+
+// TestRetryOnParkedSignalWaitWaitsForANewSignal documents that RETRY discards the signal a WAIT
+// node already received and waits for a new one, which then maps normally.
+func TestRetryOnParkedSignalWaitWaitsForANewSignal(t *testing.T) {
+	const waitSignalJSON = `
+	{
+		"id": "wait-retry",
+		"name": "Wait Retry",
+		"version": 1,
+		"edges": [
+			{ "id": "e1", "source_id": "start", "target_id": "wait" },
+			{ "id": "e2", "source_id": "wait", "target_id": "end" }
+		],
+		"nodes": [
+			{ "id": "start", "type": "START" },
+			{ "id": "wait", "type": "SIGNALING", "signaling": { "type": "WAIT", "signal_name": "my_test_signal" },
+			  "output_mapping": { "needed": "global_target" } },
+			{ "id": "end", "type": "END" }
+		]
+	}`
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	def := mustParseDefinition(t, waitSignalJSON)
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	var afterRetry *NodeInfo
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("my_test_signal", map[string]any{"incorrect_key": "value"})
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{NodeID: "wait", Action: AdminActionRetry})
+	}, 100*time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		afterRetry = instance.NodeInfo["wait"]
+	}, 150*time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("my_test_signal", map[string]any{"needed": "corrected"})
+	}, 200*time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.NotNil(t, afterRetry)
+	require.Equal(t, NodeStatusRunning, afterRetry.Status, "the retried node waits for a new signal")
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, "corrected", instance.WorkflowVariables["global_target"])
 }
