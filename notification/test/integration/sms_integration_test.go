@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -38,26 +36,16 @@ func TestSMSIntegration(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	notificationsJSON, err := json.Marshal(map[string]any{
-		"sms": map[string]any{
+	cfg := notification.Config{Providers: map[notification.ChannelType]map[string]any{
+		notification.ChannelSMS: {
 			"baseURL":  srv.URL,
 			"sidCode":  "TEST_SID",
 			"userName": "test_user",
 			"password": "test_pass",
 		},
-	})
-	if err != nil {
-		t.Fatalf("marshal notifications config: %v", err)
-	}
-	notificationsPath := filepath.Join(t.TempDir(), "notification.json")
-	if err := os.WriteFile(notificationsPath, notificationsJSON, 0o600); err != nil {
-		t.Fatalf("write notifications file: %v", err)
-	}
+	}}
 
-	manager, err := notification.NewManager(
-		notification.Config{Path: notificationsPath},
-		providers.NewSMSProvider(),
-	)
+	manager, err := notification.NewManager(cfg, providers.NewSMSProvider())
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

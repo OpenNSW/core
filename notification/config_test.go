@@ -15,8 +15,11 @@ func TestConfig_Validate(t *testing.T) {
 		config  Config
 		wantErr error
 	}{
-		{name: "missing path", config: Config{}, wantErr: ErrConfigPathRequired},
-		{name: "valid path", config: Config{Path: "/tmp/notification.json"}},
+		{name: "no providers", config: Config{}, wantErr: ErrProvidersRequired},
+		{name: "empty providers map", config: Config{Providers: map[ChannelType]map[string]any{}}, wantErr: ErrProvidersRequired},
+		{name: "valid providers", config: Config{Providers: map[ChannelType]map[string]any{
+			ChannelEmail: {"host": "localhost"},
+		}}},
 	}
 
 	for _, tt := range tests {
