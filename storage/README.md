@@ -7,19 +7,34 @@ File storage abstraction with presigned URL support. Backends are pluggable — 
 ```go
 import (
     "github.com/OpenNSW/core/storage"
+    "github.com/OpenNSW/core/storage/drivers"
 )
 
 driver, err := storage.NewStorageFromConfig(ctx, storage.Config{
-    Type: "s3",
-    Options: map[string]string{
-        "bucket": "my-uploads",
-        "region": "ap-southeast-2",
+    Type: storage.TypeS3,
+    S3: drivers.S3Config{
+        Bucket: "my-uploads",
+        Region: "ap-southeast-2",
     },
+    PresignTTLSeconds: 900,
 })
 svc := storage.NewService(driver)
 ```
 
-Use `"local"` as `Type` for development (stores files under `Options["base_dir"]`).
+Use `storage.TypeLocal` for development — stores files under `Config.Local.BaseDir`, served from `Config.Local.PublicURL`, with uploads signed by `Config.Local.PutSecret`.
+
+`Config` embeds each driver's own config type (`drivers.LocalConfig`, `drivers.S3Config`) verbatim, rather than flattening every backend's settings into one struct — so each driver keeps ownership of its config shape and validation. All three carry `yaml` struct tags, so `Config` can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`, or [`configyaml.LoadAndExpand`](../configyaml/README.md) for `{{env:}}`/`{{file:}}` secret placeholders):
+
+```yaml
+storage:
+  type: s3
+  s3:
+    bucket: my-uploads
+    region: ap-southeast-2
+    accessKey: "{{env:AWS_ACCESS_KEY_ID}}"
+    secretKey: "{{env:AWS_SECRET_ACCESS_KEY}}"
+  presignTTLSeconds: 900
+```
 
 ## Operations
 
@@ -66,18 +81,40 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 
 ## Config reference
 
-### S3
+`Config.Type` selects the backend (`storage.TypeS3` / `storage.TypeLocal`); only the matching nested config is read. `PresignTTLSeconds` (top-level, required for both backends) controls how long a presigned upload/download URL stays valid.
 
-| Option | Description |
-|---|---|
-| `bucket` | S3 bucket name |
-| `region` | AWS region (e.g. `ap-southeast-2`) |
-| `endpoint` | Custom endpoint URL (for MinIO or localstack) |
-| `access_key_id` | AWS access key (falls back to environment / instance profile) |
-| `secret_access_key` | AWS secret key |
+### S3 (`Config.S3`, `drivers.S3Config`, `yaml:"s3"`)
 
-### Local filesystem
+| Field                     | YAML key                  | Description                                                                                                 |
+|---------------------------|---------------------------|-------------------------------------------------------------------------------------------------------------|
+| `Endpoint`                | `endpoint`                | Optional custom endpoint URL for S3-compatible stores (e.g. MinIO or LocalStack). Empty targets AWS S3      |
+| `Bucket`                  | `bucket`                  | S3 bucket name                                                                                              |
+| `Region`                  | `region`                  | AWS region (e.g. `ap-southeast-2`)                                                                          |
+| `AccessKey` / `SecretKey` | `accessKey` / `secretKey` | Static credentials; must be set together. Empty uses the default AWS credential chain                       |
+| `PublicURL`               | `publicURL`               | Optional base URL files are served from (e.g. a CDN in front of the bucket)                                 |
 
-| Option | Description |
-|---|---|
-| `base_dir` | Directory to store files under (created if absent) |
+### Local filesystem (`Config.Local`, `drivers.LocalConfig`, `yaml:"local"`)
+
+| Field       | YAML key    | Description                                        |
+|-------------|-------------|----------------------------------------------------|
+| `BaseDir`   | `baseDir`   | Directory to store files under (created if absent) |
+| `PublicURL` | `publicURL` | Base URL files are served from                     |
+| `PutSecret` | `putSecret` | Signs presigned upload URLs                        |
+
+### Upgrading from the flattened `Config`
+
+`Config` used to carry every backend's fields flattened at the top level. If you're updating existing construction code:
+
+| Old field       | New field                            |
+|-----------------|---------------------------------------|
+| `LocalBaseDir`   | `Local.BaseDir`                      |
+| `LocalPublicURL` | `Local.PublicURL`                    |
+| `LocalPutSecret` | `Local.PutSecret`                    |
+| `S3Endpoint`     | `S3.Endpoint`                        |
+| `S3Bucket`       | `S3.Bucket`                          |
+| `S3Region`       | `S3.Region`                          |
+| `S3AccessKey`    | `S3.AccessKey`                       |
+| `S3SecretKey`    | `S3.SecretKey`                       |
+| `S3PublicURL`    | `S3.PublicURL`                       |
+| `S3UseSSL`       | Removed — it was never read anywhere |
+| `PresignTTL` (`time.Duration`) | `PresignTTLSeconds` (`int`, whole seconds) |
