@@ -5,68 +5,58 @@ package storage
 
 import (
 	"fmt"
-	"time"
 
-	"github.com/OpenNSW/core/shared/validation"
+	"github.com/OpenNSW/core/storage/drivers"
 )
 
+// Supported Config.Type values.
+const (
+	TypeLocal = "local"
+	TypeS3    = "s3"
+)
+
+// Config selects a storage backend via Type and carries each backend's own
+// settings. Only the config for the selected Type is read. Rather than
+// flattening every backend's settings into one struct, Config embeds each
+// driver's own Config (drivers.LocalConfig, drivers.S3Config) verbatim — so
+// each driver keeps ownership of its config shape and validation.
+//
+// Config and the backend Config types it embeds carry yaml struct tags, so
+// it can be embedded in a larger application config struct and populated
+// generically (e.g. via yaml.Unmarshal) rather than constructed by hand.
 type Config struct {
-	Type           string // "local" or "s3"
-	LocalBaseDir   string
-	LocalPublicURL string
-	S3Endpoint     string
-	S3Bucket       string
-	S3Region       string
-	S3AccessKey    string
-	S3SecretKey    string
-	S3UseSSL       bool
-	S3PublicURL    string
-	LocalPutSecret string
-	PresignTTL     time.Duration
+	// Type is the storage backend: "local" or "s3".
+	Type string `yaml:"type"`
+
+	// Local is used when Type == "local".
+	Local drivers.LocalConfig `yaml:"local"`
+	// S3 is used when Type == "s3".
+	S3 drivers.S3Config `yaml:"s3"`
+
+	// PresignTTLSeconds is how long a presigned upload/download URL stays
+	// valid, in seconds. Required for both backends. Expressed in seconds
+	// (rather than time.Duration) so it decodes cleanly from YAML.
+	PresignTTLSeconds int `yaml:"presignTTLSeconds"`
 }
 
+// Validate reports misconfiguration before NewStorageFromConfig is called,
+// delegating to the selected backend's own Validate.
 func (c Config) Validate() error {
 	switch c.Type {
-	case "local":
-		if c.LocalBaseDir == "" {
-			return fmt.Errorf("STORAGE_LOCAL_BASE_DIR is required when STORAGE_TYPE=local")
-		}
-		if c.LocalPublicURL == "" {
-			return fmt.Errorf("STORAGE_LOCAL_PUBLIC_URL is required when STORAGE_TYPE=local")
-		}
-		if err := validation.HTTPURL("STORAGE_LOCAL_PUBLIC_URL", c.LocalPublicURL); err != nil {
+	case TypeLocal:
+		if err := c.Local.Validate(); err != nil {
 			return err
 		}
-		if c.LocalPutSecret == "" {
-			return fmt.Errorf("STORAGE_LOCAL_PUT_SECRET is required when STORAGE_TYPE=local")
-		}
-	case "s3":
-		if c.S3Endpoint == "" {
-			return fmt.Errorf("STORAGE_S3_ENDPOINT is required when STORAGE_TYPE=s3")
-		}
-		if err := validation.HTTPURL("STORAGE_S3_ENDPOINT", c.S3Endpoint); err != nil {
+	case TypeS3:
+		if err := c.S3.Validate(); err != nil {
 			return err
-		}
-		if c.S3Bucket == "" {
-			return fmt.Errorf("STORAGE_S3_BUCKET is required when STORAGE_TYPE=s3")
-		}
-		if c.S3Region == "" {
-			return fmt.Errorf("STORAGE_S3_REGION is required when STORAGE_TYPE=s3")
-		}
-		if (c.S3AccessKey == "") != (c.S3SecretKey == "") {
-			return fmt.Errorf("STORAGE_S3_ACCESS_KEY and STORAGE_S3_SECRET_KEY must be configured together")
-		}
-		if c.S3PublicURL != "" {
-			if err := validation.HTTPURL("STORAGE_S3_PUBLIC_URL", c.S3PublicURL); err != nil {
-				return err
-			}
 		}
 	default:
-		return fmt.Errorf("unsupported STORAGE_TYPE: %s", c.Type)
+		return fmt.Errorf("storage: unsupported Type %q (want %q or %q)", c.Type, TypeLocal, TypeS3)
 	}
 
-	if c.PresignTTL <= 0 {
-		return fmt.Errorf("STORAGE_PRESIGN_TTL must be greater than zero")
+	if c.PresignTTLSeconds <= 0 {
+		return fmt.Errorf("storage: PresignTTLSeconds must be greater than zero")
 	}
 
 	return nil
