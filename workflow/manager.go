@@ -110,7 +110,7 @@ type NodeInfo struct {
 	// CachedTaskResult holds the most recent raw Activity result for a TASK node, set right
 	// after the Activity succeeds and cleared once the node fully completes. It is purely
 	// informational: if a node parks with this populated, the Activity has already run, so
-	// an admin should prefer AdminActionOverride over AdminActionRetry to avoid re-running it.
+	// an admin should prefer AdminActionComplete over AdminActionRetry to avoid re-running it.
 	CachedTaskResult map[string]any `json:"cached_task_result,omitempty"`
 
 	// ChildWorkflowIDs lists the workflow IDs of any child GraphInterpreterWorkflow executions
