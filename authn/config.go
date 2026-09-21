@@ -9,25 +9,28 @@ import (
 	"github.com/OpenNSW/core/shared/validation"
 )
 
+// Config carries yaml struct tags, so it can be embedded in a larger
+// application config struct and populated generically (e.g. via
+// yaml.Unmarshal).
 type Config struct {
-	JWKSURL               string
-	Issuer                string
-	Audience              string
-	ClientIDs             []string
-	InsecureSkipTLSVerify bool
+	JWKSURL               string   `yaml:"jwksURL"`
+	Issuer                string   `yaml:"issuer"`
+	Audience              string   `yaml:"audience"`
+	ClientIDs             []string `yaml:"clientIDs"`
+	InsecureSkipTLSVerify bool     `yaml:"insecureSkipTLSVerify"`
 
 	// UserClaims declares extra JWT claims (beyond authn's fixed schema, e.g.
 	// "email", "phone_number", "ouId", "ouHandle", "given_name") to extract
 	// for user-principal (authorization_code grant) tokens. ClientClaims is
 	// the client-credential (M2M) analogue. See WithUserClaims /
 	// WithClientClaims. Zero value = no extra claims extracted.
-	UserClaims   ClaimSpec
-	ClientClaims ClaimSpec
+	UserClaims   ClaimSpec `yaml:"userClaims"`
+	ClientClaims ClaimSpec `yaml:"clientClaims"`
 
 	// RolesClaim overrides which claim carries the principal's roles, for
 	// IdPs that do not emit a top-level "roles" claim. See WithRolesClaim.
 	// Empty = "roles".
-	RolesClaim string
+	RolesClaim string `yaml:"rolesClaim"`
 }
 
 func (c Config) Validate() error {

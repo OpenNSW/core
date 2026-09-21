@@ -21,6 +21,19 @@ manager, err := authn.NewManager(userProfileSvc, authn.Config{
 
 `UserProfileService` is optional. When provided, it is called on the first appearance of a user token to create or retrieve a persisted user record (e.g. to assign an internal user ID). Pass `nil` to skip user persistence.
 
+`Config` (and `ClaimSpec`) carry `yaml` struct tags, so it can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`):
+
+```yaml
+authn:
+  jwksURL: https://idp.example.com/.well-known/jwks.json
+  issuer: https://idp.example.com
+  audience: my-api
+  clientIDs:
+    - my-m2m-client
+  userClaims:
+    optional: [email, ouId, ouHandle]
+```
+
 > **Note:** every token must carry a `grant_type` claim — it decides user vs. client principal, and a token without it is rejected with `unsupported grant type`. This is not a standard access-token claim (RFC 9068 does not define it), so an IdP that omits it will not work with this package as-is.
 
 ## Middleware
