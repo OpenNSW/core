@@ -6,6 +6,7 @@ package zoneview
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,5 +163,65 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	}
 	if zv.State != "PENDING_USER" || zv.TaskID != "task-1" {
 		t.Errorf("got %+v, want the record's task id and state carried through", zv)
+	}
+}
+
+// encoding/json sorts map keys, so review_history would precede status_awaiting
+// unless mergeView follows render.json document order.
+func TestAssemble_PreservesRenderConfigSectionOrder(t *testing.T) {
+	a := newTestAssembler(t)
+	const config = `{
+	  "id": "test:render",
+	  "sections": {
+	    "status_awaiting": {
+	      "templateId": "awaiting",
+	      "projector": "MARKDOWN",
+	      "visibleWhen": { "states": ["QUEUED_EXTERNALLY"] }
+	    },
+	    "review_history": {
+	      "templateId": "history",
+	      "projector": "MARKDOWN",
+	      "visibleWhen": { "states": ["QUEUED_EXTERNALLY"], "requireDataKey": "reviewerform" }
+	    },
+	    "workspace": {
+	      "templateId": "form",
+	      "projector": "MARKDOWN"
+	    }
+	  }
+	}`
+
+	tests := []struct {
+		name  string
+		state string
+		data  map[string]any
+		want  []string
+	}{
+		{
+			name:  "current status stays above review history",
+			state: "QUEUED_EXTERNALLY",
+			data:  map[string]any{"reviewerform": map[string]any{"feedback": "fix warehouse"}},
+			want:  []string{"status_awaiting", "review_history", "workspace"},
+		},
+		{
+			name:  "hidden history keeps awaiting above the form",
+			state: "QUEUED_EXTERNALLY",
+			want:  []string{"status_awaiting", "workspace"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := pendingRecord(config)
+			rec.State = tt.state
+			rec.Data = tt.data
+			zv, err := a.Assemble(context.Background(), rec, nil)
+			if err != nil {
+				t.Fatalf("Assemble: %v", err)
+			}
+			got := jsonObjectKeys(zv.View)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("view key order = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
