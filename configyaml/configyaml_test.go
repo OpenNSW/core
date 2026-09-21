@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,4 +131,24 @@ func TestLoadAndExpand_ResolvesAliasedPlaceholder(t *testing.T) {
 	require.NoError(t, LoadAndExpand(path, &out))
 	assert.Equal(t, "shared-secret", out.Base)
 	assert.Equal(t, "shared-secret", out.Alias)
+}
+
+// A self-referential anchor ("&node {self: *node}") must return a bounded
+// error rather than recursing until the goroutine stack is exhausted.
+func TestLoadAndExpand_CyclicAliasReturnsError(t *testing.T) {
+	path := writeFile(t, "node: &node\n  self: *node\n")
+
+	done := make(chan error, 1)
+	go func() {
+		var out any
+		done <- LoadAndExpand(path, &out)
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cyclic")
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadAndExpand did not return — likely recursing on the cyclic alias")
+	}
 }

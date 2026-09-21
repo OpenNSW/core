@@ -44,7 +44,7 @@ func LoadAndExpand(path string, v any) error {
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		return fmt.Errorf("parsing config file %s: %w", path, err)
 	}
-	if err := expandPlaceholders(&root, ""); err != nil {
+	if err := expandPlaceholders(&root, "", make(map[*yaml.Node]bool)); err != nil {
 		return fmt.Errorf("resolving config file %s: %w", path, err)
 	}
 
@@ -57,12 +57,15 @@ func LoadAndExpand(path string, v any) error {
 // expandPlaceholders walks the parsed (but not yet decoded) YAML tree and
 // resolves every scalar value shaped like "{{env:NAME}}" or "{{file:/path}}"
 // through secret.SecretRef, in place. path is the dotted/indexed YAML path
-// to node, used only for error messages.
-func expandPlaceholders(node *yaml.Node, path string) error {
+// to node, used only for error messages. seen tracks the anchor targets
+// currently being expanded via an AliasNode on the active call stack, so a
+// self-referential anchor (e.g. "&node {self: *node}") is reported as an
+// error instead of recursing forever.
+func expandPlaceholders(node *yaml.Node, path string, seen map[*yaml.Node]bool) error {
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, child := range node.Content {
-			if err := expandPlaceholders(child, path); err != nil {
+			if err := expandPlaceholders(child, path, seen); err != nil {
 				return err
 			}
 		}
@@ -73,13 +76,13 @@ func expandPlaceholders(node *yaml.Node, path string) error {
 			if path != "" {
 				childPath = path + "." + childPath
 			}
-			if err := expandPlaceholders(node.Content[i+1], childPath); err != nil {
+			if err := expandPlaceholders(node.Content[i+1], childPath, seen); err != nil {
 				return err
 			}
 		}
 	case yaml.SequenceNode:
 		for i, child := range node.Content {
-			if err := expandPlaceholders(child, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+			if err := expandPlaceholders(child, fmt.Sprintf("%s[%d]", path, i), seen); err != nil {
 				return err
 			}
 		}
@@ -90,7 +93,13 @@ func expandPlaceholders(node *yaml.Node, path string) error {
 		// resolution independent of whether the anchor or the alias comes
 		// first in the document; it's a no-op on a node already resolved,
 		// since a resolved scalar's Tag is no longer "!!str".
-		return expandPlaceholders(node.Alias, path)
+		if seen[node.Alias] {
+			return fmt.Errorf("%s: cyclic YAML alias (anchor refers to itself)", path)
+		}
+		seen[node.Alias] = true
+		err := expandPlaceholders(node.Alias, path, seen)
+		delete(seen, node.Alias) // pop: a DAG reusing the same anchor from a sibling branch is not a cycle
+		return err
 	case yaml.ScalarNode:
 		if node.Tag != "!!str" {
 			return nil
