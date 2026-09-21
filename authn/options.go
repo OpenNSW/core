@@ -27,9 +27,12 @@ type Option func(*TokenExtractor)
 // case-sensitive (RFC 7519 §4). Nested lookups are not supported; a name is a
 // top-level key, which is what makes namespaced names like
 // "https://app.example.com/roles" work unchanged.
+//
+// ClaimSpec carries yaml struct tags, so it can be populated generically
+// (e.g. via yaml.Unmarshal) as part of Config.
 type ClaimSpec struct {
-	Optional []string
-	Required []string
+	Optional []string `yaml:"optional"`
+	Required []string `yaml:"required"`
 }
 
 func (s ClaimSpec) isZero() bool {
