@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 )
 
@@ -41,9 +40,11 @@ func TestNewManager(t *testing.T) {
 
 	t.Run("happy path — single provider", func(t *testing.T) {
 		t.Parallel()
-		f := writeTempJSON(t, `{"email":{"host":"localhost"}}`)
+		cfg := Config{Providers: map[ChannelType]map[string]any{
+			ChannelEmail: {"host": "localhost"},
+		}}
 		p := &stubProvider{channelType: ChannelEmail}
-		m, err := NewManager(Config{Path: f}, p)
+		m, err := NewManager(cfg, p)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -60,9 +61,11 @@ func TestNewManager(t *testing.T) {
 
 	t.Run("missing config key for provider", func(t *testing.T) {
 		t.Parallel()
-		f := writeTempJSON(t, `{"sms":{"host":"localhost"}}`)
+		cfg := Config{Providers: map[ChannelType]map[string]any{
+			ChannelSMS: {"host": "localhost"},
+		}}
 		p := &stubProvider{channelType: ChannelEmail}
-		_, err := NewManager(Config{Path: f}, p)
+		_, err := NewManager(cfg, p)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -70,38 +73,29 @@ func TestNewManager(t *testing.T) {
 
 	t.Run("Configure failure propagates", func(t *testing.T) {
 		t.Parallel()
-		f := writeTempJSON(t, `{"email":{}}`)
+		cfg := Config{Providers: map[ChannelType]map[string]any{ChannelEmail: {}}}
 		configErr := errors.New("bad config")
 		p := &stubProvider{channelType: ChannelEmail, configureErr: configErr}
-		_, err := NewManager(Config{Path: f}, p)
+		_, err := NewManager(cfg, p)
 		if !errors.Is(err, configErr) {
 			t.Errorf("got %v, want wrapping %v", err, configErr)
 		}
 	})
 
-	t.Run("invalid Config.Path", func(t *testing.T) {
+	t.Run("invalid Config: no providers", func(t *testing.T) {
 		t.Parallel()
 		_, err := NewManager(Config{})
-		if !errors.Is(err, ErrConfigPathRequired) {
-			t.Errorf("got %v, want ErrConfigPathRequired", err)
-		}
-	})
-
-	t.Run("bad JSON config file", func(t *testing.T) {
-		t.Parallel()
-		f := writeTempJSON(t, `not-json`)
-		_, err := NewManager(Config{Path: f})
-		if err == nil {
-			t.Fatal("expected error, got nil")
+		if !errors.Is(err, ErrProvidersRequired) {
+			t.Errorf("got %v, want ErrProvidersRequired", err)
 		}
 	})
 
 	t.Run("duplicate channel type returns error", func(t *testing.T) {
 		t.Parallel()
-		f := writeTempJSON(t, `{"email":{"a":1}}`)
+		cfg := Config{Providers: map[ChannelType]map[string]any{ChannelEmail: {"a": 1}}}
 		p1 := &stubProvider{channelType: ChannelEmail}
 		p2 := &stubProvider{channelType: ChannelEmail}
-		_, err := NewManager(Config{Path: f}, p1, p2)
+		_, err := NewManager(cfg, p1, p2)
 		if err == nil {
 			t.Fatal("expected error for duplicate channel type, got nil")
 		}
@@ -113,9 +107,8 @@ func TestManager_Send(t *testing.T) {
 
 	makeManager := func(t *testing.T, p *stubProvider) *Manager {
 		t.Helper()
-		key := string(p.channelType)
-		f := writeTempJSON(t, fmt.Sprintf(`{%q:{}}`, key))
-		m, err := NewManager(Config{Path: f}, p)
+		cfg := Config{Providers: map[ChannelType]map[string]any{p.channelType: {}}}
+		m, err := NewManager(cfg, p)
 		if err != nil {
 			t.Fatalf("NewManager: %v", err)
 		}

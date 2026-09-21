@@ -8,7 +8,19 @@ A multi-channel notification router with a pluggable provider model. Your applic
 import "github.com/OpenNSW/core/notification"
 
 manager, err := notification.NewManager(
-    notification.Config{Path: "configs/notification.json"},
+    notification.Config{
+        Providers: map[notification.ChannelType]map[string]any{
+            notification.ChannelEmail: {
+                "api_key":      "sg-xxxxx",
+                "from_address": "noreply@example.com",
+            },
+            notification.ChannelSMS: {
+                "account_sid": "ACxxxxx",
+                "auth_token":  "xxxxx",
+                "from_number": "+61400000000",
+            },
+        },
+    },
     myEmailProvider,
     mySMSProvider,
 )
@@ -24,10 +36,10 @@ err = manager.Send(ctx, notification.Request{
 
 ## Channels
 
-| Constant | Value |
-|---|---|
+| Constant                    | Value     |
+|-----------------------------|-----------|
 | `notification.ChannelEmail` | `"email"` |
-| `notification.ChannelSMS` | `"sms"` |
+| `notification.ChannelSMS`   | `"sms"`   |
 
 ## Writing a provider
 
@@ -42,7 +54,7 @@ type Provider interface {
 ```
 
 - `Type()` declares which channel this provider handles.
-- `Configure` is called at startup with the provider-specific JSON block from `notification.json`.
+- `Configure` is called at startup with the provider's block from `Config.Providers`, re-marshaled to JSON (so existing `Provider` implementations are unaffected by how the block was sourced).
 - `Send` delivers the message.
 
 ```go
@@ -65,22 +77,18 @@ func (p *MyEmailProvider) Send(ctx context.Context, req notification.Request) er
 }
 ```
 
-## Provider config file
+## Provider configuration
 
-`notification.json` holds provider-specific configuration keyed by channel type:
+`Config.Providers` holds provider-specific configuration keyed by channel type — no standalone config file is needed. It carries a `yaml` struct tag (`providers`), so it can be embedded in a larger application config struct and populated generically, e.g. via [`configyaml.LoadAndExpand`](../configyaml/README.md) so a provider's API key can be sourced from an env var or a mounted file instead of living in the checked-in config:
 
-```json
-{
-  "providers": {
-    "email": {
-      "api_key": "sg-xxxxx",
-      "from_address": "noreply@example.com"
-    },
-    "sms": {
-      "account_sid": "ACxxxxx",
-      "auth_token": "xxxxx",
-      "from_number": "+61400000000"
-    }
-  }
-}
+```yaml
+notification:
+  providers:
+    email:
+      api_key: "{{env:SENDGRID_API_KEY}}"
+      from_address: noreply@example.com
+    sms:
+      account_sid: ACxxxxx
+      auth_token: "{{env:SMS_AUTH_TOKEN}}"
+      from_number: "+61400000000"
 ```
