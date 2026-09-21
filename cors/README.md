@@ -16,6 +16,28 @@ handler = cors.CORS(&cors.Config{
 })(mux)
 ```
 
+`Config` carries `yaml` struct tags, so it can be embedded in a larger
+application config struct and populated generically (e.g. via
+`yaml.Unmarshal`):
+
+```yaml
+cors:
+  allowedOrigins:
+    - https://portal.example.com
+    - https://admin.example.com
+  allowedMethods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allowedHeaders:
+    - Authorization
+    - Content-Type
+  allowCredentials: true
+  maxAge: 86400
+```
+
 ## Behaviour
 
 - Origins not in `AllowedOrigins` receive a `204 No Content` response on preflight with no CORS headers set.
