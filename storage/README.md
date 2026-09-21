@@ -87,7 +87,7 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 
 | Field                     | YAML key                  | Description                                                                                                 |
 |---------------------------|---------------------------|-------------------------------------------------------------------------------------------------------------|
-| `Endpoint`                | `endpoint`                | S3 endpoint URL. Required — use the AWS regional endpoint for real S3, or a custom one for MinIO/LocalStack |
+| `Endpoint`                | `endpoint`                | Optional custom endpoint URL for S3-compatible stores (e.g. MinIO or LocalStack). Empty targets AWS S3      |
 | `Bucket`                  | `bucket`                  | S3 bucket name                                                                                              |
 | `Region`                  | `region`                  | AWS region (e.g. `ap-southeast-2`)                                                                          |
 | `AccessKey` / `SecretKey` | `accessKey` / `secretKey` | Static credentials; must be set together. Empty uses the default AWS credential chain                       |
@@ -100,3 +100,21 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 | `BaseDir`   | `baseDir`   | Directory to store files under (created if absent) |
 | `PublicURL` | `publicURL` | Base URL files are served from                     |
 | `PutSecret` | `putSecret` | Signs presigned upload URLs                        |
+
+### Upgrading from the flattened `Config`
+
+`Config` used to carry every backend's fields flattened at the top level. If you're updating existing construction code:
+
+| Old field       | New field                            |
+|-----------------|---------------------------------------|
+| `LocalBaseDir`   | `Local.BaseDir`                      |
+| `LocalPublicURL` | `Local.PublicURL`                    |
+| `LocalPutSecret` | `Local.PutSecret`                    |
+| `S3Endpoint`     | `S3.Endpoint`                        |
+| `S3Bucket`       | `S3.Bucket`                          |
+| `S3Region`       | `S3.Region`                          |
+| `S3AccessKey`    | `S3.AccessKey`                       |
+| `S3SecretKey`    | `S3.SecretKey`                       |
+| `S3PublicURL`    | `S3.PublicURL`                       |
+| `S3UseSSL`       | Removed — it was never read anywhere |
+| `PresignTTL` (`time.Duration`) | `PresignTTLSeconds` (`int`, whole seconds) |

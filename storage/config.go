@@ -5,6 +5,8 @@ package storage
 
 import (
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/OpenNSW/core/storage/drivers"
 )
@@ -14,6 +16,12 @@ const (
 	TypeLocal = "local"
 	TypeS3    = "s3"
 )
+
+// maxPresignTTLSeconds is the largest PresignTTLSeconds value that converts
+// to a valid time.Duration (an int64 nanosecond count) without overflowing.
+// NewStorageFromConfig computes time.Duration(PresignTTLSeconds) * time.Second;
+// above this bound that multiplication silently wraps instead of failing.
+const maxPresignTTLSeconds = math.MaxInt64 / int64(time.Second)
 
 // Config selects a storage backend via Type and carries each backend's own
 // settings. Only the config for the selected Type is read. Rather than
@@ -57,6 +65,9 @@ func (c Config) Validate() error {
 
 	if c.PresignTTLSeconds <= 0 {
 		return fmt.Errorf("storage: PresignTTLSeconds must be greater than zero")
+	}
+	if int64(c.PresignTTLSeconds) > maxPresignTTLSeconds {
+		return fmt.Errorf("storage: PresignTTLSeconds %d exceeds the maximum representable duration (%d seconds)", c.PresignTTLSeconds, maxPresignTTLSeconds)
 	}
 
 	return nil

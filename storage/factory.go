@@ -19,7 +19,12 @@ import (
 )
 
 // NewStorageFromConfig creates a storage instance based on the provided configuration.
+// It validates cfg first, so the type switch below only ever sees a supported Type.
 func NewStorageFromConfig(ctx context.Context, cfg Config) (StorageDriver, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	presignTTL := time.Duration(cfg.PresignTTLSeconds) * time.Second
 
 	switch strings.TrimSpace(cfg.Type) {
