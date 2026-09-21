@@ -16,24 +16,28 @@ import (
 // configuration. Client construction follows the same approach as the storage
 // package: the default AWS credential chain unless static credentials are
 // supplied, and an optional custom endpoint for S3-compatible stores.
+//
+// Config carries yaml struct tags, so it can be embedded in a larger
+// application config struct and populated generically (e.g. via
+// yaml.Unmarshal).
 type Config struct {
 	// Bucket is the S3 bucket that artifact paths are read from. Required.
-	Bucket string
+	Bucket string `yaml:"bucket"`
 	// Region is the AWS region of the bucket. Required.
-	Region string
+	Region string `yaml:"region"`
 	// Endpoint is an optional custom endpoint URL for S3-compatible stores
 	// (e.g. MinIO or LocalStack). When set, path-style addressing is used.
 	// Empty targets AWS S3.
-	Endpoint string
+	Endpoint string `yaml:"endpoint"`
 	// AccessKey and SecretKey are optional static credentials. They must be set
 	// together; when both are empty the default AWS credential chain is used.
-	AccessKey string
-	SecretKey string
+	AccessKey string `yaml:"accessKey"`
+	SecretKey string `yaml:"secretKey"`
 	// Prefix is an optional in-bucket key prefix that every path is resolved
 	// against — the S3 analog of local.Root and github.BasePath. It lets one
 	// bucket hold configs for several deployments (e.g. "deployment-a"), each
 	// wired as its own loader + registry. Empty means the bucket root.
-	Prefix string
+	Prefix string `yaml:"prefix"`
 }
 
 // Validate ensures the S3 loader configuration is usable. It reports

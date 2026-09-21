@@ -140,6 +140,41 @@ There is no per-row `loader`: the registry has exactly one.
 
 Both wrap their underlying "not found" errors as `artifact.ErrNotFound` so callers can use `errors.Is`.
 
+### Selecting a loader from config
+
+`artifact/loaders` exposes a `Config`/`New` pair that picks the concrete loader
+at runtime via `Config.Type` ("local", "github", or "s3"), reading only the
+matching embedded backend config:
+
+```go
+import (
+    "github.com/OpenNSW/core/artifact/loaders"
+    "github.com/OpenNSW/core/artifact/loaders/local"
+)
+
+loader, err := loaders.New(ctx, loaders.Config{
+    Type: "local",
+    Local: local.Config{Root: "/etc/configs"},
+})
+```
+
+`loaders.Config` and each backend's own `Config` (`local.Config`,
+`github.Config`, `s3.Config`) carry `yaml` struct tags, so the whole tree can
+be embedded in a larger application config struct and populated generically
+(e.g. via `yaml.Unmarshal`) instead of being constructed by hand:
+
+```yaml
+artifacts:
+  type: s3
+  s3:
+    bucket: my-bucket
+    region: us-east-1
+    prefix: deployment-a
+```
+
+`github.Config.HTTPClient` has no YAML representation and is excluded from
+unmarshaling.
+
 ---
 
 ## Test utilities

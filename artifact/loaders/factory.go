@@ -9,6 +9,11 @@
 // loader's own Config (local.Config, github.Config, s3.Config) verbatim — so
 // each backend keeps ownership of its config shape and validation, exactly as
 // core intends. Supported types: "local", "github", and "s3".
+//
+// Config and the backend Config types all carry yaml struct tags, so this
+// whole tree can be embedded in a larger application config struct and
+// populated generically (e.g. via yaml.Unmarshal) rather than constructed by
+// hand.
 package loaders
 
 import (
@@ -35,16 +40,20 @@ const supportedTypes = `"local", "github", or "s3"`
 
 // Config selects a loader backend via Type and carries each backend's own
 // config. Only the config for the selected Type is read.
+//
+// Config and the backend Config types it embeds carry yaml struct tags, so
+// it can be embedded in a larger application config struct and populated
+// generically (e.g. via yaml.Unmarshal) rather than constructed by hand.
 type Config struct {
 	// Type is the loader backend: "local", "github", or "s3".
-	Type string
+	Type string `yaml:"type"`
 
 	// Local is used when Type == "local".
-	Local local.Config
+	Local local.Config `yaml:"local"`
 	// GitHub is used when Type == "github".
-	GitHub github.Config
+	GitHub github.Config `yaml:"github"`
 	// S3 is used when Type == "s3".
-	S3 s3.Config
+	S3 s3.Config `yaml:"s3"`
 }
 
 // Validate reports misconfiguration before New is called, delegating to the

@@ -21,29 +21,33 @@ const defaultRawBaseURL = "https://raw.githubusercontent.com"
 // This is owned by the github package (mirroring temporal.Config and the local
 // loader), so the package controls the shape and semantics of its own
 // configuration.
+//
+// Config carries yaml struct tags, so it can be embedded in a larger
+// application config struct and populated generically (e.g. via
+// yaml.Unmarshal). HTTPClient has no YAML representation and is excluded.
 type Config struct {
 	// Owner is the repository owner (user or organization). Required.
-	Owner string
+	Owner string `yaml:"owner"`
 	// Repo is the repository name. Required.
-	Repo string
+	Repo string `yaml:"repo"`
 	// Ref is the branch, tag, or commit SHA to read from. Required. A loader
 	// instance is pinned to one ref, so the manifest and the artifacts it
 	// catalogs are always fetched from the same source. Prefer an immutable
 	// ref (a tag or SHA) for reproducibility; a branch is only useful once the
 	// registry can reload.
-	Ref string
+	Ref string `yaml:"ref"`
 	// BasePath is an optional in-repo directory prefix that every path is
 	// resolved against — the GitHub analog of local.Root. It lets one repo hold
 	// configs for several deployments (e.g. "deployment-a"). Empty means the
 	// repository root.
-	BasePath string
+	BasePath string `yaml:"basePath"`
 	// Token is an optional GitHub token. It is required for private
 	// repositories and lifts the unauthenticated rate limit; omit it for public
 	// repositories.
-	Token string
+	Token string `yaml:"token"`
 	// BaseURL is an optional REST API root, for GitHub Enterprise Server. It
 	// defaults to https://api.github.com. Ignored when UseRawHost is set.
-	BaseURL string
+	BaseURL string `yaml:"baseURL"`
 	// UseRawHost fetches from the raw-content host
 	// (https://raw.githubusercontent.com) instead of the REST Contents API.
 	// The raw host is not subject to the REST rate limit and needs no token,
@@ -51,14 +55,14 @@ type Config struct {
 	// it caches branch refs for a few minutes, so prefer an immutable Ref (a
 	// tag or SHA) with it; private-repository access should use the default
 	// Contents API path.
-	UseRawHost bool
+	UseRawHost bool `yaml:"useRawHost"`
 	// RawBaseURL is an optional raw-content host root used when UseRawHost is
 	// set. It defaults to https://raw.githubusercontent.com.
-	RawBaseURL string
+	RawBaseURL string `yaml:"rawBaseURL"`
 	// HTTPClient is an optional client used for requests. It defaults to
 	// http.DefaultClient; inject one to set timeouts or to point tests at a
-	// stub server.
-	HTTPClient *http.Client
+	// stub server. Not settable via YAML.
+	HTTPClient *http.Client `yaml:"-"`
 }
 
 // Validate ensures the GitHub loader configuration is usable. It reports

@@ -14,9 +14,13 @@ import (
 //
 // This is owned by the local package (mirroring temporal.Config), so the
 // package controls the shape and semantics of its own configuration.
+//
+// Config carries yaml struct tags, so it can be embedded in a larger
+// application config struct and populated generically (e.g. via
+// yaml.Unmarshal).
 type Config struct {
 	// Root is the directory that artifact paths are resolved against.
-	Root string
+	Root string `yaml:"root"`
 }
 
 // Validate ensures the local loader configuration is usable. It reports
