@@ -9,12 +9,15 @@ import (
 	"github.com/OpenNSW/core/shared/validation"
 )
 
+// Config carries yaml struct tags, so it can be embedded in a larger
+// application config struct and populated generically (e.g. via
+// yaml.Unmarshal).
 type Config struct {
-	AllowedOrigins   []string
-	AllowedMethods   []string
-	AllowedHeaders   []string
-	AllowCredentials bool
-	MaxAge           int
+	AllowedOrigins   []string `yaml:"allowedOrigins"`
+	AllowedMethods   []string `yaml:"allowedMethods"`
+	AllowedHeaders   []string `yaml:"allowedHeaders"`
+	AllowCredentials bool     `yaml:"allowCredentials"`
+	MaxAge           int      `yaml:"maxAge"`
 }
 
 func (c Config) Validate() error {
