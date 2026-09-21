@@ -207,7 +207,8 @@ type BatchGatewayConfig struct {
 	ItemsVariable string `json:"items_variable,omitempty"`
 
 	// IDField is the field name within each item used as the unique identifier for
-	// ID-based merging at the paired BATCH_JOIN. Defaults to "id" if empty.
+	// ID-based merging at the paired BATCH_JOIN. Defaults to "id" if empty. The value
+	// must be a unique, non-empty string.
 	IDField string `json:"id_field,omitempty"`
 }
 

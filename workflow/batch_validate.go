@@ -58,10 +58,12 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 		reverseEdges[edge.TargetID] = append(reverseEdges[edge.TargetID], edge.SourceID)
 	}
 
-	// 3. BATCH_JOIN is a converging gateway; it cannot have more than 1 outgoing edge.
+	// 3. BATCH_JOIN is a converging gateway; it must have exactly 1 outgoing edge. Zero would
+	// be a dead end (the interpreter would stop silently without reaching END), and more than
+	// one is unsupported because only the first edge is ever followed.
 	for joinID := range batchJoins {
-		if count := len(forwardEdges[joinID]); count > 1 {
-			return fmt.Errorf("BATCH_JOIN node %q cannot have more than 1 outgoing edge, got %d", joinID, count)
+		if count := len(forwardEdges[joinID]); count != 1 {
+			return fmt.Errorf("BATCH_JOIN node %q must have exactly 1 outgoing edge, got %d", joinID, count)
 		}
 	}
 
