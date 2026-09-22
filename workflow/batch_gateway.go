@@ -71,7 +71,7 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	for i, item := range items {
 		idVal := getItemID(item, idField)
 		if idVal == nil || idVal == "" {
-			return fmt.Errorf("BATCH_SPLIT node %s: item at index %d is missing required ID field %q", node.ID, i, idField)
+			return fmt.Errorf("BATCH_SPLIT node %s: item at index %d has a missing or empty required ID field %q", node.ID, i, idField)
 		}
 		idStr, ok := idVal.(string)
 		if !ok {
@@ -274,7 +274,7 @@ func collectAndMergeBatchResults(
 		for _, item := range childSlice {
 			idVal := getItemID(item, idField)
 			if idVal == nil || idVal == "" {
-				return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
+				return nil, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item with a missing or empty required ID field %q",
 					nodeID, child.EdgeID, idField)
 			}
 			idStr, ok := idVal.(string)
@@ -292,9 +292,10 @@ func collectAndMergeBatchResults(
 
 	result := make([]any, 0, len(originalItems))
 	for _, originalItem := range originalItems {
-		// Original IDs were validated as non-empty strings before the split, so the assertion
-		// cannot fail here.
-		id, _ := getItemID(originalItem, idField).(string)
+		id, ok := getItemID(originalItem, idField).(string)
+		if !ok {
+			return nil, fmt.Errorf("BATCH_SPLIT node %s: original item has a non-string ID field %q", nodeID, idField)
+		}
 		if merged, ok := mergedItems[id]; ok {
 			result = append(result, merged)
 		} else {

@@ -301,7 +301,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MissingItemID_Fails() {
 	s.True(env.IsWorkflowCompleted())
 	err := env.GetWorkflowError()
 	s.Error(err)
-	s.Contains(err.Error(), "missing required ID field")
+	s.Contains(err.Error(), "missing or empty required ID field")
 }
 
 // --- Test 3b-2: Non-string item ID → error ---
@@ -1360,7 +1360,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 	s.True(env.IsWorkflowCompleted())
 	err := env.GetWorkflowError()
 	s.Error(err)
-	s.Contains(err.Error(), "returned item missing required ID field")
+	s.Contains(err.Error(), "returned item with a missing or empty required ID field")
 }
 
 // --- Test 14b: Child workflow returns item with a non-string ID → error ---
