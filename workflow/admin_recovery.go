@@ -263,6 +263,9 @@ func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nod
 		NodeType:         string(node.Type),
 		TaskTemplateID:   node.TaskTemplateID,
 		Cause:            nodeInfo.LastError,
+		ParkCategory:     nodeInfo.ParkCategory,
+		InputMapping:     nodeInfo.InputMapping,
+		OutputMapping:    nodeInfo.OutputMapping,
 		CachedTaskResult: nodeInfo.CachedTaskResult,
 	}
 	future, settable := workflow.NewFuture(ctx)

@@ -146,6 +146,50 @@ func TestAdminParkNotifiesHostAppOnFreshExecution(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+// TestAdminParkNotificationCarriesCategoryAndMappings pins that AdminParkPayload gives the host
+// app the same park context NodeInfo carries — ParkCategory, InputMapping and OutputMapping —
+// not just Cause, so a handler (paging, logging, persistence) doesn't have to re-derive them.
+func TestAdminParkNotificationCarriesCategoryAndMappings(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+
+	var captured AdminParkPayload
+	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(
+		func(_ context.Context, payload AdminParkPayload) error {
+			captured = payload
+			return nil
+		}).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID: "task",
+			Action: AdminActionComplete,
+			Reason: "supplying the missing value directly",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.Equal(t, ParkCategoryInputMapping, captured.ParkCategory)
+	require.Equal(t, map[string]string{"missing_global_var": "local_key"}, captured.InputMapping)
+	require.Empty(t, captured.OutputMapping)
+	env.AssertExpectations(t)
+}
+
 // TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes pins the join in
 // parkNodeForAdmin that waits for notifyAdminPark's background coroutine before acting on a
 // resolution. AdminParkActivity here sleeps 300ms (real time, not workflow virtual time) before

@@ -77,6 +77,13 @@ type AdminParkPayload struct {
 	TaskTemplateID string
 	// Cause is the error message that caused the node to park (NodeInfo.LastError).
 	Cause string
+	// ParkCategory says why the node parked (see NodeInfo.ParkCategory).
+	ParkCategory ParkCategory
+	// InputMapping and OutputMapping are the node's mappings from its definition, carried over
+	// from NodeInfo.InputMapping/OutputMapping so a handler can report which workflow variable a
+	// RETRY reads and which a COMPLETE patch should write, without querying the workflow itself.
+	InputMapping  map[string]string
+	OutputMapping map[string]string
 	// CachedTaskResult holds the Activity's raw result if it had already completed before the
 	// node parked (see NodeInfo.CachedTaskResult) — nil if execution never reached that point.
 	CachedTaskResult map[string]any
