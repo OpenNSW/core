@@ -31,7 +31,7 @@ type parallelBranch struct {
 func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	joinNodeID := findPairedParallelJoin(g.def, node.ID)
 	if joinNodeID == "" {
-		return fmt.Errorf("PARALLEL_SPLIT node %s: no paired PARALLEL_JOIN found", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("PARALLEL_SPLIT node %s: no paired PARALLEL_JOIN found", node.ID))
 	}
 	joinNode := g.nodes[joinNodeID]
 	var mergeByID map[string]string
@@ -46,7 +46,7 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 		edgeByID[e.ID] = e
 		match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
 		if err != nil {
-			return err
+			return withCategory(ParkCategoryGatewayCondition, err)
 		}
 		if match {
 			matchedEdgeIDs = append(matchedEdgeIDs, e.ID)
@@ -92,17 +92,17 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 	for _, b := range branches {
 		var childOutput *WorkflowInstance
 		if err := b.Future.Get(ctx, &childOutput); err != nil {
-			return fmt.Errorf("PARALLEL_SPLIT node %s: branch %q failed: %w", node.ID, b.EdgeID, err)
+			return withCategory(ParkCategoryChildFailure, fmt.Errorf("PARALLEL_SPLIT node %s: branch %q failed: %w", node.ID, b.EdgeID, err))
 		}
 		if childOutput == nil {
-			return fmt.Errorf("PARALLEL_SPLIT node %s: branch %q returned nil output", node.ID, b.EdgeID)
+			return withCategory(ParkCategoryChildFailure, fmt.Errorf("PARALLEL_SPLIT node %s: branch %q returned nil output", node.ID, b.EdgeID))
 		}
 		branchVars = append(branchVars, childOutput.WorkflowVariables)
 	}
 
 	mergedVars, err := mergeParallelBranches(baseVars, branchVars, mergeByID)
 	if err != nil {
-		return fmt.Errorf("PARALLEL_SPLIT node %s: merge failed: %w", node.ID, err)
+		return withCategory(ParkCategorySplitData, fmt.Errorf("PARALLEL_SPLIT node %s: merge failed: %w", node.ID, err))
 	}
 	g.instance.WorkflowVariables = mergedVars
 
@@ -119,7 +119,7 @@ func (g *graphInterpreter) handleParallelSplitGateway(ctx workflow.Context, node
 // same shape as handleBatchJoinGateway.
 func (g *graphInterpreter) handleParallelJoinGateway(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	if node.ParallelJoin == nil || node.ParallelJoin.GatewayNodeID == "" {
-		return fmt.Errorf("PARALLEL_JOIN node %s: parallel_join.gateway_node_id is required", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("PARALLEL_JOIN node %s: parallel_join.gateway_node_id is required", node.ID))
 	}
 
 	nodeInfo.Status = NodeStatusCompleted
@@ -193,14 +193,14 @@ func mergeItemsByID(base map[string]any, branchVars []map[string]any, varPath, i
 		}
 		items, err := toItemSlice(raw)
 		if err != nil {
-			return fmt.Errorf("variable %q from %s is invalid items: %w", varPath, origin, err)
+			return withCategory(ParkCategorySplitData, fmt.Errorf("variable %q from %s is invalid items: %w", varPath, origin, err))
 		}
 		for i, item := range items {
 			idVal := getItemID(item, idField)
 			idStr := fmt.Sprintf("%v", idVal)
 			if idVal == nil || idVal == "" || idStr == "" || idStr == "<nil>" {
-				return fmt.Errorf("variable %q from %s has item at index %d missing required ID field %q",
-					varPath, origin, i, idField)
+				return withCategory(ParkCategorySplitData, fmt.Errorf("variable %q from %s has item at index %d missing required ID field %q",
+					varPath, origin, i, idField))
 			}
 			existing, ok := merged[idStr]
 			if !ok {

@@ -38,13 +38,13 @@ func childBroadcastSignalName(splitNodeID string) string {
 func (g *graphInterpreter) handleSplitTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	config := node.SplitTask
 	if config == nil {
-		return fmt.Errorf("split task configuration is missing on node %s", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("split task configuration is missing on node %s", node.ID))
 	}
 
 	// 1. Resolve Items collection from global workflow context
 	itemsRaw, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, config.ItemsVariable)
 	if !exists {
-		return fmt.Errorf("items variable '%s' not found in workflow variables", config.ItemsVariable)
+		return withCategory(ParkCategorySplitData, fmt.Errorf("items variable '%s' not found in workflow variables", config.ItemsVariable))
 	}
 
 	branchesData, err := resolveBranchesData(itemsRaw, config.ItemsVariable)
@@ -111,7 +111,7 @@ func resolveBranchesData(itemsRaw any, itemsVarName string) ([]any, error) {
 		}
 		return branchesData, nil
 	default:
-		return nil, fmt.Errorf("items variable '%s' is not a valid list type", itemsVarName)
+		return nil, withCategory(ParkCategorySplitData, fmt.Errorf("items variable '%s' is not a valid list type", itemsVarName))
 	}
 }
 
@@ -142,7 +142,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 	for i, itemRaw := range branchesData {
 		item, err := ParseSplitTaskItem(itemRaw)
 		if err != nil {
-			return nil, fmt.Errorf("index point %d inside branch resolution array is invalid layout: %w", i, err)
+			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("index point %d inside branch resolution array is invalid layout: %w", i, err))
 		}
 
 		templateID := node.TaskTemplateID
@@ -155,11 +155,11 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		}
 
 		if templateID == "" || branchID == "" {
-			return nil, fmt.Errorf("index point %d requires non-empty template_id (static or dynamic) and branch_id configurations", i)
+			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("index point %d requires non-empty template_id (static or dynamic) and branch_id configurations", i))
 		}
 
 		if _, exists := branchIDs[branchID]; exists {
-			return nil, fmt.Errorf("branch ID %s is duplicated", branchID)
+			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("branch ID %s is duplicated", branchID))
 		}
 		branchIDs[branchID] = true
 
@@ -197,7 +197,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		for idx, templateID := range batch {
 			var branchGraphDef WorkflowDefinition
 			if err := futures[idx].Get(ctx, &branchGraphDef); err != nil {
-				return nil, fmt.Errorf("boundary lifecycle error hydrating definition graph for template %s: %w", templateID, err)
+				return nil, withCategory(ParkCategoryDefinitionError, fmt.Errorf("boundary lifecycle error hydrating definition graph for template %s: %w", templateID, err))
 			}
 			defsMap[templateID] = branchGraphDef
 		}
@@ -252,7 +252,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		for i, e := range startErrors {
 			msgs[i] = e.Error()
 		}
-		return activeBranches, fmt.Errorf("failed to start %d of %d child workflows: [%s]", len(startErrors), len(prepared), strings.Join(msgs, "; "))
+		return activeBranches, withCategory(ParkCategoryChildFailure, fmt.Errorf("failed to start %d of %d child workflows: [%s]", len(startErrors), len(prepared), strings.Join(msgs, "; ")))
 	}
 
 	return activeBranches, nil
@@ -306,7 +306,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 			err := wf.Get(ctx, &childOutput)
 
 			if err != nil {
-				executionError = fmt.Errorf("dynamic execution track %s (workflow %s) halted abnormally: %w", branchInfo.BranchID, targetID, err)
+				executionError = withCategory(ParkCategoryChildFailure, fmt.Errorf("dynamic execution track %s (workflow %s) halted abnormally: %w", branchInfo.BranchID, targetID, err))
 				failedBranchesErrors = append(failedBranchesErrors, executionError)
 				aggregatedResults[branchInfo.Index] = map[string]any{
 					"error":     err.Error(),
@@ -355,7 +355,7 @@ func (g *graphInterpreter) monitorChildWorkflows(
 		for _, e := range failedBranchesErrors {
 			errMsgs = append(errMsgs, e.Error())
 		}
-		return fmt.Errorf("multiple branches failed: [%s]", strings.Join(errMsgs, "; "))
+		return withCategory(ParkCategoryChildFailure, fmt.Errorf("multiple branches failed: [%s]", strings.Join(errMsgs, "; ")))
 	}
 
 	return nil
