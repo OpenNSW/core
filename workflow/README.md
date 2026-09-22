@@ -77,6 +77,8 @@ type BatchJoinConfig struct {
 }
 ```
 
+**Item ID requirement:** each item's `id_field` (default `id`) must be a unique, non-empty string.
+
 ### Dynamic Fan-out Configuration (`SplitTaskConfig`)
 ```go
 type SplitTaskConfig struct {

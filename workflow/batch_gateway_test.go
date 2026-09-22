@@ -301,7 +301,62 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MissingItemID_Fails() {
 	s.True(env.IsWorkflowCompleted())
 	err := env.GetWorkflowError()
 	s.Error(err)
-	s.Contains(err.Error(), "missing required ID field")
+	s.Contains(err.Error(), "missing or empty required ID field")
+}
+
+// --- Test 3b-2: Non-string item ID → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_NonStringItemID_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "non_string_id_test",
+		Name: "Non-String ID Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "process", Type: NodeTypeTask, TaskTemplateID: "PROCESS"},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "process"},
+			{ID: "e3", SourceID: "process", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, 0)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "non-string-id-1"})
+
+	// Numeric ID is rejected up front.
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": 1000000, "type": "food"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "item IDs must be strings")
 }
 
 // --- Test 3c: Duplicate item ID → error ---
@@ -559,7 +614,32 @@ func (s *BatchGatewayTestSuite) TestBatchValidation_JoinMultipleOutgoingEdges_Fa
 
 	err := ValidateBatchGateways(def)
 	s.Error(err)
-	s.Contains(err.Error(), "cannot have more than 1 outgoing edge")
+	s.Contains(err.Error(), "must have exactly 1 outgoing edge, got 2")
+}
+
+// --- Test 7b-2: Validation — BATCH_JOIN with no outgoing edges ---
+
+func (s *BatchGatewayTestSuite) TestBatchValidation_JoinNoOutgoingEdges_Fails() {
+	def := WorkflowDefinition{
+		ID:   "dead_end_join_test",
+		Name: "Dead End Join",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "gw_join"},
+			// gw_join has no outgoing edge: the workflow would stop without reaching END.
+		},
+	}
+
+	err := ValidateBatchGateways(def)
+	s.Error(err)
+	s.Contains(err.Error(), "must have exactly 1 outgoing edge, got 0")
 }
 
 // --- Test 7c: Validation — edge escaping batch region to post-join node ---
@@ -1280,7 +1360,74 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 	s.True(env.IsWorkflowCompleted())
 	err := env.GetWorkflowError()
 	s.Error(err)
-	s.Contains(err.Error(), "returned item missing required ID field")
+	s.Contains(err.Error(), "returned item with a missing or empty required ID field")
+}
+
+// --- Test 14b: Child workflow returns item with a non-string ID → error ---
+
+func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsNonStringID_Fails() {
+	env := s.NewTestWorkflowEnvironment()
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+
+	def := WorkflowDefinition{
+		ID:   "non_string_id_child_test",
+		Name: "Non-String ID Child Test",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{ID: "gw_split", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchSplit,
+				BatchGateway: &BatchGatewayConfig{}},
+			{ID: "numeric_id_task", Type: NodeTypeTask, TaskTemplateID: "NUMERIC_ID_TASK",
+				OutputMapping: map[string]string{"items": "_items"}},
+			{ID: "gw_join", Type: NodeTypeGateway, GatewayType: GatewayTypeBatchJoin,
+				BatchJoin: &BatchJoinConfig{GatewayNodeID: "gw_split"}},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "gw_split"},
+			{ID: "e2", SourceID: "gw_split", TargetID: "numeric_id_task"},
+			{ID: "e3", SourceID: "numeric_id_task", TargetID: "gw_join"},
+			{ID: "e4", SourceID: "gw_join", TargetID: "end"},
+		},
+	}
+
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any) error {
+			if strings.Contains(workflowID, "--") {
+				return fmt.Errorf("workflow %s not found in host registry", workflowID)
+			}
+			return nil
+		})
+
+	// NUMERIC_ID_TASK rewrites the item with a numeric id.
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "NUMERIC_ID_TASK", mock.Anything, mock.Anything).
+		Return(map[string]any{"items": []any{map[string]any{"id": 1000000, "name": "foo"}}}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
+			NodeID: "gw_split",
+			Action: AdminActionAbort,
+		})
+	}, time.Second)
+
+	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "numeric-id-child-1"})
+
+	initialVars := map[string]any{
+		"_items": []any{
+			map[string]any{"id": "item1", "name": "foo"},
+		},
+	}
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialVars)
+
+	s.True(env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	s.Error(err)
+	s.Contains(err.Error(), "item IDs must be strings")
 }
 
 // --- Test 15: Child workflow returns duplicate item ID across partitions → error ---
