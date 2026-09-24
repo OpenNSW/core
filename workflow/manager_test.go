@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/mocks"
 )
 
@@ -22,7 +23,12 @@ func TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace(t *testing.T) {
 	mockClient.On("CompleteActivityByID", mock.Anything, "staging", "wf-1", "run-1", "node-1", output, nil).
 		Return(nil)
 
-	m := &temporalManagerImpl{temporalClient: mockClient, namespace: "staging"}
+	// Go through the constructor so the test also covers it storing the namespace. worker.New
+	// rejects mocks, so construct with a lazy (non-connecting) client, then swap in the mock.
+	lazyClient, err := client.NewLazyClient(client.Options{Namespace: "staging"})
+	require.NoError(t, err)
+	m := NewTemporalManager(lazyClient, "staging", "some-queue", nil, nil).(*temporalManagerImpl)
+	m.temporalClient = mockClient
 
 	require.NoError(t, m.TaskDone(context.Background(), "wf-1", "run-1", "node-1", output))
 	mockClient.AssertExpectations(t)

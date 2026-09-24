@@ -107,7 +107,7 @@ To write your own plugin, see [`plugin-author-guide.md`](plugin-author-guide.md)
 
 ## 4. Wiring the Temporal manager
 
-The orchestrator depends on `engine.TemporalManager` from [`go-temporal-workflow`](https://github.com/OpenNSW/go-temporal-workflow). You need **two** instances: one for the parent workflow queue and one for the task workflow queue.
+The orchestrator depends on `engine.TemporalManager` from [`github.com/OpenNSW/core/workflow`](../../workflow) (imported as `engine`). You need **two** instances: one for the parent workflow queue and one for the task workflow queue.
 
 ```go
 parentWorkflowManager := engine.NewTemporalManager(
