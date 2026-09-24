@@ -18,11 +18,21 @@ import (
 	"github.com/OpenNSW/core/shared/maputil"
 )
 
+func TestNewTemporalManagerPanicsWithEmptyNamespace(t *testing.T) {
+	for _, namespace := range []string{"", "   "} {
+		t.Run(fmt.Sprintf("%q", namespace), func(t *testing.T) {
+			require.PanicsWithValue(t, "namespace must not be empty", func() {
+				NewTemporalManager(nil, namespace, "some-queue", nil, nil)
+			})
+		})
+	}
+}
+
 func TestNewTemporalManagerPanicsWithEmptyTaskQueue(t *testing.T) {
 	for _, taskQueue := range []string{"", "   "} {
 		t.Run(fmt.Sprintf("%q", taskQueue), func(t *testing.T) {
 			require.PanicsWithValue(t, "taskQueue must not be empty", func() {
-				NewTemporalManager(nil, taskQueue, nil, nil)
+				NewTemporalManager(nil, "default", taskQueue, nil, nil)
 			})
 		})
 	}

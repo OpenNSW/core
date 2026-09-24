@@ -160,11 +160,12 @@ There is no risk of accidental deadlock and the intent is clear from the DSL alo
 To run the engine inside a Go application, initialize the `TemporalManager` with your task and completion handlers:
 
 ```go
-import "github.com/OpenNSW/go-temporal-workflow"
+import engine "github.com/OpenNSW/core/workflow"
 
 // Initialize the TemporalManager (this automatically registers the workflow and activities internally)
 manager := engine.NewTemporalManager(
     temporalClient,
+    "default",         // must match the namespace temporalClient was dialed with
     "your-task-queue",
     taskHandler,       // TaskActivationHandler
     completionHandler, // WorkflowCompletionHandler

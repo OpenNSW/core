@@ -133,7 +133,7 @@ func Build(cfg *Config) (*App, error) {
 
     var tm *orchestrator.TaskManager
     microRunner := workflow.NewTemporalManager(
-        temporalClient, "MICRO_WORKFLOW_QUEUE",
+        temporalClient, cfg.Temporal.Namespace, "MICRO_WORKFLOW_QUEUE",
         func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartSubTask(ctx, p) },
         func(wfID string, vars map[string]any) error { return tm.HandleTaskCompletion(ctx, wfID, vars) },
     )
@@ -145,7 +145,7 @@ func Build(cfg *Config) (*App, error) {
 
     // 6. Macro workflow runner
     macroRunner := workflow.NewTemporalManager(
-        temporalClient, "INTERPRETER_TASK_QUEUE",
+        temporalClient, cfg.Temporal.Namespace, "INTERPRETER_TASK_QUEUE",
         onMacroTaskActivation, onMacroCompletion,
     )
     macroRunner.StartWorker()
