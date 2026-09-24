@@ -71,6 +71,7 @@ taskRenderer := zoneview.NewTaskRenderer(assembler)
 var tm *orchestrator.TaskManager
 workflowRunner := workflow.NewTemporalManager(
     temporalClient,
+    "default", // must match the namespace temporalClient was dialed with
     "MICRO_WORKFLOW_QUEUE",
     func(payload workflow.TaskPayload) (map[string]any, error) {
         return tm.StartSubTask(context.Background(), payload)

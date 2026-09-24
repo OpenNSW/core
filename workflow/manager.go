@@ -257,22 +257,31 @@ type TemporalManager interface {
 type temporalManagerImpl struct {
 	temporalClient client.Client
 	worker         worker.Worker
+	namespace      string
 	taskQueue      string
 	activities     *Activities
 }
 
 // NewTemporalManager creates a new instance of TemporalManager.
+//
+// namespace must be the namespace c was dialed with. client.Client does not expose it, and
+// some calls (e.g. CompleteActivityByID) require it explicitly.
 func NewTemporalManager(
 	c client.Client,
+	namespace string,
 	taskQueue string,
 	taskHandler TaskActivationHandler,
 	completionHandler WorkflowCompletionHandler) TemporalManager {
+	if strings.TrimSpace(namespace) == "" {
+		panic("namespace must not be empty")
+	}
 	if strings.TrimSpace(taskQueue) == "" {
 		panic("taskQueue must not be empty")
 	}
 
 	m := &temporalManagerImpl{
 		temporalClient: c,
+		namespace:      namespace,
 		taskQueue:      taskQueue,
 	}
 
@@ -291,7 +300,7 @@ func NewTemporalManager(
 
 	m.worker = w
 	m.activities = acts
-	slog.Info("temporal manager initialized", "task_queue", taskQueue)
+	slog.Info("temporal manager initialized", "namespace", namespace, "task_queue", taskQueue)
 	return m
 }
 
@@ -323,7 +332,7 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 // nodeID is the ID of the node
 // output is the key valye pairs that should be added to the global context
 func (m *temporalManagerImpl) TaskDone(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error {
-	return m.temporalClient.CompleteActivityByID(ctx, "default", workflowID, runID, nodeID, output, nil)
+	return m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, nodeID, output, nil)
 }
 
 func (m *temporalManagerImpl) TaskUpdate(ctx context.Context, workflowID, runID string, event UpdateEvent) error {

@@ -112,6 +112,7 @@ The orchestrator depends on `engine.TemporalManager` from [`go-temporal-workflow
 ```go
 parentWorkflowManager := engine.NewTemporalManager(
     temporalClient,
+    "default",                // must match the namespace temporalClient was dialed with
     "your-parent-queue",
     parentTaskHandler,        // called when a parent workflow hits a TASK node
     parentCompletionHandler,  // called when a parent workflow ends
@@ -119,6 +120,7 @@ parentWorkflowManager := engine.NewTemporalManager(
 
 taskWorkflowManager := engine.NewTemporalManager(
     temporalClient,
+    "default",
     "your-task-queue",
     taskHandler,              // called when a task workflow activates a SUBTASK node
     taskCompletionHandler,    // called when a task workflow ends

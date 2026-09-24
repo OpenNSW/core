@@ -14,6 +14,20 @@ import (
 	"go.temporal.io/sdk/mocks"
 )
 
+// TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace guards against TaskDone completing the
+// activity in a namespace other than the one the manager was configured with.
+func TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace(t *testing.T) {
+	mockClient := &mocks.Client{}
+	output := map[string]any{"k": "v"}
+	mockClient.On("CompleteActivityByID", mock.Anything, "staging", "wf-1", "run-1", "node-1", output, nil).
+		Return(nil)
+
+	m := &temporalManagerImpl{temporalClient: mockClient, namespace: "staging"}
+
+	require.NoError(t, m.TaskDone(context.Background(), "wf-1", "run-1", "node-1", output))
+	mockClient.AssertExpectations(t)
+}
+
 func TestTemporalManagerImpl_GetStatus_NotFound(t *testing.T) {
 	mockClient := &mocks.Client{}
 	mockClient.On("QueryWorkflow", mock.Anything, "missing-workflow", "", "GetStatus").

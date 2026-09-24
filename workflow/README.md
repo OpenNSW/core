@@ -165,6 +165,7 @@ import "github.com/OpenNSW/go-temporal-workflow"
 // Initialize the TemporalManager (this automatically registers the workflow and activities internally)
 manager := engine.NewTemporalManager(
     temporalClient,
+    "default",         // must match the namespace temporalClient was dialed with
     "your-task-queue",
     taskHandler,       // TaskActivationHandler
     completionHandler, // WorkflowCompletionHandler
