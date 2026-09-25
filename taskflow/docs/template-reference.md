@@ -192,6 +192,50 @@ The `Type` strings (`"markdown"`, `"jsonforms"`, …) are conventions between yo
 
 The interface (`Renderer.Render(context.Context, json.RawMessage, Facts) (json.RawMessage, error)`) is deliberately open — write whatever fits your UI.
 
+### The `zoneview` renderer
+
+`renderer/zoneview.TaskRenderer` is a richer renderer backed by `uiprojector`. Its render config has three top-level blocks:
+
+```json
+{
+  "id": "cda-apply-coconut-cert-flow:render",
+  "sections": {
+    "feedback": {
+      "templateId": "cda-apply-coconut-cert--feedback",
+      "title": "Officer Feedback & Deficiencies",
+      "projector": "MARKDOWN",
+      "dataKey": "rejection_reason",
+      "visibleWhen": { "states": ["PENDING_USER"], "requireDataKey": "rejection_reason" }
+    },
+    "user_form": {
+      "templateId": "cda-apply-coconut-cert--user-form",
+      "title": "CDA Export Coconut Certificate Application",
+      "projector": "FORM",
+      "dataKey": "userform",
+      "handles": [
+        { "command": "submit", "label": "Submit Application", "element": "primary_action" }
+      ]
+    }
+  },
+  "layouts": {
+    "layout_1": ["feedback", "user_form"]
+  },
+  "states": {
+    "PENDING_USER": {
+      "order": { "$ref": "#/layouts/layout_1" },
+      "actions": [{ "command": "submit" }]
+    },
+    "COMPLETED": { "order": { "$ref": "#/layouts/layout_1" } }
+  }
+}
+```
+
+- **`sections`** — what can be shown. `visibleWhen` decides whether a section is visible for the current state, data and claims; `handles` are the buttons it offers.
+- **`layouts`** — named orderings. Each is a permutation of **all** section keys and expresses relative order only, never visibility. States that agree on the relative order of the sections they show can share one layout.
+- **`states`** — per state, `actions` lists the commands legal in it (a section's handle is sent only if its command is listed), and `order` references the layout to render in. The reference must have the form `#/layouts/<name>` and name a defined layout, or rendering fails.
+
+The rendered view is the layout filtered down to the visible sections. A visible section the layout doesn't list is rendered after the listed ones; a state without `order` renders its sections sorted by key. See the [frontend guide](frontend-guide.md#the-zoneview-convention) for the output shape.
+
 ### Snapshot semantics
 
 When `StartTask` runs, the render config's bytes are copied into `TaskRecord.RenderConfig`. **Subsequent edits to the registry don't affect existing tasks.** This is intentional:
