@@ -25,6 +25,7 @@ import (
 	"github.com/OpenNSW/core/taskflow/store"
 	engine "github.com/OpenNSW/core/workflow"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 )
 
 /*
@@ -72,6 +73,10 @@ Flow Diagram:
 // TaskCompletedCallback is a callback function invoked when a Task workflow completes.
 // It is typically used to wake up the parent workflow with the final task output variables.
 type TaskCompletedCallback func(parentWorkflowID string, parentRunID string, parentNodeID string, finalVariables map[string]any) error
+
+// ErrStaleStep is returned (wrapped in a non-retryable Temporal error) by StartTaskStep when a later
+// step has already started, so this attempt is a late or duplicate one that must do nothing.
+var ErrStaleStep = errors.New("step is no longer the active step of the task")
 
 // TaskManager orchestrates decoupled tasks and interactions under parent workflows.
 // It bridges macro-level workflows and micro-level interactive tasks via a single DB entry per task.
@@ -195,18 +200,26 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 
 // StartTaskStep is called by the Task's workflow engine when it activates an interaction step.
 // It routes to the correct capability handler dynamically from the plugin registry.
+//
+// The step is claimed in the DB before the plugin runs, and the plugin's render state is written
+// only if the step is still the active one:
+//
+//  1. Claim: make this step (payload.ActivationID) the task's active step, at payload.Seq. The claim
+//     matches only if no later step has started. A retry of this same step matches again. A late
+//     attempt for a step that is already over matches nothing, and returns ErrStaleStep before the
+//     plugin runs, so it makes no outbound call and writes nothing.
+//  2. The plugin runs on an in-memory copy of the record.
+//  3. Render write: store the plugin's state and data, guarded by the active step and seq. A fast
+//     callback can already have completed this step and started the next one, in which case the
+//     write matches nothing and is dropped. That is success, not an error.
 func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
+	if payload.ActivationID == "" {
+		return nil, fmt.Errorf("[StartTaskStep] payload for workflow %s has no step ID", payload.WorkflowID)
+	}
+
 	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
 	if !exists {
 		return nil, fmt.Errorf("[StartTaskStep] no task record found for workflow %s", payload.WorkflowID)
-	}
-
-	record.TaskRunID = payload.RunID
-	record.SubTaskNodeID = payload.ActivationID
-	record.ActiveTaskTemplateID = payload.TaskTemplateID
-
-	for k, v := range payload.Inputs {
-		maputil.SetNestedKey(record.Data, k, v)
 	}
 
 	stepTemplate, err := steptemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
@@ -214,13 +227,43 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		return nil, fmt.Errorf("[StartTaskStep] load step template %q: %w", payload.TaskTemplateID, err)
 	}
 
-	// 2. Fetch the plugin from our registry using PluginType
+	// Fetch the plugin from our registry using PluginType
 	plugin, ok := tm.pluginsRegistry.Get(stepTemplate.PluginType)
 	if !ok {
 		return nil, fmt.Errorf("[StartTaskStep] unregistered plugin for plugin type %s (required for template: %s)", stepTemplate.PluginType, payload.TaskTemplateID)
 	}
 
-	// 3. Execute the plugin
+	// The step's data is exactly its mapped inputs: everything an earlier step submitted reaches
+	// this one through the workflow's variables and the node's input mapping, not through the row.
+	data := make(map[string]any, len(payload.Inputs))
+	for k, v := range payload.Inputs {
+		maputil.SetNestedKey(data, k, v)
+	}
+
+	rows, err := tm.db.ClaimStep(ctx, record.TaskID, store.StepClaim{
+		StepID:               payload.ActivationID,
+		Seq:                  payload.Seq,
+		ActiveTaskTemplateID: payload.TaskTemplateID,
+		State:                store.StateStartingStep,
+		Data:                 data,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("[StartTaskStep] claim step %s of task %s: %w", payload.ActivationID, record.TaskID, err)
+	}
+	if rows == 0 {
+		tm.logger.InfoContext(ctx, "dropping stale start of step", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq)
+		return nil, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("step %s (seq %d) of task %s is no longer current", payload.ActivationID, payload.Seq, record.TaskID),
+			"StaleStep", ErrStaleStep)
+	}
+
+	// The record the plugin sees is what the claim just stored.
+	record.ActiveStepID = payload.ActivationID
+	record.Seq = payload.Seq
+	record.ActiveTaskTemplateID = payload.TaskTemplateID
+	record.State = store.StateStartingStep
+	record.Data = data
+
 	pluginCtx := plugins.PluginContext{
 		Context:         ctx,
 		Record:          &record,
@@ -228,22 +271,29 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		OutputNamespace: stepTemplate.OutputNamespace,
 	}
 
-	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID)
+	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID)
 
 	err = plugin.Execute(pluginCtx, stepTemplate.PluginProperties)
-	if errors.Is(err, plugins.ErrSuspended) {
-		tm.db.SaveTask(pluginCtx.Context, record)
-		tm.logger.InfoContext(ctx, "step suspended, awaiting async completion", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "plugin_type", stepTemplate.PluginType)
-		return nil, activity.ErrResultPending
-	}
-	if err != nil {
+	suspended := errors.Is(err, plugins.ErrSuspended)
+	if err != nil && !suspended {
 		return nil, fmt.Errorf("[StartTaskStep] plugin for plugin type %q execution failed: %w", stepTemplate.PluginType, err)
 	}
 
-	tm.db.SaveTask(pluginCtx.Context, record)
+	rows, err = tm.db.WriteRenderState(pluginCtx.Context, record.TaskID, payload.ActivationID, payload.Seq, record.State, record.Data)
+	if err != nil {
+		return nil, fmt.Errorf("[StartTaskStep] write render state of step %s of task %s: %w", payload.ActivationID, record.TaskID, err)
+	}
+	if rows == 0 {
+		tm.logger.InfoContext(ctx, "dropped render state of a step that is no longer current", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq)
+	}
+
+	if suspended {
+		tm.logger.InfoContext(ctx, "step suspended, awaiting async completion", "task_id", record.TaskID, "step_id", payload.ActivationID, "plugin_type", stepTemplate.PluginType)
+		return nil, activity.ErrResultPending
+	}
 
 	// Otherwise, this step completed synchronously. Return its modified payload immediately to transition directly.
-	tm.logger.InfoContext(ctx, "step completed synchronously", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "plugin_type", stepTemplate.PluginType)
+	tm.logger.InfoContext(ctx, "step completed synchronously", "task_id", record.TaskID, "step_id", payload.ActivationID, "plugin_type", stepTemplate.PluginType)
 	return record.Data, nil
 }
 
@@ -275,48 +325,22 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	return nil
 }
 
-// waitForActiveStep polls the store for a short period to see if the task moves
-// out of the STARTING state and registers an active step. This handles the race
-// condition where an external callback or webhook completes a step immediately after
-// task creation, before the Temporal worker has executed the first StartTaskStep activity.
-func (tm *TaskManager) waitForActiveStep(ctx context.Context, taskID string) (store.TaskRecord, error) {
-	const (
-		maxAttempts = 5
-		delay       = 200 * time.Millisecond
-	)
-	for i := 0; i < maxAttempts; i++ {
-		record, exists := tm.db.GetTask(ctx, taskID)
-		if !exists {
-			return store.TaskRecord{}, fmt.Errorf("task %s not found", taskID)
-		}
-		if record.ActiveTaskTemplateID != "" || record.State == "COMPLETED" {
-			return record, nil
-		}
-		if i == maxAttempts-1 {
-			return record, nil
-		}
-		select {
-		case <-ctx.Done():
-			return store.TaskRecord{}, ctx.Err()
-		case <-time.After(delay):
-		}
-	}
-	return store.TaskRecord{}, nil
-}
-
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
 // data and resume the active step in the corresponding Task workflow.
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
-	record, err := tm.waitForActiveStep(ctx, taskID)
-	if err != nil {
-		return err
+	record, exists := tm.db.GetTask(ctx, taskID)
+	if !exists {
+		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	if record.State == "COMPLETED" {
+	if record.State == store.StateCompleted {
 		return fmt.Errorf("task %s already completed", taskID)
 	}
 
-	if record.ActiveTaskTemplateID == "" {
+	// No step is active until the first StartTaskStep has claimed it. Nothing addresses a step before
+	// then: a caller learns a step exists only from the task view or from a dispatch, and both
+	// come after the claim.
+	if record.ActiveStepID == "" || record.ActiveTaskTemplateID == "" {
 		return fmt.Errorf("task %s has no active step to complete", taskID)
 	}
 
@@ -355,7 +379,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 			record.Data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
 		}
 	}
-	tm.logger.InfoContext(ctx, "waking active activity", "activity_id", record.SubTaskNodeID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
+	tm.logger.InfoContext(ctx, "waking active activity", "step_id", record.ActiveStepID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
 
 	// CompleteActivation is intentionally called before SaveTask. Temporal enforces
 	// exactly-once completion per activity (CompleteActivityByID fails for
@@ -368,8 +392,8 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	err = tm.taskWorkflowManager.CompleteActivation(
 		ctx,
 		record.TaskWorkflowID,
-		record.TaskRunID,
-		record.SubTaskNodeID,
+		"", // the workflow's current run: a step ID is unique within the workflow
+		record.ActiveStepID,
 		payload, // pass full namespaced state back to the workflow
 	)
 	if err != nil {
