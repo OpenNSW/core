@@ -347,7 +347,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 			t.Errorf("expected task workflow ID %s, got %s", task.TaskWorkflowID, workflowID)
 		}
 		if activityID != "task-step" {
-			t.Errorf("expected active activity ID 'task-node', got %s", activityID)
+			t.Errorf("expected active activity ID 'task-step', got %s", activityID)
 		}
 		return nil
 	}
@@ -358,7 +358,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		"applicant_name": "Alice",
 		"email":          "alice@example.com",
 	}
-	if err := tm.CompleteTaskStep(context.Background(), task.TaskID, userData); err != nil {
+	if err := tm.CompleteTaskStep(context.Background(), task.TaskID, "task-step", userData); err != nil {
 		t.Fatalf("CompleteTaskStep failed: %v", err)
 	}
 	if !taskDoneCalled {
@@ -557,7 +557,7 @@ func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
 func TestCompleteTaskStep_UnknownTaskID(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	err := tm.CompleteTaskStep(context.Background(), "task-ghost", map[string]any{"x": 1})
+	err := tm.CompleteTaskStep(context.Background(), "task-ghost", "step-x", map[string]any{"x": 1})
 	if err == nil {
 		t.Fatal("expected error for unknown task ID, got nil")
 	}
@@ -573,9 +573,9 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	err := tm.CompleteTaskStep(context.Background(), "task-done", map[string]any{"x": 1})
-	if err == nil {
-		t.Fatal("expected error for already-completed task, got nil")
+	err := tm.CompleteTaskStep(context.Background(), "task-done", "step-x", map[string]any{"x": 1})
+	if !errors.Is(err, ErrStaleStep) {
+		t.Fatalf("err = %v, want ErrStaleStep for an already-completed task", err)
 	}
 }
 
@@ -589,9 +589,9 @@ func TestCompleteTaskStep_NoActiveStep(t *testing.T) {
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	err := tm.CompleteTaskStep(context.Background(), "task-starting", map[string]any{"x": 1})
-	if err == nil {
-		t.Fatal("expected error for task with no active step, got nil")
+	err := tm.CompleteTaskStep(context.Background(), "task-starting", "step-x", map[string]any{"x": 1})
+	if !errors.Is(err, ErrStaleStep) {
+		t.Fatalf("err = %v, want ErrStaleStep for a task with no active step", err)
 	}
 }
 
@@ -776,7 +776,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 	db.SaveTask(context.Background(), record)
 
 	// 1. Test failing validation (blocking)
-	err := tm.CompleteTaskStep(context.Background(), "test-task-ext", map[string]any{"age": 16.0})
+	err := tm.CompleteTaskStep(context.Background(), "test-task-ext", "step-123", map[string]any{"age": 16.0})
 	if err == nil {
 		t.Fatal("expected error due to underage payload, got nil")
 	}
@@ -806,7 +806,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 	}
 
 	// 2. Test successful validation (continues to POST_RESUME)
-	err = tm.CompleteTaskStep(context.Background(), "test-task-ext", map[string]any{"age": 20.0})
+	err = tm.CompleteTaskStep(context.Background(), "test-task-ext", "step-123", map[string]any{"age": 20.0})
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
