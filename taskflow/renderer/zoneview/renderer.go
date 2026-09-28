@@ -21,7 +21,7 @@ import (
 // it doesn't own. The projected sections are merged with their handles legal
 // in the current state, ordered by the state's layout, and returned as an
 // ordered list of EnrichedComponent. Section keys join the two decodes and
-// are dropped from the output.
+// are carried on each entry as its ID.
 type TaskRenderer struct {
 	assembler *uiprojector.Assembler
 }
@@ -74,6 +74,7 @@ func (r *TaskRenderer) Render(ctx context.Context, configRaw json.RawMessage, fa
 			return nil, fmt.Errorf("renderer: marshal section %q: %w", slot, err)
 		}
 		result = append(result, EnrichedComponent{
+			ID:      slot,
 			Title:   sec.Title,
 			Type:    secType,
 			Handles: filterLegalHandles(cfg.Sections[slot].Handles, legal),

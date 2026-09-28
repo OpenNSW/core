@@ -96,16 +96,18 @@ In this convention, `view` is a map from **slot name** (e.g. `"primary"`, `"side
 
 ### The `zoneview` convention
 
-The `zoneview` renderer (see [template reference](template-reference.md#the-zoneview-renderer)) returns `view` as an **ordered list** instead of a slot map. Position in the list is render order; there is no separate order field and no slot key:
+The `zoneview` renderer (see [template reference](template-reference.md#the-zoneview-renderer)) returns `view` as an **ordered list** instead of a slot map. Position in the list is render order; there is no separate order field. Each entry carries its section key as `id`:
 
 ```json
 "view": [
   {
+    "id": "feedback",
     "title": "Officer Feedback & Deficiencies",
     "type": "MARKDOWN",
     "payload": { "content": "…rendered markdown…" }
   },
   {
+    "id": "user_form",
     "title": "CDA Export Coconut Certificate Application",
     "type": "FORM",
     "handles": [
@@ -117,6 +119,7 @@ The `zoneview` renderer (see [template reference](template-reference.md#the-zone
 ```
 
 - Only sections visible in the current state (and to the current caller) are present.
+- `id` is the section's key in the render config. It is unique within the view.
 - `title` is omitted when the section has none.
 - `handles` lists the buttons legal in the current state; it is omitted when there are none, which means the entry is read-only.
 - An empty view is `[]`.

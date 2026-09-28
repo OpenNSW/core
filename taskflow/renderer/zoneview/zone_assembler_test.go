@@ -56,19 +56,19 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 	tests := []struct {
 		name        string
 		claims      map[string]bool
-		wantTitle   string
+		wantID      string
 		wantHandles int
 	}{
 		{
 			name:        "cha sees the workspace with its submit handle",
 			claims:      map[string]bool{"role:trader": false, "role:cha": true},
-			wantTitle:   "Workspace",
+			wantID:      "workspace",
 			wantHandles: 1,
 		},
 		{
 			name:        "trader sees only the notice, with no handles",
 			claims:      map[string]bool{"role:trader": true, "role:cha": false},
-			wantTitle:   "Status",
+			wantID:      "status_message",
 			wantHandles: 0,
 		},
 	}
@@ -83,8 +83,8 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 			if len(view) != 1 {
 				t.Fatalf("got %d components %v, want exactly 1", len(view), view)
 			}
-			if view[0].Title != tt.wantTitle {
-				t.Errorf("got component %q, want %q", view[0].Title, tt.wantTitle)
+			if view[0].ID != tt.wantID {
+				t.Errorf("got component %q, want %q", view[0].ID, tt.wantID)
 			}
 			if len(view[0].Handles) != tt.wantHandles {
 				t.Errorf("got %d handles, want %d", len(view[0].Handles), tt.wantHandles)

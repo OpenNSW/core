@@ -41,10 +41,10 @@ func decodeView(t *testing.T, raw json.RawMessage) []EnrichedComponent {
 	return view
 }
 
-func titles(view []EnrichedComponent) []string {
+func ids(view []EnrichedComponent) []string {
 	out := make([]string, len(view))
 	for i, c := range view {
-		out[i] = c.Title
+		out[i] = c.ID
 	}
 	return out
 }
@@ -87,20 +87,20 @@ func TestRender_OrdersSectionsByStateLayout(t *testing.T) {
 	r := newTestRenderer(t)
 
 	tests := []struct {
-		state      string
-		wantTitles []string
+		state   string
+		wantIDs []string
 	}{
-		{"PENDING_USER", []string{"Feedback", "User Form", "Appendix"}},
-		{"QUEUED_EXTERNALLY", []string{"Status", "User Form", "Appendix"}},
-		// No order: keys sorted — appendix, status, user_form.
-		{"COMPLETED", []string{"Appendix", "Status", "User Form"}},
+		{"PENDING_USER", []string{"feedback", "user_form", "appendix"}},
+		{"QUEUED_EXTERNALLY", []string{"status", "user_form", "appendix"}},
+		// No order: keys sorted.
+		{"COMPLETED", []string{"appendix", "status", "user_form"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.state, func(t *testing.T) {
 			raw := render(t, r, layoutConfig, tfrenderer.Facts{State: tt.state})
-			if got := titles(decodeView(t, raw)); !slices.Equal(got, tt.wantTitles) {
-				t.Errorf("got order %v, want %v", got, tt.wantTitles)
+			if got := ids(decodeView(t, raw)); !slices.Equal(got, tt.wantIDs) {
+				t.Errorf("got order %v, want %v", got, tt.wantIDs)
 			}
 		})
 	}
@@ -122,7 +122,7 @@ func TestRender_SectionsMissingFromLayoutGoLast(t *testing.T) {
 	}`
 
 	raw := render(t, r, config, tfrenderer.Facts{State: "PENDING_USER"})
-	if got, want := titles(decodeView(t, raw)), []string{"C", "A", "B"}; !slices.Equal(got, want) {
+	if got, want := ids(decodeView(t, raw)), []string{"c", "a", "b"}; !slices.Equal(got, want) {
 		t.Errorf("got order %v, want %v", got, want)
 	}
 }
@@ -161,20 +161,30 @@ func TestRender_UnresolvableOrderErrors(t *testing.T) {
 func TestRender_CarriesTitleAndLegalHandles(t *testing.T) {
 	r := newTestRenderer(t)
 
+	wantTitles := map[string]string{
+		"feedback":  "Feedback",
+		"status":    "Status",
+		"user_form": "User Form",
+		"appendix":  "Appendix",
+	}
+
 	for _, c := range decodeView(t, render(t, r, layoutConfig, tfrenderer.Facts{State: "PENDING_USER"})) {
+		if c.Title != wantTitles[c.ID] {
+			t.Errorf("%q: got title %q, want %q", c.ID, c.Title, wantTitles[c.ID])
+		}
 		wantHandles := 0
-		if c.Title == "User Form" {
+		if c.ID == "user_form" {
 			wantHandles = 1
 		}
 		if len(c.Handles) != wantHandles {
-			t.Errorf("%q: got %d handles, want %d", c.Title, len(c.Handles), wantHandles)
+			t.Errorf("%q: got %d handles, want %d", c.ID, len(c.Handles), wantHandles)
 		}
 	}
 
 	// In a state whose actions don't include submit, the handle is dropped.
 	for _, c := range decodeView(t, render(t, r, layoutConfig, tfrenderer.Facts{State: "QUEUED_EXTERNALLY"})) {
 		if len(c.Handles) != 0 {
-			t.Errorf("%q: got %d handles in QUEUED_EXTERNALLY, want 0", c.Title, len(c.Handles))
+			t.Errorf("%q: got %d handles in QUEUED_EXTERNALLY, want 0", c.ID, len(c.Handles))
 		}
 	}
 }
@@ -222,10 +232,10 @@ func TestRender_PayloadShapeByProjector(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if tt.got.Type != tt.wantType {
-			t.Errorf("%q: got type %q, want %q", tt.got.Title, tt.got.Type, tt.wantType)
+			t.Errorf("%q: got type %q, want %q", tt.got.ID, tt.got.Type, tt.wantType)
 		}
 		if string(tt.got.Payload) != tt.wantPayload {
-			t.Errorf("%q: got payload %s, want %s", tt.got.Title, tt.got.Payload, tt.wantPayload)
+			t.Errorf("%q: got payload %s, want %s", tt.got.ID, tt.got.Payload, tt.wantPayload)
 		}
 	}
 }
