@@ -143,10 +143,10 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     microRunner := workflow.NewTemporalManager(
         temporalClient, cfg.Temporal.Namespace, "MICRO_WORKFLOW_QUEUE",
         func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
-        func(wfID string, vars map[string]any) error { return tm.HandleTaskCompletion(ctx, wfID, vars) },
+        func(c workflow.WorkflowCompletion) error { return tm.HandleTaskCompletion(ctx, c) },
     )
-    onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
-        return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
+    onTaskCompleted := func(parentWorkflowID, parentStepID string, vars map[string]any) error {
+        return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentStepID, vars)
     }
     tm = orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, microRunner, onTaskCompleted, taskRenderer)
     microRunner.StartWorker()
