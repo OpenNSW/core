@@ -35,6 +35,15 @@ type TaskRecord struct {
 	SubTaskNodeID        string `json:"subtask_node_id"`
 	ActiveTaskTemplateID string `json:"active_task_template_id,omitempty"`
 
+	// ActiveStepID identifies the run of the step node that is currently active. Empty until the
+	// first step is claimed. It, with Seq, is written only by the guarded TaskStore methods below,
+	// never by SaveTask, so a stale full-record save cannot move it backwards.
+	ActiveStepID string `json:"active_step_id,omitempty"`
+	// Seq is the version of the task row: the workflow-wide step counter, advanced by the guarded
+	// writes. Guards compare against it so a write from an earlier step is dropped. Exposed
+	// read-only to clients as a version; it is never accepted as input.
+	Seq int64 `json:"seq"`
+
 	// Data holds generic, dynamic task execution state variables.
 	Data map[string]any `json:"data"`
 
@@ -61,10 +70,50 @@ func copyBytes(b json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), b...)
 }
 
+// Task states written by the guarded step statements.
+const (
+	// StateCompleted means the task workflow has ended.
+	StateCompleted = "COMPLETED"
+	// StateAdvancing means the active step's submission was accepted by the workflow, which is now
+	// moving to the next node. Clients keep the view until the state moves on.
+	StateAdvancing = "ADVANCING"
+)
+
+// StepClaim is the row change that makes a step the task's active step.
+type StepClaim struct {
+	// StepID is the ID of this run of the node, unique per run.
+	StepID string
+	// Seq is the workflow-wide step counter value for this run.
+	Seq int64
+	// ActiveTaskTemplateID is the step template the step runs.
+	ActiveTaskTemplateID string
+	// State is the render state to show while the step starts.
+	State string
+	// Data replaces the task data. It is set from the step's inputs, not merged.
+	Data map[string]any
+}
+
 // TaskStore is an interface that any persistent or in-memory database used by the TaskManager should implement.
+//
+// The four step methods below are conditional writes. Each is one atomic statement whose guard is
+// part of the write, so a write from a step that is no longer current changes nothing. Each returns
+// the number of rows changed: 0 means the write was stale and was dropped, which is not an error.
+// SaveTask must not write ActiveStepID or Seq.
 type TaskStore interface {
 	SaveTask(context context.Context, record TaskRecord)
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
 	GetAllTasks(context context.Context, parentWorkflowID string) []TaskRecord
+
+	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq, so a
+	// retry of the same step matches again and an older step's late attempt does not.
+	ClaimStep(context context.Context, taskID string, claim StepClaim) (int64, error)
+	// WriteRenderState sets the state and data the step shows once its plugin has run. Guard: the
+	// active step is stepID and the stored seq equals seq.
+	WriteRenderState(context context.Context, taskID, stepID string, seq int64, state string, data map[string]any) (int64, error)
+	// PersistSubmission stores the data submitted for the active step, sets StateAdvancing and
+	// advances seq to seq+1. Guard: the active step is stepID and the stored seq equals seq.
+	PersistSubmission(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
+	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq.
+	CompleteTask(context context.Context, taskID string, seq int64) (int64, error)
 }
