@@ -72,12 +72,12 @@ type TaskTemplateConfig struct {
 
 // EnrichedComponent is one entry of the rendered view: projector output
 // (Title, Type, Payload) merged with the section's handles legal in the
-// current state. The section key joins the two and is then dropped; the
-// entry's position in the view is its render order. There is no separate
+// current state. ID is the section's key in the render config. There is no separate
 // role/interactivity label: a zone is interactive iff Handles is non-empty,
 // which is the only fact any consumer needs to decide editability and footer
 // visibility.
 type EnrichedComponent struct {
+	ID      string          `json:"id"`
 	Title   string          `json:"title,omitempty"`
 	Type    string          `json:"type"`
 	Handles []HandleClaim   `json:"handles,omitempty"`
