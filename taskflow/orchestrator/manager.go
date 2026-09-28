@@ -549,6 +549,8 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		TaskID:    record.TaskID,
 		TaskType:  record.TaskType,
 		State:     record.State,
+		StepID:    record.ActiveStepID,
+		Version:   record.Seq,
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt,
 		View:      view, // actually attach the render output
@@ -571,6 +573,8 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string)
 			TaskID:    r.TaskID,
 			TaskType:  r.TaskType,
 			State:     r.State,
+			StepID:    r.ActiveStepID,
+			Version:   r.Seq,
 			CreatedAt: r.CreatedAt,
 			UpdatedAt: r.UpdatedAt,
 		})
