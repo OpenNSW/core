@@ -323,6 +323,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		RunID:          "task-run",
 		NodeID:         "task-node",
 		ActivationID:   "task-step",
+		Seq:            1,
 		TaskTemplateID: "generic_user_input",
 	}
 	if _, err := tm.StartTaskStep(context.Background(), payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
@@ -333,8 +334,8 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	if task.State != "PENDING_USER" {
 		t.Errorf("expected status 'PENDING_USER', got '%s'", task.State)
 	}
-	if task.TaskRunID != "task-run" {
-		t.Errorf("expected Task run ID 'task-run', got '%s'", task.TaskRunID)
+	if task.ActiveStepID != "task-step" || task.Seq != 1 {
+		t.Errorf("expected active step (task-step, 1), got (%s, %d)", task.ActiveStepID, task.Seq)
 	}
 
 	// 3. CompleteTaskStep
@@ -748,8 +749,8 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 		State:                "PENDING_USER",
 		ActiveTaskTemplateID: "generic_user_input_with_extensions",
 		TaskWorkflowID:       "wf-123",
-		TaskRunID:            "run-123",
-		SubTaskNodeID:        "node-123",
+		ActiveStepID:         "step-123",
+		Seq:                  1,
 	}
 	db.SaveTask(context.Background(), record)
 

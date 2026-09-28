@@ -6,7 +6,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"sync"
 	"testing"
 
@@ -81,7 +80,7 @@ func TestTaskNodeInLoopGetsNewActivationIDEachRun(t *testing.T) {
 	require.Len(t, ids, 3, "every run has its own step ID")
 
 	info := instance.NodeInfo["poll"]
-	require.True(t, strings.HasPrefix(info.ID, "poll:"), "NodeInfo.ID still carries its legacy composite format: %q", info.ID)
+	require.Equal(t, "poll", info.ID)
 	require.Equal(t, int64(3), info.Seq)
 	require.Equal(t, seen[2].activityID, info.ActivationID, "NodeInfo describes the latest run")
 }
