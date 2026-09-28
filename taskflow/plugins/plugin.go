@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/OpenNSW/core/taskflow/callbacktoken"
 	"github.com/OpenNSW/core/taskflow/store"
 )
 
@@ -24,6 +25,17 @@ type PluginContext struct {
 	Record          *store.TaskRecord
 	Inputs          map[string]any
 	OutputNamespace string
+}
+
+// CallbackToken returns the opaque token a plugin sends to an external system so it can call back
+// about the record's active step. The external system stores it, uses it as its idempotency key and
+// echoes it on the callback, which decodes it with callbacktoken.Decode to the task and the step.
+func CallbackToken(rec *store.TaskRecord) (string, error) {
+	token, err := callbacktoken.Encode(rec.TaskID, rec.ActiveStepID)
+	if err != nil {
+		return "", fmt.Errorf("build callback token for task %q step %q: %w", rec.TaskID, rec.ActiveStepID, err)
+	}
+	return token, nil
 }
 
 // TaskPlugin is the interface that all interaction and system action handlers must implement.

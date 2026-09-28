@@ -44,7 +44,11 @@ func (p *PaymentPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 
 	slog.InfoContext(ctx.Context, "payment_plugin: dispatching", "task_id", ctx.Record.TaskID, "url", cfg.PaymentServiceURL)
 
-	if err := p.dispatcher(ctx.Context, cfg.PaymentServiceURL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
+	token, err := CallbackToken(ctx.Record)
+	if err != nil {
+		return err
+	}
+	if err := p.dispatcher(ctx.Context, cfg.PaymentServiceURL, token, ctx.Record.Data); err != nil {
 		return fmt.Errorf("payment dispatch failed: %w", err)
 	}
 
