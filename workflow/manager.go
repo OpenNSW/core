@@ -26,6 +26,12 @@ import (
 // types, so they stay agnostic to whatever engine backs the Manager.
 var ErrWorkflowNotFound = errors.New("workflow execution not found")
 
+// ErrActivationNotPending is returned by Manager.CompleteActivation when the addressed step is not waiting to be
+// completed: it already completed, or the workflow ended, or no such step ever existed. Nothing was
+// changed. It is how a caller learns its call was late or a duplicate, for example one for an
+// earlier run of a node the workflow has since moved past. Check for it with errors.Is.
+var ErrActivationNotPending = errors.New("step is not pending: it already completed or does not exist")
+
 // ExecutionStatus defines the allowed states for a workflow instance.
 type ExecutionStatus string
 
@@ -352,7 +358,12 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 // activationID is the ID of the step (TaskPayload.ActivationID), which is the Activity's ID
 // output is the key valye pairs that should be added to the global context
 func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error {
-	return m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, activationID, output, nil)
+	err := m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, activationID, output, nil)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return fmt.Errorf("%w: %w", ErrActivationNotPending, err)
+	}
+	return err
 }
 
 func (m *temporalManagerImpl) TaskUpdate(ctx context.Context, workflowID, runID string, event UpdateEvent) error {
