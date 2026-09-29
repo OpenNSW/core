@@ -10,24 +10,11 @@ import (
 	"testing"
 
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/uiprojector"
 )
-
-// stubTemplates resolves every template id to the same markdown body, so the
-// tests below exercise visibility and handle merging rather than projection.
-type stubTemplates struct{}
-
-func (stubTemplates) GetTemplate(_ context.Context, _ string) ([]byte, error) {
-	return []byte(`{"template":"body"}`), nil
-}
 
 func newTestAssembler(t *testing.T) *ZoneViewAssembler {
 	t.Helper()
-	asm, err := uiprojector.NewAssembler(stubTemplates{}, uiprojector.DefaultProjectors())
-	if err != nil {
-		t.Fatalf("build uiprojector assembler: %v", err)
-	}
-	return NewZoneViewAssembler(NewTaskRenderer(asm))
+	return NewZoneViewAssembler(newTestRenderer(t))
 }
 
 // claimGatedConfig is the shape a per-role task template uses: one section per
@@ -37,11 +24,13 @@ const claimGatedConfig = `{
   "sections": {
     "status_message": {
       "templateId": "waiting",
+      "title": "Status",
       "projector": "MARKDOWN",
       "visibleWhen": { "states": ["PENDING_USER"], "requireClaim": "role:trader" }
     },
     "workspace": {
       "templateId": "form",
+      "title": "Workspace",
       "projector": "MARKDOWN",
       "visibleWhen": { "states": ["PENDING_USER"], "requireClaim": "role:cha" },
       "handles": [{ "command": "submit", "label": "Submit", "element": "primary_action" }]
@@ -59,39 +48,27 @@ func pendingRecord(config string) store.TaskRecord {
 	}
 }
 
-func decodeView(t *testing.T, zv ZoneView) map[string]EnrichedComponent {
-	t.Helper()
-	var view map[string]EnrichedComponent
-	if err := json.Unmarshal(zv.View, &view); err != nil {
-		t.Fatalf("decode view: %v", err)
-	}
-	return view
-}
-
 // A denied claim must hide the section *and* the handles it claims: the handles
-// only reach the wire through a slot the projector emitted.
+// only reach the wire through a section the projector emitted.
 func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 	a := newTestAssembler(t)
 
 	tests := []struct {
 		name        string
 		claims      map[string]bool
-		wantSlot    string
-		wantAbsent  string
+		wantID      string
 		wantHandles int
 	}{
 		{
 			name:        "cha sees the workspace with its submit handle",
 			claims:      map[string]bool{"role:trader": false, "role:cha": true},
-			wantSlot:    "workspace",
-			wantAbsent:  "status_message",
+			wantID:      "workspace",
 			wantHandles: 1,
 		},
 		{
 			name:        "trader sees only the notice, with no handles",
 			claims:      map[string]bool{"role:trader": true, "role:cha": false},
-			wantSlot:    "status_message",
-			wantAbsent:  "workspace",
+			wantID:      "status_message",
 			wantHandles: 0,
 		},
 	}
@@ -102,19 +79,15 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Assemble: %v", err)
 			}
-			view := decodeView(t, zv)
+			view := decodeView(t, zv.View)
 			if len(view) != 1 {
-				t.Fatalf("got %d slots %v, want exactly 1", len(view), view)
+				t.Fatalf("got %d components %v, want exactly 1", len(view), view)
 			}
-			got, ok := view[tt.wantSlot]
-			if !ok {
-				t.Fatalf("slot %q missing from view %v", tt.wantSlot, view)
+			if view[0].ID != tt.wantID {
+				t.Errorf("got component %q, want %q", view[0].ID, tt.wantID)
 			}
-			if _, ok := view[tt.wantAbsent]; ok {
-				t.Errorf("slot %q must not be rendered for these claims", tt.wantAbsent)
-			}
-			if len(got.Handles) != tt.wantHandles {
-				t.Errorf("got %d handles, want %d", len(got.Handles), tt.wantHandles)
+			if len(view[0].Handles) != tt.wantHandles {
+				t.Errorf("got %d handles, want %d", len(view[0].Handles), tt.wantHandles)
 			}
 		})
 	}
@@ -144,6 +117,7 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	  "sections": {
 	    "workspace": {
 	      "templateId": "form",
+	      "title": "Workspace",
 	      "projector": "MARKDOWN",
 	      "visibleWhen": { "states": ["PENDING_USER"] },
 	      "handles": [{ "command": "submit", "label": "Submit" }]
@@ -156,8 +130,8 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-	view := decodeView(t, zv)
-	if len(view) != 1 || len(view["workspace"].Handles) != 1 {
+	view := decodeView(t, zv.View)
+	if len(view) != 1 || len(view[0].Handles) != 1 {
 		t.Fatalf("got view %v, want workspace with 1 handle", view)
 	}
 	if zv.State != "PENDING_USER" || zv.TaskID != "task-1" {

@@ -94,6 +94,38 @@ In this convention, `view` is a map from **slot name** (e.g. `"primary"`, `"side
 2. For each slot, look up the appropriate UI widget to display based on its `type`.
 3. Render the widget using the corresponding `payload`.
 
+### The `zoneview` convention
+
+The `zoneview` renderer (see [template reference](template-reference.md#the-zoneview-renderer)) returns `view` as an **ordered list** instead of a slot map. Position in the list is render order; there is no separate order field. Each entry carries its section key as `id`:
+
+```json
+"view": [
+  {
+    "id": "feedback",
+    "title": "Officer Feedback & Deficiencies",
+    "type": "MARKDOWN",
+    "payload": { "content": "…rendered markdown…" }
+  },
+  {
+    "id": "user_form",
+    "title": "CDA Export Coconut Certificate Application",
+    "type": "FORM",
+    "handles": [
+      { "command": "submit", "label": "Submit Application", "element": "primary_action" }
+    ],
+    "payload": { "schema": { … }, "uiSchema": { … }, "data": { … } }
+  }
+]
+```
+
+- Only sections visible in the current state (and to the current caller) are present.
+- `id` is the section's key in the render config. It is unique within the view.
+- `title` is omitted when the section has none.
+- `handles` lists the buttons legal in the current state; it is omitted when there are none, which means the entry is read-only.
+- An empty view is `[]`.
+
+The frontend renders the entries top to bottom, picking a widget by `type`.
+
 ---
 
 ## The standard interaction loop
