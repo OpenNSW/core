@@ -28,7 +28,7 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		RenderConfig:         json.RawMessage(`{"layout":"form"}`),
 		ParentWorkflowID:     "consignment-9--node-3--branch-1",
 		ParentRunID:          "run-1",
-		ParentNodeID:         "node-3",
+		ParentStepID:         "step-3",
 		RootWorkflowID:       "consignment-9",
 		TaskWorkflowID:       "task-wf-1",
 		TaskRunID:            "task-run-1",

@@ -109,7 +109,7 @@ func TestAdminCompleteResolvesInputMappingError(t *testing.T) {
 	require.Empty(t, instance.NodeInfo["task"].LastError)
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestAdminParkNotifiesHostAppOnFreshExecution pins that parking a node actually invokes
@@ -260,7 +260,7 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -302,7 +302,7 @@ func TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -361,9 +361,9 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "first"}, nil).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "second"}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -519,7 +519,7 @@ func TestAdminCompleteRejectedForParkedGatewayNode(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -594,9 +594,9 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
 	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
@@ -624,7 +624,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	require.Contains(t, env.GetWorkflowError().Error(), "boom")
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestAdminCompleteResolvesWaitForSignalOutputMappingError verifies that when a

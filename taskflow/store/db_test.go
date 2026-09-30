@@ -64,7 +64,7 @@ func TestTaskStoreInterface(t *testing.T) {
 		State:            "PENDING_USER",
 		ParentWorkflowID: "parent-wf-1",
 		ParentRunID:      "parent-run-1",
-		ParentNodeID:     "node-1",
+		ParentStepID:     "step-1",
 		TaskWorkflowID:   "task-wf-1",
 		TaskRunID:        "task-run-1",
 		SubTaskNodeID:    "activity-1",

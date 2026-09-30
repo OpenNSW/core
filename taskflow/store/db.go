@@ -20,10 +20,10 @@ type TaskRecord struct {
 	State        string          `json:"status"` // State drives UI rendering ("PENDING_USER", "QUEUED_EXTERNALLY", "COMPLETED")
 	RenderConfig json.RawMessage `json:"render_config"`
 
-	// Parent coordinates — used to wake the parent workflow when this task finishes
+	// Parent coordinates — used to wake the parent workflow when this task finishes.
 	ParentWorkflowID string `json:"parent_workflow_id"`
 	ParentRunID      string `json:"parent_run_id"`
-	ParentNodeID     string `json:"parent_node_id"`
+	ParentStepID     string `json:"parent_step_id"` // the parent's step ID: the Activity to complete
 
 	RootWorkflowID string `json:"root_workflow_id"`
 
