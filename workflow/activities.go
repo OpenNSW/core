@@ -17,7 +17,7 @@ type Activities struct {
 	// ExecuteTaskActivityHandler is invoked when the workflow engine encounters a task node.
 	// - For synchronous execution, it should return a nil error with a map containing the results.
 	// - For asynchronous execution, it should return a nil map and an ErrResultPending error,
-	//   which pauses the workflow activity until an external handler triggers TaskDone.
+	//   which pauses the workflow activity until an external handler triggers CompleteActivation.
 	ExecuteTaskActivityHandler func(TaskPayload) (map[string]any, error)
 
 	// WorkflowCompletedActivityHandler is invoked when the overall workflow execution succeeds and reaches

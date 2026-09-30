@@ -51,7 +51,7 @@ func (m *mockTemporalManager) StartWorkflow(ctx context.Context, workflowID stri
 	return nil
 }
 
-func (m *mockTemporalManager) TaskDone(ctx context.Context, workflowID string, runID string, activityID string, result map[string]any) error {
+func (m *mockTemporalManager) CompleteActivation(ctx context.Context, workflowID string, runID string, activityID string, result map[string]any) error {
 	if m.taskDoneFunc != nil {
 		return m.taskDoneFunc(ctx, workflowID, runID, activityID, result)
 	}
@@ -266,15 +266,15 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		t.Errorf("expected root workflow 'parent-workflow', got '%s'", task.RootWorkflowID)
 	}
 
-	// 2. StartSubTask — generic_user_input
+	// 2. StartTaskStep — generic_user_input
 	payloadTaskWF := engine.TaskPayload{
 		WorkflowID:     task.TaskWorkflowID,
 		RunID:          "task-run",
 		NodeID:         "task-node",
 		TaskTemplateID: "generic_user_input",
 	}
-	if _, err := tm.StartSubTask(context.Background(), payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
-		t.Fatalf("StartSubTask failed: %v", err)
+	if _, err := tm.StartTaskStep(context.Background(), payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
+		t.Fatalf("StartTaskStep failed: %v", err)
 	}
 
 	task, _ = storeMock.GetTask(context.Background(), task.TaskID)
@@ -298,7 +298,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		return nil
 	}
 
-	// The caller no longer namespaces the payload — the subtask template's
+	// The caller no longer namespaces the payload — the step template's
 	// OutputNamespace ("userform") does that on the server side.
 	userData := map[string]any{
 		"applicant_name": "Alice",
@@ -308,7 +308,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		t.Fatalf("CompleteTaskStep failed: %v", err)
 	}
 	if !taskDoneCalled {
-		t.Error("expected TaskDone to be called on task workflow")
+		t.Error("expected CompleteActivation to be called on task workflow")
 	}
 
 	task, _ = storeMock.GetTask(context.Background(), task.TaskID)
@@ -412,13 +412,13 @@ func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// StartSubTask — error paths
+// StartTaskStep — error paths
 // ---------------------------------------------------------------------------
 
-func TestStartSubTask_UnknownWorkflowID(t *testing.T) {
+func TestStartTaskStep_UnknownWorkflowID(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartSubTask(context.Background(), engine.TaskPayload{
+	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
 		WorkflowID:     "workflow-that-was-never-registered",
 		TaskTemplateID: "generic_user_input",
 	})
@@ -427,7 +427,7 @@ func TestStartSubTask_UnknownWorkflowID(t *testing.T) {
 	}
 }
 
-func TestStartSubTask_UnknownTaskTemplateID(t *testing.T) {
+func TestStartTaskStep_UnknownTaskTemplateID(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.SaveTask(context.Background(), store.TaskRecord{
 		TaskID:         "task-1",
@@ -438,16 +438,16 @@ func TestStartSubTask_UnknownTaskTemplateID(t *testing.T) {
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartSubTask(context.Background(), engine.TaskPayload{
+	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
 		WorkflowID:     "task-workflow-1",
 		TaskTemplateID: "not_a_real_template",
 	})
 	if err == nil {
-		t.Fatal("expected error for unknown task_template_id in StartSubTask, got nil")
+		t.Fatal("expected error for unknown task_template_id in StartTaskStep, got nil")
 	}
 }
 
-func TestStartSubTask_ExternalReviewPath(t *testing.T) {
+func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.SaveTask(context.Background(), store.TaskRecord{
 		TaskID:         "task-ext",
@@ -458,14 +458,14 @@ func TestStartSubTask_ExternalReviewPath(t *testing.T) {
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	_, err := tm.StartSubTask(context.Background(), engine.TaskPayload{
+	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
 		WorkflowID:     "task-ext-workflow",
 		RunID:          "run-1",
 		NodeID:         "node-ext",
 		TaskTemplateID: "generic_external_review",
 	})
 	if err != nil && !errors.Is(err, activity.ErrResultPending) {
-		t.Fatalf("StartSubTask for generic_external_review failed: %v", err)
+		t.Fatalf("StartTaskStep for generic_external_review failed: %v", err)
 	}
 
 	task, _ := db.GetTask(context.Background(), "task-ext")
@@ -503,7 +503,7 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 	}
 }
 
-func TestCompleteTaskStep_NoActiveSubTask(t *testing.T) {
+func TestCompleteTaskStep_NoActiveStep(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.SaveTask(context.Background(), store.TaskRecord{
 		TaskID: "task-starting",
@@ -515,7 +515,7 @@ func TestCompleteTaskStep_NoActiveSubTask(t *testing.T) {
 
 	err := tm.CompleteTaskStep(context.Background(), "task-starting", map[string]any{"x": 1})
 	if err == nil {
-		t.Fatal("expected error for task with no active subtask step, got nil")
+		t.Fatal("expected error for task with no active step, got nil")
 	}
 }
 
@@ -687,7 +687,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 
 	tm := NewTaskManager(db, registry, newTestPluginsRegistry(), extReg, &mockTemporalManager{}, noopCallback, noopRenderer{})
 
-	// Setup a task record with active subtask configuration
+	// Setup a task record with active step configuration
 	record := store.TaskRecord{
 		TaskID:               "test-task-ext",
 		TaskType:             "TEST",
@@ -720,7 +720,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 	// Reset execution flag
 	preExecuted = false
 
-	// Mock temporal manager to check if TaskDone is called
+	// Mock temporal manager to check if CompleteActivation is called
 	taskDoneCalled := false
 	tm.taskWorkflowManager = &mockTemporalManager{
 		taskDoneFunc: func(ctx context.Context, workflowID, runID, activityID string, result map[string]any) error {
@@ -739,7 +739,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 		t.Error("pre-resume extension was not executed on success")
 	}
 	if !taskDoneCalled {
-		t.Error("expected Temporal TaskDone to be called")
+		t.Error("expected Temporal CompleteActivation to be called")
 	}
 
 	// Wait for async POST_RESUME extension to execute

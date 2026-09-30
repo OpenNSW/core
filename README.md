@@ -72,7 +72,7 @@ flowchart TD
         TM["micro workflows · human-in-the-loop steps"]
     end
 
-    subgraph pluginset["Subtask Plugins"]
+    subgraph pluginset["Step Plugins"]
         P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · API_CALL · custom"]
     end
 
@@ -142,7 +142,7 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     var tm *orchestrator.TaskManager
     microRunner := workflow.NewTemporalManager(
         temporalClient, cfg.Temporal.Namespace, "MICRO_WORKFLOW_QUEUE",
-        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartSubTask(ctx, p) },
+        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
         func(wfID string, vars map[string]any) error { return tm.HandleTaskCompletion(ctx, wfID, vars) },
     )
     onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
