@@ -1,96 +1,177 @@
 # database
 
-A thin wrapper around [GORM](https://gorm.io) and the PostgreSQL driver that handles connection setup, pool configuration, health checks, and operates with configurable query logging.
+A small `database/sql` connection factory that handles connection setup, pool configuration, and health checks for PostgreSQL, MySQL, and SQLite. It returns a standard `*sql.DB`, so it works with any library built on `database/sql` (GORM, sqlc, sqlx, bun, ent, …).
 
 ## Quick start
 
 ```go
+import (
+    "context"
+
+    "github.com/OpenNSW/core/database"
+    _ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" driver
+)
+
 cfg := database.Config{
-    Host:     "localhost",
-    Port:     5432,
-    User:     "myuser",
-    Password: "mypassword",
-    Name:     "mydb",
-    SSLMode:  "disable",
+    Driver: database.Postgres,
+    Postgres: &database.PostgresConfig{
+        Host:     "localhost",
+        Port:     5432,
+        User:     "myuser",
+        Password: "mypassword",
+        Name:     "mydb",
+        SSLMode:  "disable",
+        Pool:     database.PoolConfig{MaxOpenConns: 25},
+    },
 }
 
-db, err := database.New(cfg)
+ctx := context.Background()
+db, err := database.New(ctx, cfg)
 if err != nil {
     log.Fatal(err)
 }
-defer database.Close(db)
+defer db.Close()
 ```
 
-`db` is a `*gorm.DB` ready to use for all GORM operations.
+The same configuration in YAML:
+
+```yaml
+database:
+  driver: postgres
+  postgres:
+    host: localhost
+    port: 5432
+    user: myuser
+    password: mypassword
+    name: mydb
+    sslMode: disable
+    pool:
+      maxOpenConns: 25
+```
+
+## Drivers
+
+`Config.Driver` selects which block is used. Blocks for other drivers are ignored, so a config file can hold several and switch between them by changing `driver`.
+
+The package does not import any database driver, so you only pull in the one you use. Blank-import the driver that matches `Config.Driver`:
+
+| `Driver`            | Block      | Import                                | Notes                          |
+|---------------------|------------|---------------------------------------|--------------------------------|
+| `database.Postgres` | `postgres` | `_ "github.com/jackc/pgx/v5/stdlib"`  |                                |
+| `database.MySQL`    | `mysql`    | `_ "github.com/go-sql-driver/mysql"`  | `parseTime=true` is always set |
+| `database.SQLite`   | `sqlite`   | `_ "modernc.org/sqlite"`              | Pure Go, no cgo                |
+
+If the import is missing, `New` returns an error such as `sql: unknown driver "pgx" (forgotten import?)`.
+
+### SQLite
+
+```yaml
+database:
+  driver: sqlite
+  sqlite:
+    path: app.db # or ":memory:"
+    pool:
+      maxOpenConns: 1
+```
+
+SQLite allows one writer at a time; concurrent writes through a larger pool fail with `database is locked`. `maxOpenConns: 1` is usually the right choice. With `:memory:`, each connection gets its own database, so a single connection is also required to see the same data.
+
+## Using with GORM
+
+Wrap the returned `*sql.DB` with the GORM dialector for your driver. GORM-specific settings such as the logger and `NowFunc` are configured here:
+
+```go
+import (
+    "time"
+
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+    "gorm.io/gorm/logger"
+)
+
+sqlDB, err := database.New(ctx, cfg)
+if err != nil {
+    log.Fatal(err)
+}
+
+gdb, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
+    Logger:  logger.Default.LogMode(logger.Error),
+    NowFunc: func() time.Time { return time.Now().UTC() },
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+For the other drivers use `mysql.New(mysql.Config{Conn: sqlDB})` (`gorm.io/driver/mysql`) or `sqlite.Dialector{Conn: sqlDB}` (`github.com/glebarez/sqlite`, which uses `modernc.org/sqlite`).
 
 ## Configuration
 
-| Field                    | Type       | Required | Description                                                         |
-|--------------------------|------------|----------|---------------------------------------------------------------------|
-| `Host`                   | `string`   | ✅       | Database host                                                       |
-| `Port`                   | `int`      |          | Port number. Omit to use the driver default                         |
-| `User`                   | `string`   | ✅       | Database user                                                       |
-| `Password`               | `string`   | ✅       | Database password. Special characters are URL-encoded automatically |
-| `Name`                   | `string`   | ✅       | Database name                                                       |
-| `SSLMode`                | `string`   |          | PostgreSQL SSL mode (`disable`, `require`, `verify-full`, …)        |
-| `MaxIdleConns`           | `int`      |          | Maximum idle connections in the pool                                |
-| `MaxOpenConns`           | `int`      |          | Maximum open connections in the pool                                |
-| `MaxConnLifetimeSeconds` | `int`      |          | Maximum connection lifetime in seconds                              |
-| `LogLevel`               | `LogLevel` |          | Query log verbosity (see below). Defaults to `LogError`             |
+### `Config`
 
-### Log levels
+| Field      | YAML       | Type              | Description                                    |
+|------------|------------|-------------------|------------------------------------------------|
+| `Driver`   | `driver`   | `Driver`          | Required. `postgres`, `mysql`, or `sqlite`     |
+| `Postgres` | `postgres` | `*PostgresConfig` | Required when `driver` is `postgres`           |
+| `MySQL`    | `mysql`    | `*MySQLConfig`    | Required when `driver` is `mysql`              |
+| `SQLite`   | `sqlite`   | `*SQLiteConfig`   | Required when `driver` is `sqlite`             |
 
-Control how much GORM logs about the queries it runs.
+### `PostgresConfig`
 
-| Constant             | Behaviour                                   |
-|----------------------|---------------------------------------------|
-| `database.LogSilent` | No output at all                            |
-| `database.LogError`  | Errors only **(default)**                   |
-| `database.LogWarn`   | Errors + slow queries                       |
-| `database.LogInfo`   | Every SQL statement — useful in development |
+| Field      | YAML       | Type         | Required | Description                                                  |
+|------------|------------|--------------|----------|--------------------------------------------------------------|
+| `Host`     | `host`     | `string`     | ✅       | Database host                                                |
+| `Port`     | `port`     | `int`        |          | Port number. Omit to use the driver default                  |
+| `User`     | `user`     | `string`     | ✅       | Database user                                                |
+| `Password` | `password` | `string`     | ✅       | Database password. Special characters are URL-encoded        |
+| `Name`     | `name`     | `string`     | ✅       | Database name                                                |
+| `SSLMode`  | `sslMode`  | `string`     |          | PostgreSQL SSL mode (`disable`, `require`, `verify-full`, …) |
+| `Pool`     | `pool`     | `PoolConfig` |          | Connection pool settings                                     |
 
-```go
-// Development: log every query
-cfg := database.Config{
-    // ...
-    LogLevel: database.LogInfo,
-}
+### `MySQLConfig`
 
-// Production: log errors only (or nothing)
-cfg := database.Config{
-    // ...
-    LogLevel: database.LogError, // same as omitting the field
-}
-```
+| Field      | YAML       | Type         | Required | Description                                 |
+|------------|------------|--------------|----------|---------------------------------------------|
+| `Host`     | `host`     | `string`     | ✅       | Database host                               |
+| `Port`     | `port`     | `int`        |          | Port number. Omit to use the driver default |
+| `User`     | `user`     | `string`     | ✅       | Database user                               |
+| `Password` | `password` | `string`     | ✅       | Database password                           |
+| `Name`     | `name`     | `string`     | ✅       | Database name                               |
+| `Pool`     | `pool`     | `PoolConfig` |          | Connection pool settings                    |
+
+### `SQLiteConfig`
+
+| Field  | YAML   | Type         | Required | Description                                    |
+|--------|--------|--------------|----------|------------------------------------------------|
+| `Path` | `path` | `string`     | ✅       | Database file path, or `:memory:`              |
+| `Pool` | `pool` | `PoolConfig` |          | Connection pool settings                       |
+
+### `PoolConfig`
+
+| Field                    | YAML                     | Type  | Description                            |
+|--------------------------|--------------------------|-------|----------------------------------------|
+| `MaxIdleConns`           | `maxIdleConns`           | `int` | Maximum idle connections in the pool   |
+| `MaxOpenConns`           | `maxOpenConns`           | `int` | Maximum open connections in the pool   |
+| `MaxConnLifetimeSeconds` | `maxConnLifetimeSeconds` | `int` | Maximum connection lifetime in seconds |
+
+Any pool field left at `0` is skipped so the `database/sql` default applies.
 
 ## API
 
-### `New(cfg Config) (*gorm.DB, error)`
+### `New(ctx context.Context, cfg Config) (*sql.DB, error)`
 
-Validates the config, opens a connection, configures the pool, and pings the server. Returns an error if any step fails. On success it logs a single `INFO` line through `log/slog`.
+Validates the config, opens a connection pool for the selected driver, applies its pool settings, and pings the server. Returns an error if any step fails. On success it logs a single `INFO` line through `log/slog`.
 
-### `Close(db *gorm.DB) error`
+Close the pool with `db.Close()` when the application shuts down.
 
-Closes the underlying `sql.DB`. Safe to call with a `nil` argument (no-op). Typically deferred in `main`:
-
-```go
-db, err := database.New(cfg)
-// ...
-defer func() {
-    if err := database.Close(db); err != nil {
-        log.Printf("closing database: %v", err)
-    }
-}()
-```
-
-### `HealthCheck(db *gorm.DB) error`
+### `HealthCheck(ctx context.Context, db *sql.DB) error`
 
 Pings the database and returns a non-nil error if the connection is unhealthy. Intended for use in a `/healthz` or `/readyz` HTTP handler:
 
 ```go
-func readyzHandler(db *gorm.DB) http.HandlerFunc {
+func readyzHandler(db *sql.DB) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
-        if err := database.HealthCheck(db); err != nil {
+        if err := database.HealthCheck(r.Context(), db); err != nil {
             http.Error(w, "database unavailable", http.StatusServiceUnavailable)
             return
         }
@@ -99,35 +180,10 @@ func readyzHandler(db *gorm.DB) http.HandlerFunc {
 }
 ```
 
-## Connection pool tuning
-
-```go
-cfg := database.Config{
-    // ...
-    MaxIdleConns:           5,
-    MaxOpenConns:           25,
-    MaxConnLifetimeSeconds: 300, // 5 minutes
-}
-```
-
-Any pool field left at `0` is skipped so the driver's own default applies.
-
 ## Testing
 
-Unit tests cover `Config.Validate`, `Config.DSN`, `gormLogLevel` mapping, and the lifecycle functions (`New`, `Close`, `HealthCheck`) without requiring a running database. Run them with:
+Unit tests cover validation and connection strings for every driver, and exercise `New` and `HealthCheck` against an in-memory SQLite database, so no running server is needed. Run them from the module directory:
 
 ```bash
-go test ./database/...
-```
-
-Integration tests that need a real PostgreSQL instance can be gated with a build tag or by checking an environment variable:
-
-```go
-func TestIntegration(t *testing.T) {
-    dsn := os.Getenv("TEST_DATABASE_URL")
-    if dsn == "" {
-        t.Skip("TEST_DATABASE_URL not set")
-    }
-    // ...
-}
+cd database && go test ./...
 ```
