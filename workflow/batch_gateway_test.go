@@ -223,10 +223,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_UnmatchedItemNoDefault_Fails() {
 	// Send an admin abort signal so the workflow fails instead of hanging in admin-park.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "unmatched-1"})
@@ -280,10 +281,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MissingItemID_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "missing-id-1"})
@@ -336,10 +338,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_DuplicateItemID_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "dup-id-1"})
@@ -1125,10 +1128,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MaxDepthExceeded_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "max-depth-1"})
@@ -1194,8 +1198,9 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fail
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1261,8 +1266,9 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1334,8 +1340,9 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsDuplicateItemIDAcross
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1399,6 +1406,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "gw_split", "e2")
 
 	// 1. Verify that the child's node is parked awaiting admin intervention
+	var childParkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(childWorkflowID, "GetStatus")
 		s.Require().NoError(err)
@@ -1406,13 +1414,15 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 		s.Require().NoError(val.Get(&instance))
 		s.Require().NotNil(instance.NodeInfo["process"], "node 'process' must exist in child NodeInfo")
 		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["process"].Status)
+		childParkedID = instance.NodeInfo["process"].ActivationID
 	}, time.Second)
 
 	// 2. Resolve the child node with AdminActionAbort
 	env.RegisterDelayedCallback(func() {
 		s.NoError(env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "process",
-			Action: AdminActionAbort,
+			NodeID:       "process",
+			ActivationID: childParkedID,
+			Action:       AdminActionAbort,
 		}))
 	}, 2*time.Second)
 

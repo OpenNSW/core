@@ -393,8 +393,9 @@ func TestTaskNodeFailsWhenInputKeyMissing(t *testing.T) {
 	// The input mapping error parks the node for admin intervention. Abort it so the workflow fails.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionAbort,
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Millisecond)
 
@@ -575,8 +576,9 @@ func TestTaskNodeFailsWhenRequiredOutputMissing(t *testing.T) {
 	// The output mapping error parks the node for admin intervention. Abort it so the workflow fails.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionAbort,
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionAbort,
 		})
 	}, 100*time.Millisecond)
 
@@ -801,9 +803,10 @@ func TestEmitSignalInvalidPayloadType(t *testing.T) {
 		require.Contains(t, instance.NodeInfo["emit"].LastError, "signal_name is required")
 
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "emit",
-			Action: AdminActionAbort,
-			Reason: "failing on missing signal_name",
+			NodeID:       "emit",
+			ActivationID: instance.NodeInfo["emit"].ActivationID,
+			Action:       AdminActionAbort,
+			Reason:       "failing on missing signal_name",
 		})
 	}, time.Millisecond)
 
@@ -875,9 +878,10 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 		require.Contains(t, instance.NodeInfo["emit"].LastError, "failed to send signal to parent")
 
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "emit",
-			Action: AdminActionAbort,
-			Reason: "failing on signal emit error",
+			NodeID:       "emit",
+			ActivationID: instance.NodeInfo["emit"].ActivationID,
+			Action:       AdminActionAbort,
+			Reason:       "failing on signal emit error",
 		})
 	}, time.Millisecond)
 
@@ -1048,6 +1052,7 @@ func TestTimerNodeRejectsBadConfig(t *testing.T) {
 
 			// A misconfigured node parks for admin rather than failing outright,
 			// so the config error surfaces as LastError on the parked node.
+			var parkedID string
 			env.RegisterDelayedCallback(func() {
 				val, err := env.QueryWorkflow("GetStatus")
 				require.NoError(t, err)
@@ -1055,13 +1060,15 @@ func TestTimerNodeRejectsBadConfig(t *testing.T) {
 				require.NoError(t, val.Get(&instance))
 				require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
 				require.Contains(t, instance.NodeInfo["wait"].LastError, tc.wantErr)
+				parkedID = instance.NodeInfo["wait"].ActivationID
 			}, time.Millisecond)
 
 			// Abort re-raises the original error so it also reaches the caller.
 			env.RegisterDelayedCallback(func() {
 				env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-					NodeID: "wait",
-					Action: AdminActionAbort,
+					NodeID:       "wait",
+					ActivationID: parkedID,
+					Action:       AdminActionAbort,
 				})
 			}, 2*time.Millisecond)
 
@@ -1105,8 +1112,9 @@ func TestTimerNodeRequiresExactlyOneOutgoingEdge(t *testing.T) {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "wait",
-			Action: AdminActionAbort,
+			NodeID:       "wait",
+			ActivationID: parkedActivationID(t, env, "wait"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Millisecond)
 
@@ -1216,6 +1224,7 @@ func TestSignalingNodeRejectsBadConfig(t *testing.T) {
 			env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 			// A misconfigured node parks for admin; verify the error, then abort.
+			var parkedID string
 			env.RegisterDelayedCallback(func() {
 				val, err := env.QueryWorkflow("GetStatus")
 				require.NoError(t, err)
@@ -1223,12 +1232,14 @@ func TestSignalingNodeRejectsBadConfig(t *testing.T) {
 				require.NoError(t, val.Get(&instance))
 				require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["sig"].Status)
 				require.Contains(t, instance.NodeInfo["sig"].LastError, tc.wantErr)
+				parkedID = instance.NodeInfo["sig"].ActivationID
 			}, time.Millisecond)
 
 			env.RegisterDelayedCallback(func() {
 				env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-					NodeID: "sig",
-					Action: AdminActionAbort,
+					NodeID:       "sig",
+					ActivationID: parkedID,
+					Action:       AdminActionAbort,
 				})
 			}, 2*time.Millisecond)
 

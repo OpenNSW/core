@@ -78,8 +78,14 @@ const AdminResolutionSignalName = "AdminResolutionSignal"
 // AdminResolutionSignal is sent by an external admin tool to resolve a node that is
 // parked in NodeStatusAwaitingAdmin.
 type AdminResolutionSignal struct {
-	// NodeID is the template node ID (Node.ID) of the parked node — the routing key.
+	// NodeID is the template node ID (Node.ID) of the parked node, for display/logging. It is not
+	// the routing key: ActivationID is.
 	NodeID string `json:"nodeID"`
+	// ActivationID is the routing key: it must match the ActivationID the engine sent in
+	// AdminParkPayload for the parking being resolved. A signal whose ActivationID doesn't match any
+	// currently-parked node is dropped — including one echoing an earlier parking of the same
+	// NodeID, since a retry or loop revisit mints a new ActivationID each time it parks.
+	ActivationID string `json:"activationID"`
 	// Action determines how the node is resolved. See AdminResolutionAction constants.
 	Action AdminResolutionAction `json:"action"`
 	// WorkflowVariablesPatch sets workflow variables before the action takes effect, for
@@ -97,12 +103,14 @@ type AdminResolutionSignal struct {
 }
 
 // startAdminResolutionDispatcher registers the AdminResolutionSignal channel and routes
-// incoming signals to whichever node is currently parked awaiting that NodeID, via
-// g.pendingAdminResolutions. Signals for an unknown or already-resolved NodeID are dropped —
+// incoming signals to whichever node is currently parked awaiting that ActivationID, via
+// g.pendingAdminResolutions. Signals for an unknown or already-resolved ActivationID are dropped —
 // this includes a signal sent for a node that hasn't parked yet (e.g. sent too early, before
-// the admin confirmed AWAITING_ADMIN via GetStatus). This is intentional: the engine does not
-// buffer premature signals, to keep the resolution path simple. Callers/tools are expected to
-// confirm a node is actually parked before resolving it.
+// the admin confirmed AWAITING_ADMIN via GetStatus), and a stale signal echoing an earlier parking
+// of the same node (see AdminResolutionSignal.ActivationID). This is intentional: the engine does
+// not buffer premature signals, to keep the resolution path simple. Callers/tools are expected to
+// confirm a node is actually parked, and use the ActivationID from that park's notification,
+// before resolving it.
 func (g *graphInterpreter) startAdminResolutionDispatcher(ctx workflow.Context) {
 	signalChan := workflow.GetSignalChannel(ctx, AdminResolutionSignalName)
 	workflow.Go(ctx, func(ctx workflow.Context) {
@@ -122,20 +130,20 @@ func (g *graphInterpreter) startAdminResolutionDispatcher(ctx workflow.Context) 
 			if ctx.Err() != nil || !ok {
 				return
 			}
-			if settable, ok := g.pendingAdminResolutions[sig.NodeID]; ok {
+			if settable, ok := g.pendingAdminResolutions[sig.ActivationID]; ok {
 				settable.Set(sig, nil)
-				delete(g.pendingAdminResolutions, sig.NodeID)
+				delete(g.pendingAdminResolutions, sig.ActivationID)
 			}
 		}
 	})
 }
 
 // awaitAdminResolution blocks the calling coroutine until an AdminResolutionSignal
-// arrives for nodeID.
-func (g *graphInterpreter) awaitAdminResolution(ctx workflow.Context, nodeID string) (AdminResolutionSignal, error) {
+// arrives for activationID.
+func (g *graphInterpreter) awaitAdminResolution(ctx workflow.Context, activationID string) (AdminResolutionSignal, error) {
 	future, settable := workflow.NewFuture(ctx)
-	g.pendingAdminResolutions[nodeID] = settable
-	defer delete(g.pendingAdminResolutions, nodeID)
+	g.pendingAdminResolutions[activationID] = settable
+	defer delete(g.pendingAdminResolutions, activationID)
 
 	var sig AdminResolutionSignal
 	err := future.Get(ctx, &sig)
@@ -170,7 +178,7 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 
 		notified := g.notifyAdminPark(ctx, node, nodeInfo)
 
-		sig, err := g.awaitAdminResolution(ctx, node.ID)
+		sig, err := g.awaitAdminResolution(ctx, nodeInfo.ActivationID)
 		// Join notifyAdminPark's background coroutine before acting on the resolution (on every
 		// path below, including returns): a prompt signal could otherwise let parkNodeForAdmin
 		// return, and Temporal abandons workflow.Go coroutines that haven't finished when the
@@ -264,6 +272,7 @@ func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nod
 		RunID:            workflow.GetInfo(ctx).WorkflowExecution.RunID,
 		RootWorkflowID:   g.rootWorkflowID(),
 		NodeID:           node.ID,
+		ActivationID:     nodeInfo.ActivationID,
 		NodeType:         string(node.Type),
 		TaskTemplateID:   node.TaskTemplateID,
 		Cause:            nodeInfo.LastError,
