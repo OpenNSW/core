@@ -26,12 +26,12 @@ type graphInterpreter struct {
 	outEdges map[string][]Edge
 	inEdges  map[string][]Edge
 
-	// seq is the workflow-wide step counter: it is advanced each time a TASK node starts a run, and
-	// its value identifies that run (see activationID). It only ever grows.
+	// seq is the workflow-wide step counter: it is advanced each time any node starts a run, and
+	// its value identifies that run (see mintActivation). It only ever grows.
 	seq int64
 
 	// pendingAdminResolutions holds a Settable for each node currently parked in
-	// NodeStatusAwaitingAdmin, keyed by node template ID. See admin_recovery.go.
+	// NodeStatusAwaitingAdmin, keyed by that park's ActivationID. See admin_recovery.go.
 	pendingAdminResolutions map[string]workflow.Settable
 }
 

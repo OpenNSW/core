@@ -301,8 +301,9 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_ItemMissingID_Fai
 		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["psplit"].Status)
 
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "psplit",
-			Action: AdminActionAbort,
+			NodeID:       "psplit",
+			ActivationID: instance.NodeInfo["psplit"].ActivationID,
+			Action:       AdminActionAbort,
 		})
 	}, 2*time.Second)
 
@@ -348,8 +349,9 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_InvalidItemType_F
 		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["psplit"].Status)
 
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "psplit",
-			Action: AdminActionAbort,
+			NodeID:       "psplit",
+			ActivationID: instance.NodeInfo["psplit"].ActivationID,
+			Action:       AdminActionAbort,
 		})
 	}, 2*time.Second)
 
