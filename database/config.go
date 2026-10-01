@@ -26,7 +26,7 @@ const (
 type Config struct {
 	Host                   string `yaml:"host"`
 	Port                   int    `yaml:"port"`
-	Username               string `yaml:"username"`
+	User                   string `yaml:"user"`
 	Password               string `yaml:"password"`
 	Name                   string `yaml:"name"`
 	SSLMode                string `yaml:"sslMode"`
@@ -43,8 +43,8 @@ func (c Config) Validate() error {
 	if c.Host == "" {
 		return fmt.Errorf("database host is required")
 	}
-	if c.Username == "" {
-		return fmt.Errorf("database username is required")
+	if c.User == "" {
+		return fmt.Errorf("database user is required")
 	}
 	if c.Password == "" {
 		return fmt.Errorf("database password is required")
@@ -69,7 +69,7 @@ func (c Config) DSN() string {
 	}
 	dsn := url.URL{
 		Scheme: "postgres",
-		User:   url.UserPassword(c.Username, c.Password),
+		User:   url.UserPassword(c.User, c.Password),
 		Host:   host,
 		Path:   path,
 	}

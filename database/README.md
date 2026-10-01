@@ -8,7 +8,7 @@ A thin wrapper around [GORM](https://gorm.io) and the PostgreSQL driver that han
 cfg := database.Config{
     Host:     "localhost",
     Port:     5432,
-    Username: "myuser",
+    User:     "myuser",
     Password: "mypassword",
     Name:     "mydb",
     SSLMode:  "disable",
@@ -25,29 +25,29 @@ defer database.Close(db)
 
 ## Configuration
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `Host` | `string` | ✅ | Database host |
-| `Port` | `int` | | Port number. Omit to use the driver default |
-| `Username` | `string` | ✅ | Database user |
-| `Password` | `string` | ✅ | Database password. Special characters are URL-encoded automatically |
-| `Name` | `string` | ✅ | Database name |
-| `SSLMode` | `string` | | PostgreSQL SSL mode (`disable`, `require`, `verify-full`, …) |
-| `MaxIdleConns` | `int` | | Maximum idle connections in the pool |
-| `MaxOpenConns` | `int` | | Maximum open connections in the pool |
-| `MaxConnLifetimeSeconds` | `int` | | Maximum connection lifetime in seconds |
-| `LogLevel` | `LogLevel` | | Query log verbosity (see below). Defaults to `LogError` |
+| Field                    | Type       | Required | Description                                                         |
+|--------------------------|------------|----------|---------------------------------------------------------------------|
+| `Host`                   | `string`   | ✅       | Database host                                                       |
+| `Port`                   | `int`      |          | Port number. Omit to use the driver default                         |
+| `User`                   | `string`   | ✅       | Database user                                                       |
+| `Password`               | `string`   | ✅       | Database password. Special characters are URL-encoded automatically |
+| `Name`                   | `string`   | ✅       | Database name                                                       |
+| `SSLMode`                | `string`   |          | PostgreSQL SSL mode (`disable`, `require`, `verify-full`, …)        |
+| `MaxIdleConns`           | `int`      |          | Maximum idle connections in the pool                                |
+| `MaxOpenConns`           | `int`      |          | Maximum open connections in the pool                                |
+| `MaxConnLifetimeSeconds` | `int`      |          | Maximum connection lifetime in seconds                              |
+| `LogLevel`               | `LogLevel` |          | Query log verbosity (see below). Defaults to `LogError`             |
 
 ### Log levels
 
 Control how much GORM logs about the queries it runs.
 
-| Constant | Behaviour |
-|---|---|
-| `database.LogSilent` | No output at all |
-| `database.LogError` | Errors only **(default)** |
-| `database.LogWarn` | Errors + slow queries |
-| `database.LogInfo` | Every SQL statement — useful in development |
+| Constant             | Behaviour                                   |
+|----------------------|---------------------------------------------|
+| `database.LogSilent` | No output at all                            |
+| `database.LogError`  | Errors only **(default)**                   |
+| `database.LogWarn`   | Errors + slow queries                       |
+| `database.LogInfo`   | Every SQL statement — useful in development |
 
 ```go
 // Development: log every query

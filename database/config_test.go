@@ -10,7 +10,7 @@ import (
 func TestConfig_Validate(t *testing.T) {
 	base := Config{
 		Host:     "localhost",
-		Username: "user",
+		User:     "user",
 		Password: "secret",
 		Name:     "mydb",
 	}
@@ -32,9 +32,9 @@ func TestConfig_Validate(t *testing.T) {
 			wantErr: "database host is required",
 		},
 		{
-			name:    "missing username",
-			mutate:  func(c *Config) { c.Username = "" },
-			wantErr: "database username is required",
+			name:    "missing user",
+			mutate:  func(c *Config) { c.User = "" },
+			wantErr: "database user is required",
 		},
 		{
 			name:    "missing password",
@@ -74,7 +74,7 @@ func TestConfig_DSN(t *testing.T) {
 			cfg: Config{
 				Host:     "localhost",
 				Port:     5432,
-				Username: "user",
+				User:     "user",
 				Password: "secret",
 				Name:     "mydb",
 				SSLMode:  "disable",
@@ -85,7 +85,7 @@ func TestConfig_DSN(t *testing.T) {
 			name: "without port",
 			cfg: Config{
 				Host:     "localhost",
-				Username: "user",
+				User:     "user",
 				Password: "secret",
 				Name:     "mydb",
 				SSLMode:  "disable",
@@ -97,7 +97,7 @@ func TestConfig_DSN(t *testing.T) {
 			cfg: Config{
 				Host:     "localhost",
 				Port:     5432,
-				Username: "user",
+				User:     "user",
 				Password: "p@ss#w0rd!",
 				Name:     "mydb",
 				SSLMode:  "require",
@@ -108,7 +108,7 @@ func TestConfig_DSN(t *testing.T) {
 			name: "db name without leading slash gets one added",
 			cfg: Config{
 				Host:     "db.example.com",
-				Username: "admin",
+				User:     "admin",
 				Password: "pass",
 				Name:     "production",
 				SSLMode:  "disable",
