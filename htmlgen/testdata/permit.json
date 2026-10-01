@@ -1,0 +1,21 @@
+{
+  "permit_number": "PRM-2026-00555",
+  "conditions": "Operate under <Schedule B> & local rules",
+  "issued_at": "2026-10-01",
+  "verify_url": "https://example.org/verify?id=PRM-2026-00555&v=1",
+  "review": { "reference_number": "REF/2026/118" },
+  "application": {
+    "applicant_name": "Acme Holdings Ltd",
+    "applicant_address": "12 Main Street\nSpringfield",
+    "representative_name": "Thé & Co",
+    "representative_address": "4 Rue de <Rivoli>\nParis",
+    "purpose": "Operation of a \"temporary\" storage facility",
+    "fee_amount": 10000000,
+    "attachment_ids": ["DOC-0001", "DOC-0002"],
+    "valid_until": null,
+    "items": [
+      { "code": "A-01", "quantity": 120 },
+      { "code": "A-02", "quantity": 80 }
+    ]
+  }
+}
