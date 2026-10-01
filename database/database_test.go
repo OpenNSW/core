@@ -3,18 +3,18 @@
 
 package database
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
 
-// TestClose_NilDB verifies Close does not panic or error on a nil *gorm.DB.
-func TestClose_NilDB(t *testing.T) {
-	if err := Close(nil); err != nil {
-		t.Errorf("Close(nil) returned unexpected error: %v", err)
-	}
-}
+	_ "modernc.org/sqlite"
+)
 
 // TestHealthCheck_NilDB verifies HealthCheck returns a meaningful error for nil.
 func TestHealthCheck_NilDB(t *testing.T) {
-	err := HealthCheck(nil)
+	err := HealthCheck(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected an error for nil db, got nil")
 	}
@@ -24,10 +24,8 @@ func TestHealthCheck_NilDB(t *testing.T) {
 	}
 }
 
-// TestNew_InvalidConfig verifies New rejects a config that fails Validate
-// without ever attempting a real connection.
-// We rely on the fact that an empty DSN causes gorm.Open to fail fast, so
-// no actual database is needed for this test.
+// TestNew_InvalidConfig verifies New rejects an invalid config without ever
+// attempting a real connection.
 func TestNew_InvalidConfig(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -35,98 +33,130 @@ func TestNew_InvalidConfig(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "missing host",
-			cfg:     Config{User: "u", Password: "p", Name: "db"},
-			wantErr: "database host is required",
+			name:    "missing driver",
+			cfg:     Config{SQLite: &SQLiteConfig{Path: ":memory:"}},
+			wantErr: "database driver is required",
 		},
 		{
-			name:    "missing user",
-			cfg:     Config{Host: "localhost", Password: "p", Name: "db"},
-			wantErr: "database user is required",
+			name:    "missing block for driver",
+			cfg:     Config{Driver: Postgres},
+			wantErr: `postgres config is required when driver is "postgres"`,
 		},
 		{
-			name:    "missing password",
-			cfg:     Config{Host: "localhost", User: "u", Name: "db"},
-			wantErr: "database password is required",
-		},
-		{
-			name:    "missing name",
-			cfg:     Config{Host: "localhost", User: "u", Password: "p"},
-			wantErr: "database name is required",
+			name:    "invalid block",
+			cfg:     Config{Driver: Postgres, Postgres: &PostgresConfig{User: "u", Password: "p", Name: "db"}},
+			wantErr: "postgres host is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(tt.cfg)
-			if err == nil {
-				t.Fatal("expected an error but got nil")
-			}
-			if err.Error() != tt.wantErr {
-				t.Errorf("got %q, want %q", err.Error(), tt.wantErr)
-			}
+			_, err := New(context.Background(), tt.cfg)
+			assertErr(t, err, tt.wantErr)
 		})
 	}
 }
 
-// TestNew_ValidConfigNoServer confirms that a fully valid config still produces
-// a connection error (not a validation error) when no real server is reachable.
-// This keeps the test hermetic while proving the validation path is cleared.
-func TestNew_ValidConfigNoServer(t *testing.T) {
+// TestNew_SQLiteInMemory exercises the full open/pool/ping path and HealthCheck
+// against a real in-memory SQLite database.
+func TestNew_SQLiteInMemory(t *testing.T) {
 	cfg := Config{
-		Host:     "127.0.0.1",
-		Port:     1, // nothing listens here
-		User:     "user",
-		Password: "password",
-		Name:     "testdb",
-		SSLMode:  "disable",
+		Driver: SQLite,
+		SQLite: &SQLiteConfig{
+			Path: ":memory:",
+			Pool: PoolConfig{MaxOpenConns: 1, MaxConnLifetimeSeconds: 60},
+		},
 	}
 
-	_, err := New(cfg)
-	if err == nil {
-		t.Fatal("expected a connection error when no server is running, got nil")
+	db, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("MaxOpenConnections: got %d, want 1", got)
 	}
 
-	// The error must NOT be a validation error — it should come from the
-	// connect/ping stage, proving Validate() passed.
-	validationErrors := []string{
-		"database host is required",
-		"database user is required",
-		"database password is required",
-		"database name is required",
+	if err := HealthCheck(context.Background(), db); err != nil {
+		t.Errorf("HealthCheck returned unexpected error: %v", err)
 	}
-	for _, ve := range validationErrors {
-		if err.Error() == ve {
-			t.Errorf("got a validation error when one was not expected: %v", err)
-		}
+
+	var one int
+	if err := db.QueryRowContext(context.Background(), "SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if one != 1 {
+		t.Errorf("got %d, want 1", one)
 	}
 }
 
-// TestNew_LogLevelDoesNotPanic verifies every LogLevel value can be passed to
-// New without panicking (the mapping to GORM's level happens before Open).
-func TestNew_LogLevelDoesNotPanic(t *testing.T) {
-	levels := []LogLevel{LogSilent, LogError, LogWarn, LogInfo}
-
+// TestNew_UsesSelectedPool verifies only the selected driver's pool settings
+// are applied.
+func TestNew_UsesSelectedPool(t *testing.T) {
 	cfg := Config{
-		Host:     "127.0.0.1",
-		Port:     1,
-		User:     "user",
-		Password: "password",
-		Name:     "testdb",
-		SSLMode:  "disable",
+		Driver:   SQLite,
+		SQLite:   &SQLiteConfig{Path: ":memory:", Pool: PoolConfig{MaxOpenConns: 1}},
+		Postgres: &PostgresConfig{Pool: PoolConfig{MaxOpenConns: 25}},
 	}
 
-	for _, lvl := range levels {
-		cfg.LogLevel = lvl
-		// We don't care about the error (no server); we just want no panic.
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("LogLevel %d caused a panic: %v", lvl, r)
-				}
-			}()
-			//nolint:errcheck
-			New(cfg) //nolint:errcheck
-		}()
+	db, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("MaxOpenConnections: got %d, want 1", got)
+	}
+}
+
+// TestHealthCheck_ClosedDB verifies HealthCheck reports a closed pool as unhealthy.
+func TestHealthCheck_ClosedDB(t *testing.T) {
+	db, err := New(context.Background(), Config{Driver: SQLite, SQLite: &SQLiteConfig{Path: ":memory:"}})
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	_ = db.Close()
+
+	if err := HealthCheck(context.Background(), db); err == nil {
+		t.Error("expected an error for a closed db, got nil")
+	}
+}
+
+// TestNew_DriverNotImported verifies a missing driver import surfaces as an
+// error rather than a panic. The MySQL driver is not imported by this test
+// binary.
+func TestNew_DriverNotImported(t *testing.T) {
+	cfg := Config{
+		Driver: MySQL,
+		MySQL:  &MySQLConfig{Host: "127.0.0.1", User: "user", Password: "password", Name: "testdb"},
+	}
+
+	_, err := New(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected an error for an unregistered driver, got nil")
+	}
+	if !strings.Contains(err.Error(), `unknown driver "mysql"`) {
+		t.Errorf("got %q, want it to mention the unknown driver", err.Error())
+	}
+}
+
+func TestPoolConfig_apply(t *testing.T) {
+	db, err := New(context.Background(), Config{Driver: SQLite, SQLite: &SQLiteConfig{Path: ":memory:"}})
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Zero values leave database/sql defaults (unlimited open connections).
+	PoolConfig{}.apply(db)
+	if got := db.Stats().MaxOpenConnections; got != 0 {
+		t.Errorf("zero PoolConfig: MaxOpenConnections got %d, want 0", got)
+	}
+
+	PoolConfig{MaxOpenConns: 7, MaxIdleConns: 3, MaxConnLifetimeSeconds: int(time.Minute / time.Second)}.apply(db)
+	if got := db.Stats().MaxOpenConnections; got != 7 {
+		t.Errorf("MaxOpenConnections: got %d, want 7", got)
 	}
 }
