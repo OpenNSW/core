@@ -36,22 +36,22 @@ func TestNew_InvalidConfig(t *testing.T) {
 	}{
 		{
 			name:    "missing host",
-			cfg:     Config{Username: "u", Password: "p", Name: "db"},
+			cfg:     Config{User: "u", Password: "p", Name: "db"},
 			wantErr: "database host is required",
 		},
 		{
-			name:    "missing username",
+			name:    "missing user",
 			cfg:     Config{Host: "localhost", Password: "p", Name: "db"},
-			wantErr: "database username is required",
+			wantErr: "database user is required",
 		},
 		{
 			name:    "missing password",
-			cfg:     Config{Host: "localhost", Username: "u", Name: "db"},
+			cfg:     Config{Host: "localhost", User: "u", Name: "db"},
 			wantErr: "database password is required",
 		},
 		{
 			name:    "missing name",
-			cfg:     Config{Host: "localhost", Username: "u", Password: "p"},
+			cfg:     Config{Host: "localhost", User: "u", Password: "p"},
 			wantErr: "database name is required",
 		},
 	}
@@ -76,7 +76,7 @@ func TestNew_ValidConfigNoServer(t *testing.T) {
 	cfg := Config{
 		Host:     "127.0.0.1",
 		Port:     1, // nothing listens here
-		Username: "user",
+		User:     "user",
 		Password: "password",
 		Name:     "testdb",
 		SSLMode:  "disable",
@@ -91,7 +91,7 @@ func TestNew_ValidConfigNoServer(t *testing.T) {
 	// connect/ping stage, proving Validate() passed.
 	validationErrors := []string{
 		"database host is required",
-		"database username is required",
+		"database user is required",
 		"database password is required",
 		"database name is required",
 	}
@@ -110,7 +110,7 @@ func TestNew_LogLevelDoesNotPanic(t *testing.T) {
 	cfg := Config{
 		Host:     "127.0.0.1",
 		Port:     1,
-		Username: "user",
+		User:     "user",
 		Password: "password",
 		Name:     "testdb",
 		SSLMode:  "disable",
