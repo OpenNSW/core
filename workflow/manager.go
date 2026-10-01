@@ -58,9 +58,10 @@ type TaskPayload struct {
 	// Temporal Activity, and is what Manager.CompleteActivation takes to complete this run. It is derived
 	// deterministically from the workflow ID, NodeID and Seq (a UUIDv5), so it is a valid UUID.
 	ActivationID string
-	// Seq is the workflow-wide step counter value for this run: 1 for the first TASK node the
-	// workflow starts, +1 for each after it, and it never repeats or goes backwards. Hosts use it to
-	// order writes so a late write from an earlier step can be told apart from the current one.
+	// Seq is the workflow-wide step counter value for this run. Every node run (not just TASK)
+	// consumes the next value, so a TASK node's Seq need not be contiguous with the previous TASK
+	// node's, but it never repeats or goes backwards. Hosts use it to order writes so a late write
+	// from an earlier step can be told apart from the current one.
 	Seq int64
 	// TaskTemplateID identifies the specific type of external work/script the task executor should run.
 	TaskTemplateID string
@@ -128,9 +129,10 @@ type NodeInfo struct {
 	TaskTemplateID string      `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	Status         NodeStatus  `json:"status"`                     // Status of the node
 
-	// ActivationID and Seq identify the most recent run of a TASK node (see TaskPayload.ActivationID and
-	// TaskPayload.Seq). Empty and zero until the node first runs. A node that is revisited gets a
-	// new ActivationID and a higher Seq each time; these always describe the latest run.
+	// ActivationID and Seq identify the most recent run of this node, of any type (see
+	// TaskPayload.ActivationID and TaskPayload.Seq, which name the same values for a TASK node
+	// specifically). Empty and zero until the node first runs. A node that is revisited gets a new
+	// ActivationID and a higher Seq each time; these always describe the latest run.
 	ActivationID string `json:"step_id,omitempty"`
 	Seq          int64  `json:"seq,omitempty"`
 
@@ -210,10 +212,9 @@ type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
 type WorkflowCompletion struct {
 	// WorkflowID is the ID of the workflow that completed.
 	WorkflowID string
-	// Seq is the workflow's step counter taken for its end: one more than the Seq of the last TASK
-	// node run it started, so higher than every TaskPayload.Seq it emitted. A host that orders its
-	// writes by Seq uses it to write the completion so a late write from any earlier step matches
-	// nothing.
+	// Seq is the workflow's step counter taken for the END node's own run, so higher than every
+	// other node's Seq in this workflow. A host that orders its writes by Seq uses it to write the
+	// completion so a late write from any earlier step matches nothing.
 	Seq int64
 	// FinalVariables is the workflow's accumulated variables.
 	FinalVariables map[string]any

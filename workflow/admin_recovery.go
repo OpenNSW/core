@@ -215,6 +215,10 @@ func (g *graphInterpreter) parkNodeForAdmin(ctx workflow.Context, nodeInfo *Node
 			// the stale result must not linger and falsely suggest the Activity ran this time.
 			nodeInfo.CachedTaskResult = nil
 			nodeInfo.UpdatedAt = workflow.Now(ctx)
+			// This bypasses executeNode, so it must mint a fresh activation itself: without this, a
+			// retried node would re-dispatch under the same ActivationID as its failed run, and a
+			// stale completion of that earlier attempt (if one ever arrived) would match the retry.
+			g.mintActivation(nodeInfo, node)
 			retryErr := g.dispatchNodeHandler(ctx, nodeInfo, node, outEdges)
 			if retryErr == nil {
 				return nil
