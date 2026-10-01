@@ -69,8 +69,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 	}
 
 	// WorkflowCompletedActivity: top-level calls succeed, child calls (with "--") are ignored.
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -155,8 +155,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_SingleItem() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
@@ -393,8 +393,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_DefaultEdgeCatchAll() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
@@ -463,7 +463,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_EmptyItems_SkipsToJoin() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FINAL", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
@@ -823,8 +823,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -953,8 +953,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_EdgeConditionSeesWorkflowVars() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
@@ -1025,8 +1025,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ReplayDeterminism() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
@@ -1061,8 +1061,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ReplayDeterminism() {
 	acts2 := &Activities{}
 	env2.RegisterActivityWithOptions(acts2.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env2.RegisterActivityWithOptions(acts2.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env2.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env2.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
@@ -1180,8 +1180,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fail
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -1247,8 +1247,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -1317,8 +1317,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsDuplicateItemIDAcross
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}

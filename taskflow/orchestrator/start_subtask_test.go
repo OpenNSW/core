@@ -46,7 +46,7 @@ func (p *probePlugin) Execute(ctx plugins.PluginContext, _ json.RawMessage) erro
 func startTaskStepFixture(t *testing.T) (*TaskManager, *safeMockTaskStore, *probePlugin) {
 	t.Helper()
 	db := newSafeMockTaskStore()
-	db.SaveTask(context.Background(), store.TaskRecord{
+	db.InitTask(context.Background(), store.TaskRecord{
 		TaskID: "task-1", TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf",
 		Data: map[string]any{"old": "value"},
 	})

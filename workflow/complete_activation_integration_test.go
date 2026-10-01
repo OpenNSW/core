@@ -63,7 +63,7 @@ func startPendingLoop(t *testing.T) (TemporalManager, string, <-chan TaskPayload
 			runs <- p
 			return nil, activity.ErrResultPending
 		},
-		func(string, map[string]any) error { return nil })
+		func(WorkflowCompletion) error { return nil })
 	require.NoError(t, mgr.StartWorker())
 	t.Cleanup(mgr.StopWorker)
 

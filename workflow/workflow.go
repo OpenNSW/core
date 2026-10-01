@@ -325,7 +325,10 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	// forever. The parent aggregates each branch's result and fires the hook once when its own END
 	// node is reached.
 	if workflow.GetInfo(ctx).ParentWorkflowExecution == nil {
-		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+		// The end takes the next value of the step counter, so the host can order its completion
+		// write after every step's writes.
+		g.seq++
+		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables, g.seq).Get(ctx, nil)
 		if err != nil {
 			return withCategory(ParkCategoryTaskFailure, fmt.Errorf("unable to complete workflow: %w", err))
 		}

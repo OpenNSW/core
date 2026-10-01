@@ -14,7 +14,7 @@ type testStore struct {
 	tasks map[string]TaskRecord
 }
 
-func (t *testStore) SaveTask(_ context.Context, record TaskRecord) {
+func (t *testStore) InitTask(_ context.Context, record TaskRecord) {
 	t.tasks[record.TaskID] = record
 }
 
@@ -63,7 +63,6 @@ func TestTaskStoreInterface(t *testing.T) {
 		TaskType:         "TEST",
 		State:            "PENDING_USER",
 		ParentWorkflowID: "parent-wf-1",
-		ParentRunID:      "parent-run-1",
 		ParentStepID:     "step-1",
 		TaskWorkflowID:   "task-wf-1",
 		Data:             map[string]any{"userform": map[string]any{"name": "Alice"}},
@@ -71,7 +70,7 @@ func TestTaskStoreInterface(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	store.SaveTask(ctx, record)
+	store.InitTask(ctx, record)
 
 	fetched, ok := store.GetTask(ctx, "test-1")
 	if !ok {

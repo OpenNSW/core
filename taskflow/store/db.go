@@ -21,8 +21,10 @@ type TaskRecord struct {
 	RenderConfig json.RawMessage `json:"render_config"`
 
 	// Parent coordinates — used to wake the parent workflow when this task finishes.
+	// There is no ParentRunID: the parent workflow never has more than one run (this engine never
+	// uses Continue-As-New, workflow-level retries, or ID reuse), so "" always correctly addresses
+	// whichever run is current — see Manager.CompleteActivation.
 	ParentWorkflowID string `json:"parent_workflow_id"`
-	ParentRunID      string `json:"parent_run_id"`
 	ParentStepID     string `json:"parent_step_id"` // the parent's step ID: the Activity to complete
 
 	RootWorkflowID string `json:"root_workflow_id"`
@@ -35,7 +37,7 @@ type TaskRecord struct {
 
 	// ActiveStepID identifies the run of the step node that is currently active. Empty until the
 	// first step is claimed. It, with Seq, is written only by the guarded TaskStore methods below,
-	// never by SaveTask, so a stale full-record save cannot move it backwards.
+	// never by InitTask, so a stale full-record save cannot move it backwards.
 	ActiveStepID string `json:"active_step_id,omitempty"`
 	// Seq is the version of the task row: the workflow-wide step counter, advanced by the guarded
 	// writes. Guards compare against it so a write from an earlier step is dropped. Exposed
@@ -99,9 +101,13 @@ type StepClaim struct {
 // The four step methods below are conditional writes. Each is one atomic statement whose guard is
 // part of the write, so a write from a step that is no longer current changes nothing. Each returns
 // the number of rows changed: 0 means the write was stale and was dropped, which is not an error.
-// SaveTask must not write ActiveStepID or Seq.
+// InitTask must not write ActiveStepID or Seq.
 type TaskStore interface {
-	SaveTask(context context.Context, record TaskRecord)
+	// InitTask creates the row for a new task (state, parent coordinates, render config snapshot).
+	// It is called once, by StartTask, but must be idempotent: StartTask is a Temporal Activity and
+	// can be retried, so a second call for the same TaskID re-applies the same coarse fields rather
+	// than failing on a conflict.
+	InitTask(context context.Context, record TaskRecord)
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
 	GetAllTasks(context context.Context, parentWorkflowID string) []TaskRecord

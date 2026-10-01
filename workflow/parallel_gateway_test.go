@@ -63,8 +63,8 @@ func buildParallelMergeWorkflow(mergeByID map[string]string) WorkflowDefinition 
 }
 
 func mockWorkflowCompletedIgnoringChildren(env *testsuite.TestWorkflowEnvironment) {
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}

@@ -72,8 +72,12 @@ Flow Diagram:
 */
 
 // TaskCompletedCallback is a callback function invoked when a Task workflow completes.
-// It is typically used to wake up the parent workflow with the final task output variables.
-type TaskCompletedCallback func(parentWorkflowID string, parentRunID string, parentNodeID string, finalVariables map[string]any) error
+// It is typically used to wake up the parent workflow with the final task output variables, by
+// calling CompleteActivation with the parent's step ID (parentStepID) and "" for the run (the parent
+// workflow never has more than one run — see TaskRecord.ParentStepID). It must return
+// CompleteActivation's error as it is (or wrapped): HandleTaskCompletion treats engine.ErrActivationNotPending
+// as "already resumed".
+type TaskCompletedCallback func(parentWorkflowID string, parentStepID string, finalVariables map[string]any) error
 
 // ErrStaleStep means the step a call addressed is not the task's active step. StartTaskStep returns
 // it (wrapped in a non-retryable Temporal error) for a late or duplicate attempt that must do
@@ -180,8 +184,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		State:            "STARTING",
 		RenderConfig:     renderConfig,
 		ParentWorkflowID: payload.WorkflowID,
-		ParentRunID:      payload.RunID,
-		ParentStepID:     payload.ActivationID, // the parent's Activity to complete: its step ID
+		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
 		RootWorkflowID:   rootWorkflowID,
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
@@ -195,7 +198,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		}
 	}
 
-	tm.db.SaveTask(ctx, record)
+	tm.db.InitTask(ctx, record)
 	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type)
 
 	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)
@@ -305,31 +308,48 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 	return record.Data, nil
 }
 
-// HandleTaskCompletion is called when a Task workflow hits its END node.
-// It marks the task complete and fires the onTaskCompleted callback to resume the parent workflow.
-func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID string, finalVariables map[string]any) error {
-	record, exists := tm.db.GetTaskByWorkflowID(ctx, workflowID)
+// HandleTaskCompletion is called when a Task workflow hits its END node (wire it to the task
+// workflow's completion handler). It marks the task complete and fires the onTaskCompleted callback
+// to resume the parent workflow.
+//
+// The completion is written before the parent is woken, and each half is safe to repeat, so a crash
+// between them is repaired by Temporal retrying the whole call:
+//
+//  1. The task row is set to COMPLETED at completion.Seq, guarded so it only matches if no later
+//     step exists. A repeat matches again.
+//  2. The parent's Activity is completed through onTaskCompleted. If the parent step is no longer
+//     pending, an earlier attempt already woke it, which is success.
+//
+// Writing COMPLETED first means it cannot serve as the "already done" marker for step 2; that is
+// why a completed row does not short-circuit a retry.
+func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engine.WorkflowCompletion) error {
+	record, exists := tm.db.GetTaskByWorkflowID(ctx, completion.WorkflowID)
 	if !exists {
 		// Not a workflow we own — safe to ignore.
 		return nil
 	}
 
-	tm.logger.InfoContext(ctx, "task workflow completed", "task_workflow_id", workflowID, "task_id", record.TaskID)
+	tm.logger.InfoContext(ctx, "task workflow completed", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID, "seq", completion.Seq)
 
-	// Idempotency guard: Temporal may retry this activity; skip if already completed.
-	if record.State == "COMPLETED" {
-		return nil
+	rows, err := tm.db.CompleteTask(ctx, record.TaskID, completion.Seq)
+	if err != nil {
+		return fmt.Errorf("mark task %s completed: %w", record.TaskID, err)
+	}
+	if rows == 0 {
+		// Nothing later than the end of the workflow should be on the row. Still wake the parent: the
+		// workflow has ended, and holding it back would hang the parent.
+		tm.logger.WarnContext(ctx, "task row was already past the completion; not marked completed", "task_id", record.TaskID, "seq", completion.Seq)
 	}
 
-	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentStepID, finalVariables)
+	err = tm.onTaskCompleted(record.ParentWorkflowID, record.ParentStepID, completion.FinalVariables)
+	if errors.Is(err, engine.ErrActivationNotPending) {
+		tm.logger.InfoContext(ctx, "parent already resumed by an earlier attempt", "task_id", record.TaskID, "parent_step_id", record.ParentStepID)
+		return nil
+	}
 	if err != nil {
 		tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "error", err)
 		return err
 	}
-
-	record.State = "COMPLETED"
-	tm.db.SaveTask(ctx, record)
-
 	return nil
 }
 
