@@ -100,10 +100,16 @@ The two-tier workflow design is central to single window systems:
 The following shows how to assemble the components into a working application (condensed from the reference implementation pattern):
 
 ```go
-func Build(cfg *Config) (*App, error) {
+func Build(ctx context.Context, cfg *Config) (*App, error) {
     // 1. Database — wrap the *sql.DB with GORM for the GORM-backed stores
     sqlDB, err := database.New(ctx, cfg.Database)
+    if err != nil {
+        return nil, err
+    }
     db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
+    if err != nil {
+        return nil, err
+    }
 
     // 2. Artifact registry — one loader is the single source of truth
     artifactLoader, _ := local.New(local.Config{Root: "configs"})

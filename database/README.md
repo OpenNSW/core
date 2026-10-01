@@ -6,6 +6,8 @@ A small `database/sql` connection factory that handles connection setup, pool co
 
 ```go
 import (
+    "context"
+
     "github.com/OpenNSW/core/database"
     _ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" driver
 )
@@ -23,6 +25,7 @@ cfg := database.Config{
     },
 }
 
+ctx := context.Background()
 db, err := database.New(ctx, cfg)
 if err != nil {
     log.Fatal(err)
@@ -79,6 +82,8 @@ Wrap the returned `*sql.DB` with the GORM dialector for your driver. GORM-specif
 
 ```go
 import (
+    "time"
+
     "gorm.io/driver/postgres"
     "gorm.io/gorm"
     "gorm.io/gorm/logger"
@@ -93,6 +98,9 @@ gdb, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
     Logger:  logger.Default.LogMode(logger.Error),
     NowFunc: func() time.Time { return time.Now().UTC() },
 })
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 For the other drivers use `mysql.New(mysql.Config{Conn: sqlDB})` (`gorm.io/driver/mysql`) or `sqlite.Dialector{Conn: sqlDB}` (`github.com/glebarez/sqlite`, which uses `modernc.org/sqlite`).
