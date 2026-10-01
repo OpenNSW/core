@@ -360,7 +360,7 @@ func TestParkCategoryIsClearedOnceResolved(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -396,7 +396,7 @@ func TestNodeInfoMappingsAreOnlySetWhileParked(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_INPUTS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{"global_user_email": "user@example.com"})
 	require.True(t, env.IsWorkflowCompleted())
@@ -500,7 +500,7 @@ func TestRetryOnParkedSignalWaitWaitsForANewSignal(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	var afterRetry *NodeInfo
 	env.RegisterDelayedCallback(func() {

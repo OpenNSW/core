@@ -21,7 +21,7 @@ Your plugin is in charge of:
 - Mutating `ctx.Record.State` to reflect what's happening.
 - Deciding whether the workflow should advance immediately (`return nil`) or park (`return ErrSuspended`).
 
-The orchestrator handles persistence around you — you mutate the record in-place; it calls `SaveTask` after you return.
+The orchestrator handles persistence around you — you mutate the record in-place; it calls `InitTask` after you return.
 
 ---
 
@@ -257,7 +257,7 @@ Temporal retries failed activities. If your plugin dispatches an external action
 
 ### Don't
 
-- **Don't call `tm.SaveTask` directly.** Mutate the record; the orchestrator persists for you.
+- **Don't call `tm.InitTask` directly.** Mutate the record; the orchestrator persists for you.
 - **Don't return `ErrResultPending`** from a plugin. That's the orchestrator's translation layer to Temporal. Use `plugins.ErrSuspended`.
 - **Don't block forever in `Execute`.** If you need to wait, suspend.
 - **Don't mutate `ctx.Inputs`.** It's the snapshot the orchestrator handed you; mutating it has no effect on persisted state. Mutate `ctx.Record.Data` instead.

@@ -243,7 +243,7 @@ When `StartTask` runs, the render config's bytes are copied into `TaskRecord.Ren
 - Audit: replaying a task months later renders the same view it did originally.
 - Migration safety: changing a render config doesn't break tasks already in flight.
 
-If you need to push a new config to existing tasks, you'd have to update `TaskRecord.RenderConfig` directly via `SaveTask` — there's no built-in API for that, and it's a deliberate friction.
+If you need to push a new config to existing tasks, you'd have to update `TaskRecord.RenderConfig` directly via `InitTask` — there's no built-in API for that, and it's a deliberate friction.
 
 ---
 

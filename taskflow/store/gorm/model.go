@@ -19,12 +19,11 @@ type TaskRecordModel struct {
 	RenderConfig         json.RawMessage `gorm:"column:render_config;type:jsonb;serializer:json"`
 	ParentWorkflowID     string          `gorm:"column:parent_workflow_id;type:text;index"`
 	RootWorkflowID       string          `gorm:"column:root_workflow_id;type:text;not null;default:''"`
-	ParentRunID          string          `gorm:"column:parent_run_id;type:text"`
 	ParentStepID         string          `gorm:"column:parent_step_id;type:text"`
 	TaskWorkflowID       string          `gorm:"column:task_workflow_id;type:text;index"`
 	ActiveTaskTemplateID string          `gorm:"column:active_task_template_id;type:text"`
-	// ActiveStepID and Seq belong to the guarded step statements in store.go. SaveTask never
-	// writes them (see TaskStore.SaveTask), so a full-record save cannot move them backwards.
+	// ActiveStepID and Seq belong to the guarded step statements in store.go. InitTask never
+	// writes them (see TaskStore.InitTask), so a full-record save cannot move them backwards.
 	// The table needs: active_step_id UUID NULL, seq BIGINT NOT NULL DEFAULT 0.
 	ActiveStepID *string         `gorm:"column:active_step_id;type:uuid"`
 	Seq          int64           `gorm:"column:seq;not null;default:0"`
@@ -58,7 +57,6 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		State:                m.State,
 		RenderConfig:         m.RenderConfig,
 		ParentWorkflowID:     m.ParentWorkflowID,
-		ParentRunID:          m.ParentRunID,
 		ParentStepID:         m.ParentStepID,
 		RootWorkflowID:       m.RootWorkflowID,
 		TaskWorkflowID:       m.TaskWorkflowID,
@@ -90,7 +88,6 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		RenderConfig:         r.RenderConfig,
 		ParentWorkflowID:     r.ParentWorkflowID,
 		RootWorkflowID:       r.RootWorkflowID,
-		ParentRunID:          r.ParentRunID,
 		ParentStepID:         r.ParentStepID,
 		TaskWorkflowID:       r.TaskWorkflowID,
 		ActiveTaskTemplateID: r.ActiveTaskTemplateID,

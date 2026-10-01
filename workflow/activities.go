@@ -23,7 +23,7 @@ type Activities struct {
 	// WorkflowCompletedActivityHandler is invoked when the overall workflow execution succeeds and reaches
 	// an End node. It receives the workflow ID and the final accumulated workflow variables, allowing the
 	// host application to run any necessary completion triggers, notify listeners, or persist final state.
-	WorkflowCompletedActivityHandler func(string, map[string]any) error
+	WorkflowCompletedActivityHandler func(WorkflowCompletion) error
 
 	// FetchWorkflowDefinitionHandler is invoked to dynamically retrieve the workflow definition structure
 	// for a given template ID during SPLIT_TASK execution.
@@ -77,8 +77,8 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 }
 
 // WorkflowCompletedActivity is a Temporal activity that executes when a workflow completes successfully.
-func (a *Activities) WorkflowCompletedActivity(_ context.Context, workflowID string, finalContext map[string]any) error {
-	return a.WorkflowCompletedActivityHandler(workflowID, finalContext)
+func (a *Activities) WorkflowCompletedActivity(_ context.Context, workflowID string, finalContext map[string]any, seq int64) error {
+	return a.WorkflowCompletedActivityHandler(WorkflowCompletion{WorkflowID: workflowID, Seq: seq, FinalVariables: finalContext})
 }
 
 // AdminParkActivity is a Temporal activity that notifies the host application whenever a node
