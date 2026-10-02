@@ -276,6 +276,37 @@ func TestGenerateTo(t *testing.T) {
 	})
 }
 
+func TestValidate(t *testing.T) {
+	t.Run("accepts a usable template", func(t *testing.T) {
+		require.NoError(t, htmlgen.Validate([]byte(`<p>{{ date .d "2006-01-02" "02/01/2006" }}</p>`)))
+	})
+
+	t.Run("reports a syntax error", func(t *testing.T) {
+		require.ErrorIs(t, htmlgen.Validate([]byte(`<p>{{ .name </p>`)), htmlgen.ErrParseTemplate)
+	})
+
+	t.Run("reports a call to a function that was not declared", func(t *testing.T) {
+		err := htmlgen.Validate([]byte(`<p>{{ if .x }}{{ codelist .y }}{{ end }}</p>`))
+		require.ErrorIs(t, err, htmlgen.ErrParseTemplate)
+		assert.Contains(t, err.Error(), "not defined")
+	})
+
+	t.Run("accepts a call to a declared resolver", func(t *testing.T) {
+		require.NoError(t, htmlgen.Validate([]byte(`<p>{{ codelist .y }}</p>`), "codelist"))
+	})
+
+	t.Run("reports a template html/template cannot escape", func(t *testing.T) {
+		// The context error only surfaces once html/template's escaping pass
+		// runs, which a plain parse does not trigger.
+		err := htmlgen.Validate([]byte(`<a href="{{ .u }}>`))
+		require.ErrorIs(t, err, htmlgen.ErrUnsafeTemplate)
+	})
+
+	t.Run("does not mistake data problems for template problems", func(t *testing.T) {
+		require.NoError(t, htmlgen.Validate([]byte(`<p>{{ .a.b.c }}{{ range .items }}{{ .x }}{{ end }}</p>`)))
+	})
+}
+
 func TestGenerate_Concurrent(t *testing.T) {
 	tmpl := []byte(`<p>{{ .n }}</p>`)
 	var wg sync.WaitGroup
@@ -304,13 +335,16 @@ func TestGenerate_RedundantEscapers(t *testing.T) {
 		`{{ define "t" }}<p>{{ . }}</p>{{ end }}{{ template "t" (html .x) }}`,
 	} {
 		t.Run(tmpl, func(t *testing.T) {
-			_, err := htmlgen.Generate(context.Background(), []byte(tmpl), map[string]any{"x": "a&b"})
+			err := htmlgen.Validate([]byte(tmpl))
 			require.ErrorIs(t, err, htmlgen.ErrUnsupportedTemplate)
 			assert.Contains(t, err.Error(), "is not needed")
+
+			_, err = htmlgen.Generate(context.Background(), []byte(tmpl), map[string]any{"x": "a&b"})
+			require.ErrorIs(t, err, htmlgen.ErrUnsupportedTemplate)
 		})
 	}
 
-	t.Run("a data key that merely contains the name is fine", func(t *testing.T) {
+	t.Run("a resolver or data key that merely contains the name is fine", func(t *testing.T) {
 		out := render(t, `<p>{{ .html }}{{ .js }}</p>`, map[string]any{"html": "a", "js": "b"})
 		assert.Equal(t, "<p>ab</p>", out)
 	})
