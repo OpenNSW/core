@@ -112,10 +112,8 @@ const (
 
 // NodeInfo holds information about the state of one of the nodes in the workflow.
 type NodeInfo struct {
-	// ID is the node's ID in the workflow definition (Node.ID), plus a ":<uuid>" suffix minted once
-	// per node at workflow start (see GraphInterpreterWorkflow) — a leftover from before ActivationID
-	// existed. Either way, it names the definition, not one run of it: the suffix is constant across
-	// every run of the node, including a loop revisiting it. See ActivationID for a run.
+	// ID is the node's ID in the workflow definition (Node.ID). It names the definition, not one
+	// run of it; see ActivationID for a run.
 	ID             string      `json:"id"`
 	CreatedAt      time.Time   `json:"createdAt"`                  // Timestamp of node creation
 	UpdatedAt      time.Time   `json:"updatedAt"`                  // Timestamp of last node update

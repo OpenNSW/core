@@ -31,8 +31,6 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		ParentStepID:         "step-3",
 		RootWorkflowID:       "consignment-9",
 		TaskWorkflowID:       "task-wf-1",
-		TaskRunID:            "task-run-1",
-		SubTaskNodeID:        "step-node-1",
 		ActiveTaskTemplateID: "tmpl-1",
 		ActiveStepID:         "0a0a0a0a-0000-4000-8000-00000000000a",
 		Seq:                  4,

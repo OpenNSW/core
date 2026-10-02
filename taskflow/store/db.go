@@ -31,8 +31,6 @@ type TaskRecord struct {
 	// WARNING: Since the store only holds a single set of coordinates, only one step can be active at any given time
 	// (strictly sequential execution). Parallel/concurrent steps inside a single Task Workflow are not supported.
 	TaskWorkflowID       string `json:"task_workflow_id"`
-	TaskRunID            string `json:"task_run_id"`
-	SubTaskNodeID        string `json:"subtask_node_id"`
 	ActiveTaskTemplateID string `json:"active_task_template_id,omitempty"`
 
 	// ActiveStepID identifies the run of the step node that is currently active. Empty until the
@@ -72,6 +70,9 @@ func copyBytes(b json.RawMessage) json.RawMessage {
 
 // Task states written by the guarded step statements.
 const (
+	// StateStartingStep means a step has been claimed and its plugin has not yet reported the state
+	// to render.
+	StateStartingStep = "STARTING_STEP"
 	// StateCompleted means the task workflow has ended.
 	StateCompleted = "COMPLETED"
 	// StateAdvancing means the active step's submission was accepted by the workflow, which is now
