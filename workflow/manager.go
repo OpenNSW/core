@@ -84,8 +84,14 @@ type AdminParkPayload struct {
 	RunID string
 	// RootWorkflowID is the workflow ID of the top-level execution (see TaskPayload.RootWorkflowID).
 	RootWorkflowID string
-	// NodeID is the ID of the graph node that parked.
+	// NodeID is the ID of the graph node that parked. It names the definition, not this one run of
+	// it; see ActivationID for a run.
 	NodeID string
+	// ActivationID identifies this specific run of the node — the same value NodeInfo.ActivationID
+	// held at the moment it parked. A resolution must echo it back (AdminResolutionSignal.ActivationID)
+	// to be matched to this parking rather than some other one, including an earlier parking of the
+	// same NodeID (a retry or loop revisit mints a new ActivationID each time it parks).
+	ActivationID string
 	// NodeType is the type of the node that parked (TASK, GATEWAY, etc.).
 	NodeType string
 	// TaskTemplateID identifies the task template the parked node was running. Empty for
