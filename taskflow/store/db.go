@@ -105,9 +105,11 @@ type StepClaim struct {
 type TaskStore interface {
 	// InitTask creates the row for a new task (state, parent coordinates, render config snapshot).
 	// It is called once, by StartTask, but must be idempotent: StartTask is a Temporal Activity and
-	// can be retried, so a second call for the same TaskID re-applies the same coarse fields rather
-	// than failing on a conflict.
-	InitTask(context context.Context, record TaskRecord)
+	// can be retried, so a second call for the same TaskID must be a no-op — the existing row is
+	// already correct, and overwriting it could rewind a row the guarded step statements have since
+	// moved forward. A non-nil error means the row does not exist and was not created; the caller
+	// must not proceed as though it had been.
+	InitTask(context context.Context, record TaskRecord) error
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
 	GetAllTasks(context context.Context, parentWorkflowID string) []TaskRecord
