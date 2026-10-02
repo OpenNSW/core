@@ -33,7 +33,7 @@ tm := orchestrator.NewTaskManager(db, registry, pluginsReg, taskWorkflowManager,
 
 ```go
 type TaskStore interface {
-    SaveTask(ctx context.Context, record TaskRecord)
+    InitTask(ctx context.Context, record TaskRecord)
     GetTask(ctx context.Context, taskID string) (TaskRecord, bool)
     GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, bool)
     GetAllTasks(ctx context.Context, parentWorkflowID string) []TaskRecord
@@ -42,7 +42,7 @@ type TaskStore interface {
 
 **Contracts:**
 
-- **`SaveTask` is an upsert** keyed on `record.TaskID`. Called for both new and updated records. It is the only write path — if you implement durable storage, this is your `INSERT … ON CONFLICT DO UPDATE`. The signature returns no error today; if your store can fail, log and surface failures via your own observability — the orchestrator currently treats persistence as best-effort.
+- **`InitTask` is an upsert** keyed on `record.TaskID`. Called for both new and updated records. It is the only write path — if you implement durable storage, this is your `INSERT … ON CONFLICT DO UPDATE`. The signature returns no error today; if your store can fail, log and surface failures via your own observability — the orchestrator currently treats persistence as best-effort.
 - **`GetTask`** looks up by `TaskID` (which equals the parent's NodeID — see architecture doc). Must return `(zero, false)` when absent, never panic.
 - **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
 - **`GetAllTasks`** returns every record if `parentWorkflowID == ""`, otherwise only records where `record.ParentWorkflowID == parentWorkflowID`. Used by the portal listing API.
@@ -51,11 +51,11 @@ A minimal in-memory implementation is in `demo/db.go` — useful as a starting p
 
 ### Concurrency
 
-`SaveTask` and the various reads are called from multiple goroutines (Temporal worker pool, HTTP handlers). Your implementation must be safe for concurrent use. The demo uses a `sync.RWMutex`; a SQL-backed store gets this from the DB.
+`InitTask` and the various reads are called from multiple goroutines (Temporal worker pool, HTTP handlers). Your implementation must be safe for concurrent use. The demo uses a `sync.RWMutex`; a SQL-backed store gets this from the DB.
 
 ### What "updated" means
 
-The orchestrator never modifies a record outside `SaveTask`. Plugins mutate the `TaskRecord` pointer they receive in `PluginContext.Record`, and the orchestrator calls `SaveTask` after the plugin returns. You don't need to diff or track changes — just persist what you're handed.
+The orchestrator never modifies a record outside `InitTask`. Plugins mutate the `TaskRecord` pointer they receive in `PluginContext.Record`, and the orchestrator calls `InitTask` after the plugin returns. You don't need to diff or track changes — just persist what you're handed.
 
 ---
 
@@ -245,7 +245,7 @@ Note that **the parent activity returns `ErrResultPending` even on success**. Th
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
     // 1. Load TaskRecord by TaskID — fails if missing or already COMPLETED
     // 2. Merge payload into record.Data (top-level keys, last-write-wins)
-    // 3. SaveTask
+    // 3. InitTask
     // 4. TemporalManager.CompleteActivation(ctx, TaskWorkflowID, TaskRunID, SubTaskNodeID, Data)
     //    → wakes the parked step activity with the full data map as its result
 }

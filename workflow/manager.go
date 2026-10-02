@@ -206,9 +206,23 @@ type UpdateEvent struct {
 //     it by calling Manager.CompleteActivation() with the matching workflow, run, and step IDs.
 type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
 
+// WorkflowCompletion is what the engine reports when a top-level workflow reaches its END node.
+type WorkflowCompletion struct {
+	// WorkflowID is the ID of the workflow that completed.
+	WorkflowID string
+	// Seq is the workflow's step counter taken for its end: one more than the Seq of the last TASK
+	// node run it started, so higher than every TaskPayload.Seq it emitted. A host that orders its
+	// writes by Seq uses it to write the completion so a late write from any earlier step matches
+	// nothing.
+	Seq int64
+	// FinalVariables is the workflow's accumulated variables.
+	FinalVariables map[string]any
+}
+
 // WorkflowCompletionHandler is invoked when the generic DAG workflow successfully reaches an "End" node,
-// providing the final, accumulated state of the workflow variables.
-type WorkflowCompletionHandler func(workflowID string, finalWorkflowVariables map[string]any) error
+// providing the final, accumulated state of the workflow variables. It may be invoked more than once
+// for the same workflow (Temporal retries the Activity), so it must be idempotent.
+type WorkflowCompletionHandler func(WorkflowCompletion) error
 
 // AdminParkHandler is invoked once every time a node parks in NodeStatusAwaitingAdmin —
 // including a re-park after a failed AdminActionRetry, since that's newly actionable
@@ -342,6 +356,11 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 	opts := client.StartWorkflowOptions{
 		ID:        ID,
 		TaskQueue: m.taskQueue,
+		// A caller that retries starting a workflow (e.g. a Temporal Activity retrying StartWorkflow
+		// for a child that already started) attaches to the existing run instead of erroring. This
+		// is already the SDK's default (the zero value); set explicitly so that's a documented
+		// choice here, not an unstated default a future change could flip by accident.
+		WorkflowExecutionErrorWhenAlreadyStarted: false,
 	}
 
 	_, err := m.temporalClient.ExecuteWorkflow(ctx, opts, "GraphInterpreterWorkflow", def, initialWorkflowVariables)
