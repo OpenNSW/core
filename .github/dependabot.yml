@@ -19,6 +19,7 @@ updates:
       - "/storage"
       - "/json"
       - "/xmlgen"
+      - "/htmlgen"
     schedule:
       interval: "weekly"
       day: "monday"
