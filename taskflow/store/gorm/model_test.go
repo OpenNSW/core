@@ -34,6 +34,8 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		TaskRunID:            "task-run-1",
 		SubTaskNodeID:        "step-node-1",
 		ActiveTaskTemplateID: "tmpl-1",
+		ActiveStepID:         "0a0a0a0a-0000-4000-8000-00000000000a",
+		Seq:                  4,
 		Data:                 map[string]any{"userform": map[string]any{"name": "Alice"}},
 	}
 
@@ -50,6 +52,9 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 	}
 	if got.TaskWorkflowID != original.TaskWorkflowID {
 		t.Errorf("TaskWorkflowID: got %q, want %q", got.TaskWorkflowID, original.TaskWorkflowID)
+	}
+	if got.ActiveStepID != original.ActiveStepID || got.Seq != original.Seq {
+		t.Errorf("step columns: got (%q, %d), want (%q, %d)", got.ActiveStepID, got.Seq, original.ActiveStepID, original.Seq)
 	}
 	if got.ActiveTaskTemplateID != original.ActiveTaskTemplateID {
 		t.Errorf("ActiveTaskTemplateID: got %q, want %q", got.ActiveTaskTemplateID, original.ActiveTaskTemplateID)
@@ -76,5 +81,16 @@ func TestFromDomain_DoesNotDeriveRootWorkflowID(t *testing.T) {
 
 	if got := FromDomain(r).RootWorkflowID; got != "explicit-root" {
 		t.Errorf("FromDomain re-derived RootWorkflowID: got %q, want %q", got, "explicit-root")
+	}
+}
+
+// An empty ActiveStepID must reach the uuid column as NULL, not as "", which Postgres rejects.
+func TestFromDomain_EmptyActiveStepIDIsNull(t *testing.T) {
+	m := FromDomain(store.TaskRecord{TaskID: "task-1"})
+	if m.ActiveStepID != nil {
+		t.Errorf("ActiveStepID = %q, want nil", *m.ActiveStepID)
+	}
+	if got := m.ToDomain().ActiveStepID; got != "" {
+		t.Errorf("round trip ActiveStepID = %q, want empty", got)
 	}
 }

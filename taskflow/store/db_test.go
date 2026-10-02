@@ -43,6 +43,18 @@ func (t *testStore) GetAllTasks(_ context.Context, parentWorkflowID string) []Ta
 	return list
 }
 
+func (t *testStore) ClaimStep(context.Context, string, StepClaim) (int64, error) { return 0, nil }
+
+func (t *testStore) WriteRenderState(context.Context, string, string, int64, string, map[string]any) (int64, error) {
+	return 0, nil
+}
+
+func (t *testStore) PersistSubmission(context.Context, string, string, int64, map[string]any) (int64, error) {
+	return 0, nil
+}
+
+func (t *testStore) CompleteTask(context.Context, string, int64) (int64, error) { return 0, nil }
+
 func TestTaskStoreInterface(t *testing.T) {
 	var store TaskStore = &testStore{tasks: make(map[string]TaskRecord)}
 

@@ -133,6 +133,56 @@ func (s *safeMockTaskStore) GetAllTasks(_ context.Context, parentWorkflowID stri
 	return out
 }
 
+// The guarded step writes mirror the SQL guards of the real stores.
+
+func (s *safeMockTaskStore) ClaimStep(_ context.Context, taskID string, c store.StepClaim) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.Seq > c.Seq {
+		return 0, nil
+	}
+	t.ActiveStepID, t.Seq, t.ActiveTaskTemplateID, t.State, t.Data = c.StepID, c.Seq, c.ActiveTaskTemplateID, c.State, c.Data
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) WriteRenderState(_ context.Context, taskID, stepID string, seq int64, state string, data map[string]any) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.ActiveStepID != stepID || t.Seq != seq {
+		return 0, nil
+	}
+	t.State, t.Data = state, data
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) PersistSubmission(_ context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.ActiveStepID != stepID || t.Seq != seq {
+		return 0, nil
+	}
+	t.Data, t.State, t.Seq = data, store.StateAdvancing, seq+1
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) CompleteTask(_ context.Context, taskID string, seq int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.Seq > seq {
+		return 0, nil
+	}
+	t.State, t.Seq = store.StateCompleted, seq
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
