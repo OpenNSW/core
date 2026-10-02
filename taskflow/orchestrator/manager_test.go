@@ -89,6 +89,9 @@ func (m *mockTemporalManager) RegisterAdminParkHandler(_ engine.AdminParkHandler
 type safeMockTaskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]store.TaskRecord
+	// initTaskErr, if set, is returned by InitTask instead of writing anything — simulates a failed
+	// insert (e.g. the DB is unavailable) so callers can be tested against that path.
+	initTaskErr error
 }
 
 func newSafeMockTaskStore() *safeMockTaskStore {
@@ -97,10 +100,19 @@ func newSafeMockTaskStore() *safeMockTaskStore {
 	}
 }
 
-func (s *safeMockTaskStore) InitTask(_ context.Context, task store.TaskRecord) {
+// InitTask is a no-op on conflict, mirroring the real store's ON CONFLICT DO NOTHING: a retry of
+// the same TaskID must not overwrite a row guarded writes may have already moved forward.
+func (s *safeMockTaskStore) InitTask(_ context.Context, task store.TaskRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.initTaskErr != nil {
+		return s.initTaskErr
+	}
+	if _, exists := s.tasks[task.TaskID]; exists {
+		return nil
+	}
 	s.tasks[task.TaskID] = task
+	return nil
 }
 
 func (s *safeMockTaskStore) GetTask(_ context.Context, taskID string) (store.TaskRecord, bool) {
@@ -420,6 +432,38 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when task StartWorkflow fails, got nil")
+	}
+}
+
+// TestStartTask_InitTaskErrorPreventsWorkflowStart is the regression test for a task workflow
+// started with no backing row: if InitTask fails, StartTask must return the error and must not
+// start the task workflow — otherwise the workflow runs with nothing in the DB, every
+// StartTaskStep call fails with "no task record found" and retries forever, and a workflow that
+// somehow still reached END would find no row in HandleTaskCompletion and never wake the parent.
+func TestStartTask_InitTaskErrorPreventsWorkflowStart(t *testing.T) {
+	taskStore := newSafeMockTaskStore()
+	taskStore.initTaskErr = errors.New("db unavailable")
+
+	workflowStarted := false
+	mockTaskWF := &mockTemporalManager{
+		startWorkflowFunc: func(_ context.Context, _ string, _ engine.WorkflowDefinition, _ map[string]any) error {
+			workflowStarted = true
+			return nil
+		},
+	}
+
+	tm := newTestTaskManager(taskStore, newTestRegistry(), mockTaskWF, noopCallback)
+
+	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
+		WorkflowID:     "parent-wf",
+		ActivationID:   "step-1",
+		TaskTemplateID: "test_template",
+	})
+	if err == nil {
+		t.Fatal("expected error when InitTask fails, got nil")
+	}
+	if workflowStarted {
+		t.Error("StartWorkflow must not be called when InitTask fails")
 	}
 }
 

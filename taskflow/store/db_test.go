@@ -14,8 +14,9 @@ type testStore struct {
 	tasks map[string]TaskRecord
 }
 
-func (t *testStore) InitTask(_ context.Context, record TaskRecord) {
+func (t *testStore) InitTask(_ context.Context, record TaskRecord) error {
 	t.tasks[record.TaskID] = record
+	return nil
 }
 
 func (t *testStore) GetTask(_ context.Context, taskID string) (TaskRecord, bool) {

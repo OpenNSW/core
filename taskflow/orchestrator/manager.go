@@ -198,7 +198,9 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		}
 	}
 
-	tm.db.InitTask(ctx, record)
+	if err := tm.db.InitTask(ctx, record); err != nil {
+		return nil, fmt.Errorf("create task record: %w", err)
+	}
 	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type)
 
 	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)

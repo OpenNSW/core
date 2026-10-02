@@ -25,26 +25,25 @@ func New(db *gorm.DB) *TaskStore {
 	return &TaskStore{db: db}
 }
 
-func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) {
+func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) error {
 	// active_step_id and seq are owned by the guarded step statements below. Omitting them keeps a
 	// full-record save from moving them, and lets this write work before the columns exist.
 	model := FromDomain(record)
-	// store.TaskStore.InitTask returns no error (persistence is treated as
-	// best-effort), so the only observability we have for a failed upsert is
-	// a log line.
-	//
 	// On conflict, do nothing rather than overwrite: TaskID is the parent's ActivationID, unique
 	// per invocation of the parent's node, so a conflict can only be a retry of this exact
 	// StartTask call (Temporal Activities can be retried) — never a different task. The existing
 	// row is already correct, and by the time a retry lands, guarded writes below (ClaimStep etc.)
 	// may have already moved it forward; overwriting state/data here would silently rewind it.
-	if err := s.db.WithContext(ctx).Omit("active_step_id", "seq").Clauses(clause.OnConflict{
+	err := s.db.WithContext(ctx).Omit("active_step_id", "seq").Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "task_id"}},
 		DoNothing: true,
-	}).Create(&model).Error; err != nil {
+	}).Create(&model).Error
+	if err != nil {
 		slog.ErrorContext(ctx, "taskflow gorm store: InitTask upsert failed",
 			"task_id", record.TaskID, "error", err)
+		return fmt.Errorf("init task %s: %w", record.TaskID, err)
 	}
+	return nil
 }
 
 func (s *TaskStore) GetTask(ctx context.Context, taskID string) (store.TaskRecord, bool) {
