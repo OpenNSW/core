@@ -87,7 +87,7 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranches
 
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"items": []any{
 				map[string]any{"id": "item-1", "name": "Cut Flowers"},
@@ -96,8 +96,8 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranches
 		}, nil).Once()
 
 	// lab_task: annotates every item with lab_result, echoing the identity fields it saw.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ string, inputs map[string]any, _ string) (map[string]any, error) {
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ string, inputs map[string]any, _ string, _ ActivationRef) (map[string]any, error) {
 			in, _ := inputs["commodities"].([]any)
 			out := make([]any, 0, len(in))
 			for _, raw := range in {
@@ -109,8 +109,8 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_ItemFieldMerge_BothBranches
 		}).Once()
 
 	// visual_task: annotates every item with visual_result, independently of lab_task.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ string, inputs map[string]any, _ string) (map[string]any, error) {
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ string, inputs map[string]any, _ string, _ ActivationRef) (map[string]any, error) {
 			in, _ := inputs["commodities"].([]any)
 			out := make([]any, 0, len(in))
 			for _, raw := range in {
@@ -192,9 +192,9 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_GenericMapMerge_DisjointFie
 		},
 	}
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TRACK_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TRACK_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"value": true}, nil).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TRACK_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TRACK_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"value": true}, nil).Once()
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -231,17 +231,17 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_SameFieldConflict_LastBranc
 
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"items": []any{map[string]any{"id": "item-1"}},
 		}, nil).Once()
 
 	// Both branches write the SAME field ("failure_reason") with DIFFERENT values.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"commodities": []any{map[string]any{"id": "item-1", "failure_reason": "lab reason"}},
 		}, nil).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"commodities": []any{map[string]any{"id": "item-1", "failure_reason": "visual reason"}},
 		}, nil).Once()
@@ -280,18 +280,18 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_ItemMissingID_Fai
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
 
 	// An item is missing the required "id" field
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"items": []any{
 				map[string]any{"name": "No ID item"},
 			},
 		}, nil).Once()
 
-	passThrough := func(_ context.Context, _ string, inputs map[string]any, _ string) (map[string]any, error) {
+	passThrough := func(_ context.Context, _ string, inputs map[string]any, _ string, _ ActivationRef) (map[string]any, error) {
 		return map[string]any{"commodities": inputs["commodities"]}, nil
 	}
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything).Return(passThrough)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything).Return(passThrough)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything, mock.Anything).Return(passThrough)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything, mock.Anything).Return(passThrough)
 
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
@@ -329,16 +329,16 @@ func (s *ParallelGatewayTestSuite) TestParallelSplit_MergeByID_InvalidItemType_F
 	def := buildParallelMergeWorkflow(map[string]string{"commodities": "id"})
 
 	// LOAD_ITEMS returns invalid non-slice items
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"items": "not-a-slice",
 		}, nil).Once()
 
-	passThrough := func(_ context.Context, _ string, inputs map[string]any, _ string) (map[string]any, error) {
+	passThrough := func(_ context.Context, _ string, inputs map[string]any, _ string, _ ActivationRef) (map[string]any, error) {
 		return map[string]any{"commodities": inputs["commodities"]}, nil
 	}
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything).Return(passThrough)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything).Return(passThrough)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_TASK", mock.Anything, mock.Anything, mock.Anything).Return(passThrough)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_TASK", mock.Anything, mock.Anything, mock.Anything).Return(passThrough)
 
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
