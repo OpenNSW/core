@@ -219,4 +219,5 @@ and `errors.Is(err, yourSentinel)` are both true.
 
 ```sh
 go test -race ./...
+go test ./... -update   # rewrite the golden files after an intended change
 ```
