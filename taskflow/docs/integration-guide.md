@@ -2,7 +2,7 @@
 
 How to embed the orchestrator in your own Go service.
 
-> Prerequisite: read [`architecture.md`](architecture.md) first. This guide assumes you understand the Parent / Task / SubTask layering and the `TaskRecord` shape.
+> Prerequisite: read [`architecture.md`](architecture.md) first. This guide assumes you understand the Parent / Task / Step layering and the `TaskRecord` shape.
 
 ---
 
@@ -13,7 +13,7 @@ To run the orchestrator, you provide concrete implementations of four dependenci
 | Dependency        | Interface                            | What it does                                                   |
 |-------------------|--------------------------------------|----------------------------------------------------------------|
 | Task store        | `store.TaskStore`                    | Persists `TaskRecord`s                                         |
-| Template registry | `orchestrator.TaskTemplateRegistry`  | Looks up task / subtask / workflow / render-config definitions |
+| Template registry | `orchestrator.TaskTemplateRegistry`  | Looks up task / step / workflow / render-config definitions |
 | Plugin registry   | `*plugins.Registry` (concrete)       | Maps `TaskType` → plugin handler                               |
 | Temporal manager  | `engine.TemporalManager`             | Starts task workflows and resumes parked activities            |
 | Renderer          | `renderer.Renderer`                  | Turns `(state, data)` + render config → a UI view              |
@@ -25,7 +25,7 @@ Then you call:
 tm := orchestrator.NewTaskManager(db, registry, pluginsReg, taskWorkflowManager, onTaskCompleted, rdr)
 ```
 
-…and wire `tm.StartTask`, `tm.StartSubTask`, and `tm.HandleTaskCompletion` into your Temporal handlers. `demo/main.go` is the complete worked example.
+…and wire `tm.StartTask`, `tm.StartTaskStep`, and `tm.HandleTaskCompletion` into your Temporal handlers. `demo/main.go` is the complete worked example.
 
 ---
 
@@ -44,7 +44,7 @@ type TaskStore interface {
 
 - **`SaveTask` is an upsert** keyed on `record.TaskID`. Called for both new and updated records. It is the only write path — if you implement durable storage, this is your `INSERT … ON CONFLICT DO UPDATE`. The signature returns no error today; if your store can fail, log and surface failures via your own observability — the orchestrator currently treats persistence as best-effort.
 - **`GetTask`** looks up by `TaskID` (which equals the parent's NodeID — see architecture doc). Must return `(zero, false)` when absent, never panic.
-- **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartSubTask` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
+- **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
 - **`GetAllTasks`** returns every record if `parentWorkflowID == ""`, otherwise only records where `record.ParentWorkflowID == parentWorkflowID`. Used by the portal listing API.
 
 A minimal in-memory implementation is in `demo/db.go` — useful as a starting point or for tests.
@@ -64,7 +64,7 @@ The orchestrator never modifies a record outside `SaveTask`. Plugins mutate the 
 ```go
 type TaskTemplateRegistry interface {
     GetTaskTemplate(id string) (TaskTemplate, bool)
-    GetSubTaskTemplate(id string) (SubTaskTemplate, bool)
+    GetStepTemplate(id string) (StepTemplate, bool)
     GetWorkflow(id string) (engine.WorkflowDefinition, bool)
     GetGenericTemplate(id string) (json.RawMessage, bool)
 }
@@ -75,7 +75,7 @@ This is read-only from the orchestrator's perspective. How definitions get *into
 | Method               | Resolves                                          | Used in                                                  |
 |----------------------|---------------------------------------------------|----------------------------------------------------------|
 | `GetTaskTemplate`    | `payload.TaskTemplateID` from the parent workflow | `StartTask`                                              |
-| `GetSubTaskTemplate` | `payload.TaskTemplateID` from the child workflow  | `StartSubTask`                                           |
+| `GetStepTemplate` | `payload.TaskTemplateID` from the child workflow  | `StartTaskStep`                                           |
 | `GetWorkflow`        | `TaskTemplate.WorkflowID`                         | `StartTask`                                              |
 | `GetGenericTemplate` | `TaskTemplate.RenderConfigID`                     | `StartTask` (snapshotted into `TaskRecord.RenderConfig`) |
 
@@ -95,7 +95,7 @@ pluginsReg.Register("PAYMENT", plugins.NewPaymentPlugin(dispatcher))
 pluginsReg.Register("FIRE_AND_FORGET", plugins.NewAPICallPlugin(dispatcher))
 ```
 
-The key — `"USER_INPUT"`, `"PAYMENT"`, etc. — is the `task_type` field in the **SubTaskTemplate** JSON. When the task workflow activates a subtask node, the orchestrator looks up the subtask template, reads its `task_type`, and dispatches to the matching plugin.
+The key — `"USER_INPUT"`, `"PAYMENT"`, etc. — is the `task_type` field in the **StepTemplate** JSON. When the task workflow activates a step node, the orchestrator looks up the step template, reads its `task_type`, and dispatches to the matching plugin.
 
 `Register` returns an error if you double-register the same key. The registry is concurrency-safe.
 
@@ -122,7 +122,7 @@ taskWorkflowManager := engine.NewTemporalManager(
     temporalClient,
     "default",
     "your-task-queue",
-    taskHandler,              // called when a task workflow activates a SUBTASK node
+    taskHandler,              // called when a task workflow activates a TASK node
     taskCompletionHandler,    // called when a task workflow ends
 )
 ```
@@ -135,7 +135,7 @@ parentTaskHandler := func(p engine.TaskPayload) (map[string]any, error) {
 }
 
 taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
-    return tm.StartSubTask(p)
+    return tm.StartTaskStep(p)
 }
 
 taskCompletionHandler := func(workflowID string, vars map[string]any) error {
@@ -156,7 +156,7 @@ taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
     if tm == nil {
         return nil, fmt.Errorf("task manager not initialised")
     }
-    return tm.StartSubTask(p)
+    return tm.StartTaskStep(p)
 }
 
 // ... construct managers ...
@@ -176,7 +176,7 @@ Fires when a task workflow ends. The library hands you the parent coordinates it
 
 ```go
 onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
-    return parentWorkflowManager.TaskDone(
+    return parentWorkflowManager.CompleteActivation(
         context.Background(),
         parentWorkflowID,
         parentRunID,
@@ -214,12 +214,12 @@ The orchestrator uses two sentinel errors to signal "this isn't really an error,
 
 | Sentinel                                                         | Returned by                                        | Meaning                                                                                  |
 |------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------|
-| `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartSubTask` (when plugin suspends) | The Temporal activity should park indefinitely; the orchestrator will resume it later.   |
+| `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartTaskStep` (when plugin suspends) | The Temporal activity should park indefinitely; the orchestrator will resume it later.   |
 | `plugins.ErrSuspended`                                           | A plugin's `Execute` method                        | "I dispatched the work; don't advance the workflow until something external resumes me." |
 
-`StartSubTask` translates `ErrSuspended` from a plugin into `ErrResultPending` for Temporal. Both are normal happy-path values, not failures.
+`StartTaskStep` translates `ErrSuspended` from a plugin into `ErrResultPending` for Temporal. Both are normal happy-path values, not failures.
 
-A real error from `StartTask` / `StartSubTask` (template not found, plugin failed) is logged and returned to Temporal, which will retry per your workflow's retry policy.
+A real error from `StartTask` / `StartTaskStep` (template not found, plugin failed) is logged and returned to Temporal, which will retry per your workflow's retry policy.
 
 ---
 
@@ -246,12 +246,12 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
     // 1. Load TaskRecord by TaskID — fails if missing or already COMPLETED
     // 2. Merge payload into record.Data (top-level keys, last-write-wins)
     // 3. SaveTask
-    // 4. TemporalManager.TaskDone(ctx, TaskWorkflowID, TaskRunID, SubTaskNodeID, Data)
-    //    → wakes the parked subtask activity with the full data map as its result
+    // 4. TemporalManager.CompleteActivation(ctx, TaskWorkflowID, TaskRunID, SubTaskNodeID, Data)
+    //    → wakes the parked step activity with the full data map as its result
 }
 ```
 
-The portal calls this with whatever payload makes sense for the current subtask. The shape is typed by your subtask templates and plugins, not by the orchestrator.
+The portal calls this with whatever payload makes sense for the current step. The shape is typed by your step templates and plugins, not by the orchestrator.
 
 ---
 

@@ -10,9 +10,11 @@ The orchestrator separates a long-running business process from the interactive 
 |---------------------|-----------------------------------------|--------------------------------------------------------------------------------------------|
 | **Parent Workflow** | Macro workflow on the parent task queue | The end-to-end business journey. Knows nothing about forms, payments, or external systems. |
 | **Task**            | Child workflow on the task task queue   | A self-contained micro-flow that fulfils one parent-workflow node.                         |
-| **SubTask**         | A node *inside* a Task workflow         | One interaction step (form, API call, payment) executed by a plugin.                       |
+| **Step**         | A node *inside* a Task workflow         | One interaction step (form, API call, payment) executed by a plugin.                       |
 
-The parent workflow only ever sees TASK nodes. It doesn't know — and doesn't need to know — that a single task is internally a workflow with five subtasks.
+The parent workflow only ever sees TASK nodes. It doesn't know — and doesn't need to know — that a single task is internally a workflow with five steps.
+
+A note on naming: the workflow engine (`workflow/`) only ever sees TASK nodes and calls one run of a node a **TaskActivation** (`TaskPayload.ActivationID`, `Manager.CompleteActivation`) — a domain-neutral term, since the engine is reused at both the Parent Workflow and Task layers above and has no notion of "Task" and "SubTask" as TaskManager understands them. TaskManager is what calls that same run a **Step**. A Step *is* a TaskActivation; it's the same identity, addressed by `ActivationID` on the engine side and by `ActiveStepID` on TaskManager's side, translated at the one boundary where TaskManager calls into the engine.
 
 ## Flow diagram
 
@@ -39,16 +41,16 @@ parentTaskHandler(payload)
 
 [Task Workflow]                    ← Temporal workflow on task queue
        │
-       │ hits a SUBTASK node
+       │ hits a TASK node
        ▼
 taskHandler(payload)
        │
-       │ calls TaskManager.StartSubTask
+       │ calls TaskManager.StartTaskStep
        ▼
 [TaskManager]
        │
        ├──► loads TaskRecord by TaskWorkflowID
-       ├──► resolves SubTaskTemplate from registry
+       ├──► resolves StepTemplate from registry
        ├──► looks up plugin by TaskType
        └──► plugin.Execute(...)
               │
@@ -62,10 +64,10 @@ External event (HTTP POST from the portal, webhook, etc.)
 TaskManager.CompleteTaskStep(ctx, taskID, payload)
        │
        ├──► merges payload into TaskRecord.Data
-       └──► calls TemporalManager.TaskDone(...)
+       └──► calls TemporalManager.CompleteActivation(...)
               │
               ▼
-       [Task Workflow] resumes the parked subtask and advances
+       [Task Workflow] resumes the parked step and advances
 
 
 [Task Workflow] reaches END
@@ -101,13 +103,13 @@ type TaskRecord struct {
     ParentRunID      string
     ParentNodeID     string
 
-    // 3. Active subtask coordinates — used to resume the currently parked step
+    // 3. Active step coordinates — used to resume the currently parked step
     TaskWorkflowID       string
     TaskRunID            string
     SubTaskNodeID        string
     ActiveTaskTemplateID string
 
-    // 4. Dynamic state — accumulated namespaced inputs/outputs across all subtasks
+    // 4. Dynamic state — accumulated namespaced inputs/outputs across all steps
     Data map[string]any
 
     CreatedAt, UpdatedAt time.Time
@@ -117,13 +119,13 @@ type TaskRecord struct {
 Two coordinate sets, never both active at once:
 
 - **Parent coordinates** are written once at `StartTask` and consumed once at `HandleTaskCompletion`.
-- **Active subtask coordinates** are overwritten every time a new subtask becomes active, and consumed when `CompleteTaskStep` resumes it.
+- **Active step coordinates** are overwritten every time a new step becomes active, and consumed when `CompleteTaskStep` resumes it.
 
 ## Lifecycle and states
 
 `TaskRecord.State` is plain string for flexibility — it's set by plugins and read by the renderer. The orchestrator itself only ever writes two values:
 
-- `STARTING` — set by `StartTask` before the task workflow runs its first subtask.
+- `STARTING` — set by `StartTask` before the task workflow runs its first step.
 - `COMPLETED` — set by `HandleTaskCompletion` when the task workflow ends.
 
 Everything else is a plugin's responsibility:
@@ -141,9 +143,9 @@ stateDiagram-v2
     STARTING --> PENDING_USER : USER_INPUT plugin
     STARTING --> DISPATCHED : FIRE_AND_FORGET plugin
     STARTING --> QUEUED_EXTERNALLY : EXTERNAL_REVIEW plugin
-    PENDING_USER --> PENDING_USER : next user-input subtask
-    PENDING_USER --> QUEUED_EXTERNALLY : next subtask is review
-    QUEUED_EXTERNALLY --> PENDING_PAYMENT : next subtask is payment
+    PENDING_USER --> PENDING_USER : next user-input step
+    PENDING_USER --> QUEUED_EXTERNALLY : next step is review
+    QUEUED_EXTERNALLY --> PENDING_PAYMENT : next step is payment
     PENDING_PAYMENT --> COMPLETED : task workflow ends
     DISPATCHED --> COMPLETED : task workflow ends
     PENDING_USER --> COMPLETED : task workflow ends
@@ -161,7 +163,7 @@ sequenceDiagram
     participant DB as TaskStore
     participant FE as Portal
 
-    TW->>TM: StartSubTask(payload)
+    TW->>TM: StartTaskStep(payload)
     TM->>DB: load TaskRecord
     TM->>P: Execute(ctx, properties)
     P->>DB: set record.State = "PENDING_USER" (via TM)
@@ -169,16 +171,16 @@ sequenceDiagram
     TM->>DB: SaveTask(record)
     TM-->>TW: activity.ErrResultPending
 
-    Note over TW: workflow parks on this subtask node
+    Note over TW: workflow parks on this step node
 
     FE->>TM: CompleteTaskStep(ctx, taskID, payload)
     TM->>DB: load TaskRecord by TaskID
     TM->>DB: merge payload into record.Data
-    TM->>TW: TaskDone(WorkflowID, RunID, NodeID, Data)
-    TW->>TM: (next subtask activates → StartSubTask)
+    TM->>TW: CompleteActivation(WorkflowID, RunID, NodeID, Data)
+    TW->>TM: (next step activates → StartTaskStep)
 ```
 
-The crucial detail: the **active subtask coordinates** (`TaskWorkflowID`, `TaskRunID`, `SubTaskNodeID`) are stamped onto the record when `StartSubTask` runs. `CompleteTaskStep` reads them back to know which parked activity to resume — the portal never needs to know about runs, nodes, or Temporal at all.
+The crucial detail: the **active step coordinates** (`TaskWorkflowID`, `TaskRunID`, `SubTaskNodeID`) are stamped onto the record when `StartTaskStep` runs. `CompleteTaskStep` reads them back to know which parked activity to resume — the portal never needs to know about runs, nodes, or Temporal at all.
 
 ## The TaskID convention
 
@@ -192,7 +194,7 @@ This is a deliberate simplification — the alternative (UUID + correlation key)
 
 ## Constraints
 
-### No parallel subtasks
+### No parallel steps
 
 `StartTask` rejects any child workflow definition containing a parallel or inclusive split gateway:
 
@@ -206,13 +208,13 @@ for _, node := range wfDef.Nodes {
 }
 ```
 
-The reason: `TaskRecord` only holds **one** set of active subtask coordinates. Two simultaneously-active subtasks couldn't both be addressable, and `CompleteTaskStep` would be ambiguous.
+The reason: `TaskRecord` only holds **one** set of active step coordinates. Two simultaneously-active steps couldn't both be addressable, and `CompleteTaskStep` would be ambiguous.
 
 If you genuinely need parallel work inside a task, model each parallel branch as its own task at the parent level, fanned out by the parent workflow.
 
 ### Sequential execution
 
-Within a task, subtasks run one after another. A subtask must either complete synchronously (`return nil`) or suspend (`return ErrSuspended`) — the workflow doesn't proceed until the current subtask is resolved.
+Within a task, steps run one after another. A step must either complete synchronously (`return nil`) or suspend (`return ErrSuspended`) — the workflow doesn't proceed until the current step is resolved.
 
 ### `TaskID` uniqueness
 
@@ -224,7 +226,7 @@ Within a task, subtasks run one after another. A subtask must either complete sy
 |---------------------------------------------------------------|----------------------------|
 | `TaskManager` and the four public methods                     | `orchestrator/manager.go`  |
 | `TaskRecord`, `TaskStore` interface                           | `store/db.go`              |
-| `TaskTemplate`, `SubTaskTemplate`, `TaskTemplateRegistry`     | `orchestrator/registry.go` |
+| `TaskTemplate`, `StepTemplate`, `TaskTemplateRegistry`     | `orchestrator/registry.go` |
 | `TaskView` (what callers receive)                             | `orchestrator/view.go`     |
 | Plugin interface, `Registry`, `PluginContext`, `ErrSuspended` | `plugins/plugin.go`        |
 | Renderer interface, `RenderResult`, `UIComponent`             | `renderer/renderer.go`     |

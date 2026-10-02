@@ -1,6 +1,6 @@
 # Plugin Author Guide
 
-How to write a new subtask plugin and register it with the orchestrator.
+How to write a new step plugin and register it with the orchestrator.
 
 > Prerequisite: read [`architecture.md`](architecture.md) — particularly the lifecycle and suspend/resume sequence diagram.
 
@@ -8,11 +8,11 @@ How to write a new subtask plugin and register it with the orchestrator.
 
 ## What a plugin is
 
-A plugin is the strategy that executes a single subtask node inside a task workflow. When the task workflow activates a SUBTASK node, the orchestrator:
+A plugin is the strategy that executes a single step node inside a task workflow. When the task workflow activates a TASK node, the orchestrator:
 
 1. Loads the `TaskRecord`.
-2. Resolves the `SubTaskTemplate` from `payload.TaskTemplateID`.
-3. Looks up a plugin by `subTemplate.TaskType`.
+2. Resolves the `StepTemplate` from `payload.TaskTemplateID`.
+3. Looks up a plugin by `subTemplate.PluginType`.
 4. Calls `plugin.Execute(pluginCtx, subTemplate.PluginProperties)`.
 
 Your plugin is in charge of:
@@ -39,11 +39,11 @@ type PluginContext struct {
 }
 ```
 
-**`config`** is the JSON blob from the subtask template's `plugin_properties`. Unmarshal it into a typed struct your plugin defines.
+**`config`** is the JSON blob from the step template's `plugin_properties`. Unmarshal it into a typed struct your plugin defines.
 
 **`ctx.Record`** is a pointer — mutate it directly. The orchestrator persists whatever you leave behind.
 
-**`ctx.Inputs`** is the (already namespaced) inputs map for this subtask invocation. Convenience for plugins that need raw inputs without reaching into `Record.Data`.
+**`ctx.Inputs`** is the (already namespaced) inputs map for this step invocation. Convenience for plugins that need raw inputs without reaching into `Record.Data`.
 
 ---
 
@@ -138,7 +138,7 @@ import (
     "github.com/OpenNSW/nsw-task-flow/plugins"
 )
 
-// 1. Define your typed config — the shape that subtask templates will use.
+// 1. Define your typed config — the shape that step templates will use.
 type EmailPluginConfig struct {
     TemplateID string `json:"template_id"`
     ToField    string `json:"to_field"` // dotted key into Record.Data, e.g. "applicant.email"
@@ -182,7 +182,7 @@ Register it:
 pluginsReg.Register("EMAIL", NewEmailPlugin(mySender))
 ```
 
-Reference it from a subtask template:
+Reference it from a step template:
 
 ```json
 {
@@ -217,7 +217,7 @@ If a required field is missing, fail with a descriptive error including the plug
 
 ### Reading from `Record.Data`
 
-`Record.Data` is a `map[string]any` shaped by all the *previous* subtasks. Each submission-style subtask owns one top-level slot, named by its template's `output_namespace`. A user-input subtask with `output_namespace: "userform"` produces `Data["userform"] = { ...the form payload... }`; your subtask reads it back at the same path.
+`Record.Data` is a `map[string]any` shaped by all the *previous* steps. Each submission-style step owns one top-level slot, named by its template's `output_namespace`. A user-input step with `output_namespace: "userform"` produces `Data["userform"] = { ...the form payload... }`; your step reads it back at the same path.
 
 Note: callers do **not** wrap their submission payload — the orchestrator writes the raw POST body into the declared slot. So `Data["userform"]` is the form object itself, not `{ "userform": {...} }`.
 
@@ -225,7 +225,7 @@ Use dotted-key helpers if you have them (the orchestrator uses `setNestedKey` fo
 
 ### Mutating `Record.Data`
 
-If your plugin produces output (e.g. an external review's verdict), write it into `Record.Data` so downstream subtasks and the final `onTaskCompleted` callback can see it:
+If your plugin produces output (e.g. an external review's verdict), write it into `Record.Data` so downstream steps and the final `onTaskCompleted` callback can see it:
 
 ```go
 ctx.Record.Data["email"] = map[string]any{
@@ -235,7 +235,7 @@ ctx.Record.Data["email"] = map[string]any{
 }
 ```
 
-Use a namespace key matching your plugin's domain. Don't mutate keys owned by other subtasks.
+Use a namespace key matching your plugin's domain. Don't mutate keys owned by other steps.
 
 ### Context
 
@@ -261,8 +261,8 @@ Temporal retries failed activities. If your plugin dispatches an external action
 - **Don't return `ErrResultPending`** from a plugin. That's the orchestrator's translation layer to Temporal. Use `plugins.ErrSuspended`.
 - **Don't block forever in `Execute`.** If you need to wait, suspend.
 - **Don't mutate `ctx.Inputs`.** It's the snapshot the orchestrator handed you; mutating it has no effect on persisted state. Mutate `ctx.Record.Data` instead.
-- **Don't change `TaskID`, parent coordinates, `TaskWorkflowID`, or `ActiveOutputNamespace`.** Those are written by `StartTask` / `StartSubTask` and consumed by the resume path. Plugins should treat them as read-only.
-- **Don't write to `Record.Data` under a top-level key you don't own.** Each submission-style subtask owns one slot (its template's `output_namespace`). If your plugin produces internal output, namespace it under your task type's own slot, not under another subtask's.
+- **Don't change `TaskID`, parent coordinates, `TaskWorkflowID`, or `ActiveOutputNamespace`.** Those are written by `StartTask` / `StartTaskStep` and consumed by the resume path. Plugins should treat them as read-only.
+- **Don't write to `Record.Data` under a top-level key you don't own.** Each submission-style step owns one slot (its template's `output_namespace`). If your plugin produces internal output, namespace it under your task type's own slot, not under another step's.
 
 ---
 
@@ -303,5 +303,5 @@ Tests don't need the rest of the orchestrator — `PluginContext` is a plain str
 ## See also
 
 - [`integration-guide.md`](integration-guide.md) — wiring and `pluginsReg.Register(...)`
-- [`template-reference.md`](template-reference.md) — the `SubTaskTemplate` shape your `plugin_properties` lives inside
+- [`template-reference.md`](template-reference.md) — the `StepTemplate` shape your `plugin_properties` lives inside
 - `plugins/user_input.go`, `plugins/api_call.go`, `plugins/external_review.go`, `plugins/payment.go` — built-in plugins as worked examples

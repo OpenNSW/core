@@ -37,7 +37,7 @@ const (
 )
 
 // TaskPayload represents the contextual data sent to the task executor
-// when the workflow engine reaches a "Task" node. It contains the necessary coordinates
+// when the workflow engine reaches a "TASK" node. It contains the necessary coordinates
 // for the task executor to identify the work and eventually report back.
 type TaskPayload struct {
 	// WorkflowID is the unique identifier for the overall business process instance.
@@ -169,7 +169,7 @@ type UpdateEvent struct {
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
-// TaskActivationHandler is invoked by the engine whenever the workflow reaches a "Task" node.
+// TaskActivationHandler is invoked by the engine whenever the workflow reaches a "TASK" node.
 // The handler must support two execution paths:
 //
 // 1. Synchronous Execution:
@@ -180,7 +180,7 @@ type UpdateEvent struct {
 //   - If the work is long-running (e.g. awaits external API callback, human UI interaction, etc.),
 //     return a nil map and an ErrResultPending error.
 //   - The workflow activity pauses and awaits completion. The host application must eventually resume
-//     it by calling Manager.TaskDone() with the matching workflow, run, and node IDs.
+//     it by calling Manager.CompleteActivation() with the matching workflow, run, and step IDs.
 type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
 
 // WorkflowCompletionHandler is invoked when the generic DAG workflow successfully reaches an "End" node,
@@ -206,10 +206,10 @@ type Manager interface {
 	// data payload. Returns an error if submission fails.
 	StartWorkflow(ctx context.Context, ID string, def WorkflowDefinition, initialWorkflowVariables map[string]any) error
 
-	// TaskDone is called by the external system to resume a paused workflow node.
+	// CompleteActivation is called by the external system to resume a paused workflow node.
 	// It routes the output data back into the specific workflow's WorkflowVariables using the provided
 	// IDs (workflowID, runID, nodeID) that were originally emitted via the TaskActivationHandler.
-	TaskDone(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error
+	CompleteActivation(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error
 
 	// TaskUpdate is used to send an update about the task to the workflow.
 	// This is typically used to append messages to the workflow's internal state or update
@@ -326,12 +326,12 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 	return nil
 }
 
-// TaskDone is invoked by the external application to complete a dormant asynchronous Temporal Activity.
+// CompleteActivation is invoked by the external application to complete a dormant asynchronous Temporal Activity.
 // WorkflowID is the ID of the workflow
 // runID is the ID of the run
 // nodeID is the ID of the node
 // output is the key valye pairs that should be added to the global context
-func (m *temporalManagerImpl) TaskDone(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error {
+func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error {
 	return m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, nodeID, output, nil)
 }
 

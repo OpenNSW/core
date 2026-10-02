@@ -13,7 +13,7 @@ import (
 
 	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/adapter/generictemplate"
-	"github.com/OpenNSW/core/artifact/adapter/subtasktemplate"
+	"github.com/OpenNSW/core/artifact/adapter/steptemplate"
 	"github.com/OpenNSW/core/artifact/adapter/tasktemplate"
 	"github.com/OpenNSW/core/artifact/adapter/types"
 	"github.com/OpenNSW/core/artifact/adapter/workflowdef"
@@ -42,10 +42,10 @@ The system uses a hierarchical, decoupled design:
    or physical inspections). The Task runs as an independent workflow process under the hood
    (defined by a JSON workflow definition).
 
-3. SubTask (Interaction Steps):
+3. Step (Interaction Steps):
    Individual, potentially asynchronous execution nodes inside the Task (e.g., waiting for
    a user form submission, or queuing a request in an external agency portal). These are
-   dispatched via StartSubTask() and resumed via CompleteTaskStep().
+   dispatched via StartTaskStep() and resumed via CompleteTaskStep().
 
 Flow Diagram:
               [Parent Workflow]
@@ -56,11 +56,11 @@ Flow Diagram:
                      ▼ (StartTaskWorkflow)
               [Task Workflow]
                      │
-                     ▼ (StartSubTask)
-              [SubTask Node] (e.g., PENDING_USER status)
+                     ▼ (StartTaskStep)
+              [Step Node] (e.g., PENDING_USER status)
                      │
                      ▼ (CompleteTaskStep)
-           [Resume SubTask & Continue]
+           [Resume Step & Continue]
                      │
                      ▼ (TaskWorkflow completed)
            [HandleTaskCompletion]
@@ -89,11 +89,11 @@ type TaskManager struct {
 // NewTaskManager creates a TaskManager instance.
 //
 //   - db                  — the persistence/in-memory task store.
-//   - registry            — artifact registry holding task templates, subtask templates, workflow definitions, and render configs.
+//   - registry            — artifact registry holding task templates, step templates, workflow definitions, and render configs.
 //   - pluginsRegistry     — registry containing task execution plugin handlers.
 //   - taskWorkflowManager — the TemporalManager used to start and complete Task sub-workflows.
 //   - onTaskCompleted     — callback invoked when a Task workflow finishes;
-//     typically invokes Parent.TaskDone to resume the parent workflow using stored coordinates.
+//     typically invokes Parent.CompleteActivation to resume the parent workflow using stored coordinates.
 func NewTaskManager(
 	db store.TaskStore,
 	registry *artifact.Registry,
@@ -171,10 +171,10 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		CreatedAt:        time.Now(),
 	}
 	// Verify that there are no parallel execution paths before writing anything,
-	// as TaskRecord only stores coordinates for a single active subtask.
+	// as TaskRecord only stores coordinates for a single active step.
 	for _, node := range wfDef.Nodes {
 		if node.Type == engine.NodeTypeGateway && node.GatewayType == engine.GatewayTypeParallelSplit {
-			return nil, fmt.Errorf("parallel subtasks are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType)
+			return nil, fmt.Errorf("parallel steps are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType)
 		}
 	}
 
@@ -189,12 +189,12 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	return nil, activity.ErrResultPending
 }
 
-// StartSubTask is called by the Task's workflow engine when it activates an interaction step.
+// StartTaskStep is called by the Task's workflow engine when it activates an interaction step.
 // It routes to the correct capability handler dynamically from the plugin registry.
-func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
+func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
 	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
 	if !exists {
-		return nil, fmt.Errorf("[StartSubTask] no task record found for workflow %s", payload.WorkflowID)
+		return nil, fmt.Errorf("[StartTaskStep] no task record found for workflow %s", payload.WorkflowID)
 	}
 
 	record.TaskRunID = payload.RunID
@@ -205,15 +205,15 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 		maputil.SetNestedKey(record.Data, k, v)
 	}
 
-	subTemplate, err := subtasktemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
+	stepTemplate, err := steptemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
 	if err != nil {
-		return nil, fmt.Errorf("[StartSubTask] load subtask template %q: %w", payload.TaskTemplateID, err)
+		return nil, fmt.Errorf("[StartTaskStep] load step template %q: %w", payload.TaskTemplateID, err)
 	}
 
-	// 2. Fetch the plugin from our registry using TaskType
-	plugin, ok := tm.pluginsRegistry.Get(subTemplate.TaskType)
+	// 2. Fetch the plugin from our registry using PluginType
+	plugin, ok := tm.pluginsRegistry.Get(stepTemplate.PluginType)
 	if !ok {
-		return nil, fmt.Errorf("[StartSubTask] unregistered plugin for task type %s (required for template: %s)", subTemplate.TaskType, payload.TaskTemplateID)
+		return nil, fmt.Errorf("[StartTaskStep] unregistered plugin for plugin type %s (required for template: %s)", stepTemplate.PluginType, payload.TaskTemplateID)
 	}
 
 	// 3. Execute the plugin
@@ -221,25 +221,25 @@ func (tm *TaskManager) StartSubTask(ctx context.Context, payload engine.TaskPayl
 		Context:         ctx,
 		Record:          &record,
 		Inputs:          payload.Inputs,
-		OutputNamespace: subTemplate.OutputNamespace,
+		OutputNamespace: stepTemplate.OutputNamespace,
 	}
 
-	tm.logger.InfoContext(ctx, "starting subtask", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "task_type", subTemplate.TaskType, "template", payload.TaskTemplateID)
+	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID)
 
-	err = plugin.Execute(pluginCtx, subTemplate.PluginProperties)
+	err = plugin.Execute(pluginCtx, stepTemplate.PluginProperties)
 	if errors.Is(err, plugins.ErrSuspended) {
 		tm.db.SaveTask(pluginCtx.Context, record)
-		tm.logger.InfoContext(ctx, "subtask suspended, awaiting async completion", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "task_type", subTemplate.TaskType)
+		tm.logger.InfoContext(ctx, "step suspended, awaiting async completion", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "plugin_type", stepTemplate.PluginType)
 		return nil, activity.ErrResultPending
 	}
 	if err != nil {
-		return nil, fmt.Errorf("[StartSubTask] plugin for task type %q execution failed: %w", subTemplate.TaskType, err)
+		return nil, fmt.Errorf("[StartTaskStep] plugin for plugin type %q execution failed: %w", stepTemplate.PluginType, err)
 	}
 
 	tm.db.SaveTask(pluginCtx.Context, record)
 
 	// Otherwise, this step completed synchronously. Return its modified payload immediately to transition directly.
-	tm.logger.InfoContext(ctx, "subtask completed synchronously", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "task_type", subTemplate.TaskType)
+	tm.logger.InfoContext(ctx, "step completed synchronously", "task_id", record.TaskID, "subtask_node_id", record.SubTaskNodeID, "plugin_type", stepTemplate.PluginType)
 	return record.Data, nil
 }
 
@@ -271,11 +271,11 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	return nil
 }
 
-// waitForActiveSubtask polls the store for a short period to see if the task moves
-// out of the STARTING state and registers an active subtask. This handles the race
+// waitForActiveStep polls the store for a short period to see if the task moves
+// out of the STARTING state and registers an active step. This handles the race
 // condition where an external callback or webhook completes a step immediately after
-// task creation, before the Temporal worker has executed the first StartSubTask activity.
-func (tm *TaskManager) waitForActiveSubtask(ctx context.Context, taskID string) (store.TaskRecord, error) {
+// task creation, before the Temporal worker has executed the first StartTaskStep activity.
+func (tm *TaskManager) waitForActiveStep(ctx context.Context, taskID string) (store.TaskRecord, error) {
 	const (
 		maxAttempts = 5
 		delay       = 200 * time.Millisecond
@@ -303,7 +303,7 @@ func (tm *TaskManager) waitForActiveSubtask(ctx context.Context, taskID string) 
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
 // data and resume the active step in the corresponding Task workflow.
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
-	record, err := tm.waitForActiveSubtask(ctx, taskID)
+	record, err := tm.waitForActiveStep(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -313,12 +313,12 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	}
 
 	if record.ActiveTaskTemplateID == "" {
-		return fmt.Errorf("task %s has no active subtask step to complete", taskID)
+		return fmt.Errorf("task %s has no active step to complete", taskID)
 	}
 
-	subTemplate, err := subtasktemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
+	stepTemplate, err := steptemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
 	if err != nil {
-		return fmt.Errorf("failed to load active subtask template %q: %w", record.ActiveTaskTemplateID, err)
+		return fmt.Errorf("failed to load active step template %q: %w", record.ActiveTaskTemplateID, err)
 	}
 
 	if record.Data == nil {
@@ -330,30 +330,30 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	// validate/inspect them but cannot mutate the data that gets persisted or
 	// sent to the workflow.
 	preResumeRecord := record.DeepCopy()
-	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, subTemplate.Extensions, deepcopy.Map(payload), true); err != nil {
+	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, stepTemplate.Extensions, deepcopy.Map(payload), true); err != nil {
 		return err
 	}
 
-	// Writes are confined to the active subtask's declared OutputNamespace,
+	// Writes are confined to the active step's declared OutputNamespace,
 	// which was loaded from the registry. An open
 	// top-level merge would let callers overwrite slots owned by other
-	// subtasks (or internal keys like _task_id), so the namespace is
+	// steps (or internal keys like _task_id), so the namespace is
 	// required for any non-empty payload. If it's missing we log loudly and
 	// drop the payload — the workflow still resumes so a misconfigured
 	// template doesn't break a running task.
 	if len(payload) > 0 {
-		if subTemplate.OutputNamespace == "" {
-			tm.logger.WarnContext(ctx, "dropping submission payload: active subtask declares no output_namespace", "task_id", taskID, "template", record.ActiveTaskTemplateID, "dropped_keys", payloadKeys(payload))
+		if stepTemplate.OutputNamespace == "" {
+			tm.logger.WarnContext(ctx, "dropping submission payload: active step declares no output_namespace", "task_id", taskID, "template", record.ActiveTaskTemplateID, "dropped_keys", payloadKeys(payload))
 		} else {
 			// System variables (keys prefixed with "__") are runtime-internal
 			// and must not be persisted to the output namespace; they are still
 			// passed back to the workflow below.
-			record.Data[subTemplate.OutputNamespace] = withoutSystemVars(payload)
+			record.Data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
 		}
 	}
 	tm.logger.InfoContext(ctx, "waking active activity", "activity_id", record.SubTaskNodeID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
 
-	// TaskDone is intentionally called before SaveTask. Temporal enforces
+	// CompleteActivation is intentionally called before SaveTask. Temporal enforces
 	// exactly-once completion per activity (CompleteActivityByID fails for
 	// any caller after the first), so on a duplicate/racing CompleteTaskStep
 	// call for the same step, only the winner reaches SaveTask below — the
@@ -361,7 +361,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	// reorder this without re-adding an equivalent guard: swapping it back
 	// re-opens a lost-update race where the loser's write can land after the
 	// winner's and silently overwrite it.
-	err = tm.taskWorkflowManager.TaskDone(
+	err = tm.taskWorkflowManager.CompleteActivation(
 		ctx,
 		record.TaskWorkflowID,
 		record.TaskRunID,
@@ -375,7 +375,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	tm.db.SaveTask(ctx, record)
 
 	// 2. Run POST_RESUME Extensions (Non-Blocking, Immutable, Async)
-	if tm.extensionsRegistry != nil && len(subTemplate.Extensions) > 0 {
+	if tm.extensionsRegistry != nil && len(stepTemplate.Extensions) > 0 {
 		// Deep copy the payload and record so extensions cannot mutate the data
 		// that was persisted/sent to the workflow (the read-only contract). As a
 		// bonus this keeps the async goroutine from sharing nested maps/slices
@@ -388,7 +388,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 
 		// Execute in background; errors are logged inside runExtensions, not returned to client.
 		go func() {
-			_ = tm.runExtensions(bgCtx, &copiedRecord, types.PhasePostResume, subTemplate.Extensions, copiedPayload, false)
+			_ = tm.runExtensions(bgCtx, &copiedRecord, types.PhasePostResume, stepTemplate.Extensions, copiedPayload, false)
 		}()
 	}
 
@@ -474,7 +474,7 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string)
 
 // withoutSystemVars returns a copy of payload with system variables removed.
 // System variables are keys prefixed with "__" (double underscore); they are
-// runtime-internal and should not be written to a subtask's output namespace.
+// runtime-internal and should not be written to a step's output namespace.
 func withoutSystemVars(payload map[string]any) map[string]any {
 	out := make(map[string]any, len(payload))
 	for k, v := range payload {

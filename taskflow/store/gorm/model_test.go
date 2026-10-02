@@ -32,7 +32,7 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		RootWorkflowID:       "consignment-9",
 		TaskWorkflowID:       "task-wf-1",
 		TaskRunID:            "task-run-1",
-		SubTaskNodeID:        "subtask-node-1",
+		SubTaskNodeID:        "step-node-1",
 		ActiveTaskTemplateID: "tmpl-1",
 		Data:                 map[string]any{"userform": map[string]any{"name": "Alice"}},
 	}

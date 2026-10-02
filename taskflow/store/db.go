@@ -27,9 +27,9 @@ type TaskRecord struct {
 
 	RootWorkflowID string `json:"root_workflow_id"`
 
-	// Active subtask execution coordinates — used to resume/wake the currently active subtask step via the API.
-	// WARNING: Since the store only holds a single set of coordinates, only one subtask can be active at any given time
-	// (strictly sequential execution). Parallel/concurrent subtasks inside a single Task Workflow are not supported.
+	// Active step execution coordinates — used to resume/wake the currently active step via the API.
+	// WARNING: Since the store only holds a single set of coordinates, only one step can be active at any given time
+	// (strictly sequential execution). Parallel/concurrent steps inside a single Task Workflow are not supported.
 	TaskWorkflowID       string `json:"task_workflow_id"`
 	TaskRunID            string `json:"task_run_id"`
 	SubTaskNodeID        string `json:"subtask_node_id"`
