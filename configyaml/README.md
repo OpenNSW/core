@@ -33,7 +33,7 @@ if err := configyaml.LoadAndExpand("config.yaml", &cfg); err != nil {
 db:
   host: localhost
   port: 5432
-  username: postgres
+  user: postgres
   password: "{{env:DB_PASSWORD}}" # resolved from the DB_PASSWORD env var
 cors:
   allowedOrigins: ["https://portal.example.com"]
