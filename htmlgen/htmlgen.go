@@ -226,6 +226,11 @@ func decodeJSON(b []byte) (any, error) {
 	if err := dec.Decode(&v); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidData, err)
 	}
+	// Decode stops after the first value; anything but whitespace after it
+	// would otherwise be dropped without an error.
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: unexpected content after the JSON value", ErrInvalidData)
+	}
 	return v, nil
 }
 

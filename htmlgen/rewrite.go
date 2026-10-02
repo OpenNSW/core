@@ -160,6 +160,14 @@ func checkEscapers(t *parse.Tree, n parse.Node, pipe *parse.PipeNode) error {
 				if err := checkEscapers(t, n, a); err != nil {
 					return err
 				}
+			case *parse.ChainNode:
+				// A field access on a parenthesized pipeline, (js .x).Y,
+				// wraps the pipeline in a ChainNode.
+				if p, ok := a.Node.(*parse.PipeNode); ok {
+					if err := checkEscapers(t, n, p); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
