@@ -10,9 +10,9 @@ How a portal / UI consumes the task orchestrator over HTTP.
 
 For a UI integrator, three things are worth internalising:
 
-1. **A task is addressable by its parent workflow's node ID.** When the user navigates to "the application-submission step of workflow X", you already know the task identifier — you don't need to call a discovery endpoint first.
+1. **A task is addressable by its ID, and you act on one step of it.** The task view reports the `step_id` it is currently on, and you send it back when you submit. If the task has moved on since you fetched it, the submit is rejected (409) instead of being applied to the wrong step, and you refetch.
 2. **The current `State` field drives what to render.** The orchestrator's render config maps states to UI components. Your job is to fetch a task and display whatever `RenderResult` slots the server hands you.
-3. **Submitting is one call.** `POST /api/task/{taskID}` with whatever payload the current state expects. The orchestrator figures out which step is parked and resumes it.
+3. **Submitting is one call.** `POST /api/task/{taskID}` with the `step_id` from the view and whatever payload the current state expects. The orchestrator resumes exactly that step.
 
 You never need to know about Temporal, runs, nodes, plugins, or workflows.
 
@@ -27,7 +27,7 @@ The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskMan
 | `GET /api/tasks`                               | `GetAllTasks(ctx, "")`                     | List every task (summary, no render)               |
 | `GET /api/tasks?parent_workflow_id=X`          | `GetAllTasks(ctx, "X")`                    | List tasks under a specific parent workflow        |
 | *(not in demo today)* `GET /api/task/{taskID}` | `GetTaskRenderInfo(ctx, taskID)`           | Fetch one task **with its rendered view**          |
-| `POST /api/task/{taskID}`                      | `CompleteTaskStep(ctx, taskID, payload)`   | Submit interaction data, resume the parked step |
+| `POST /api/task/{taskID}`                      | `CompleteTaskStep(ctx, taskID, stepID, payload)` | Submit interaction data, resume the given step |
 | `POST /api/start`                              | `parentWorkflowManager.StartWorkflow(...)` | Kick off a new parent workflow (demo-specific)     |
 
 > The demo currently exposes listing and completion. If you need single-task detail, add a thin handler around `GetTaskRenderInfo` — it's a single line.
@@ -46,6 +46,8 @@ The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskMan
     "task_id": "submit_application",
     "task_type": "APPLICATION",
     "state": "PENDING_USER",
+    "step_id": "0a0a0a0a-0000-4000-8000-00000000000a",
+    "version": 4,
     "created_at": "2026-05-18T09:14:11Z",
     "updated_at": "2026-05-18T09:14:11Z"
   }
@@ -63,6 +65,8 @@ The `view` key is omitted (the JSON tag is `omitempty`). Listing is intentionall
   "task_id": "submit_application",
   "task_type": "APPLICATION",
   "state": "PENDING_USER",
+  "step_id": "0a0a0a0a-0000-4000-8000-00000000000a",
+  "version": 4,
   "view": {
     "primary": {
       "type": "markdown",
@@ -73,6 +77,8 @@ The `view` key is omitted (the JSON tag is `omitempty`). Listing is intentionall
   "updated_at": "2026-05-18T09:14:11Z"
 }
 ```
+
+`step_id` is the step the task is on; send it back when you act on the view. `version` goes up every time the task moves on. It is read-only — never send it — and is there so you can keep the newest of several views you fetched.
 
 ### `View` JSON structure
 
@@ -146,10 +152,10 @@ sequenceDiagram
     Note over FE: Render the view's slots; user fills the form
 
     FE->>API: POST /api/task/submit_application
-    Note right of FE: { ...form data... }   ← raw payload, server stamps the slot
-    API-->>FE: 200 OK
+    Note right of FE: step_id from the view + { ...form data... }   ← raw payload, server stamps the slot
+    API-->>FE: 200 OK (the workflow accepted the step)
 
-    Note over FE: Re-fetch — state may now be QUEUED_EXTERNALLY, PENDING_PAYMENT, etc.
+    Note over FE: Re-fetch until state leaves ADVANCING — it may then be QUEUED_EXTERNALLY, PENDING_PAYMENT, etc.
 
     FE->>API: GET /api/task/submit_application
     API-->>FE: { state: "QUEUED_EXTERNALLY", view: { primary: { ... new payload ... } } }
@@ -164,6 +170,10 @@ After any `POST /api/task/{taskID}`, the task either:
 - **Stays put** (the next step is the same kind) — re-fetch anyway; the data may have changed.
 
 A simple rule: **always re-fetch after a successful POST**. Skip optimistic updates unless your UX requires them.
+
+A 200 means the workflow *accepted* the step, not that the next view is ready. Right after it the task is in `ADVANCING` (no actions offered) until the next step claims it, so keep polling until `state` is no longer `ADVANCING`, and keep the view with the highest `version` if responses arrive out of order.
+
+If a submit is rejected with **409**, the task moved on after you fetched the view (a double click, a retry, another tab). Nothing was changed: refetch and show the current view. It never means the task is broken.
 
 ### Polling
 
@@ -222,6 +232,8 @@ The demo maps these from `manager.CompleteTaskStep` error text. Expect to see th
 | State               | What's happening                          | Typical UI                                    |
 |---------------------|-------------------------------------------|-----------------------------------------------|
 | `STARTING`          | Task workflow is initialising             | Spinner, "Starting your application…"         |
+| `STARTING_STEP`     | A step started; its plugin is running     | Spinner                                       |
+| `ADVANCING`         | Your submission was accepted; moving on   | Spinner, no actions; poll until it changes    |
 | `PENDING_USER`      | A form-style step is waiting for input | Render the form, expose submit                |
 | `QUEUED_EXTERNALLY` | Dispatched to an external system, waiting | Status banner, no input                       |
 | `PENDING_PAYMENT`   | Payment step is awaiting confirmation  | Payment widget                                |
@@ -236,7 +248,7 @@ These are not magic — they're strings written by plugins. Your application can
 
 By design, these are hidden from the frontend:
 
-- **Temporal coordinates** — `TaskWorkflowID`, `TaskRunID`, `SubTaskNodeID`, etc. They're internal to the orchestrator and never serialised in `TaskView`.
+- **Temporal coordinates** — `TaskWorkflowID`, parent coordinates, etc. They're internal to the orchestrator and never serialised in `TaskView`. The only step-related fields a client sees are `step_id` (to send back) and `version` (read-only).
 - **Render config** — the JSON snapshot in `TaskRecord.RenderConfig` is server-side only; the FE sees the rendered output, not the template.
 - **Which plugin handled a step** — irrelevant to the UI.
 - **Workflow / task definitions** — also internal.

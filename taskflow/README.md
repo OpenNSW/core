@@ -76,8 +76,8 @@ workflowRunner := workflow.NewTemporalManager(
     func(payload workflow.TaskPayload) (map[string]any, error) {
         return tm.StartTaskStep(context.Background(), payload)
     },
-    func(workflowID string, vars map[string]any) error {
-        return tm.HandleTaskCompletion(context.Background(), workflowID, vars)
+    func(c workflow.WorkflowCompletion) error {
+        return tm.HandleTaskCompletion(context.Background(), c)
     },
 )
 
@@ -98,9 +98,10 @@ if err := workflowRunner.StartWorker(); err != nil {
 |---|---|---|
 | `StartTask(payload)` | Parent workflow activity | Create task record, start micro-workflow |
 | `StartTaskStep(payload)` | Micro-workflow node | Activate step, route to plugin |
-| `HandleTaskCompletion(ctx, workflowID, vars)` | Micro-workflow on exit | Mark complete, fire callback to parent |
+| `HandleTaskCompletion(ctx, completion)` | Micro-workflow on exit | Mark complete (guarded), then fire callback to parent |
 | `GetTaskRenderInfo(ctx, taskID)` | Portal HTTP handler | Fetch task + rendered UI |
-| `CompleteTaskStep(ctx, taskID, payload)` | Portal HTTP handler | Submit form/interaction, resume step |
+| `CompleteTaskStep(ctx, taskID, stepID, payload)` | Portal HTTP handler | Submit form/interaction, resume that step |
+| `CompleteTaskStepByToken(ctx, token, payload)` | External callback handler | Same, addressed by the dispatch's callback token |
 | `GetAllTasks(ctx, parentWorkflowID)` | Portal HTTP handler | List tasks for a workflow instance |
 
 ## Writing a plugin
@@ -129,14 +130,15 @@ Register it: `pluginRegistry.Register("MY_PLUGIN", &MyPlugin{remoteManager: rm})
 
 ## Key invariants
 
-- **`TaskID` equals the parent workflow's `NodeID`.** The task is addressable by an ID the caller already holds.
+- **`TaskID` is the parent's step ID.** A step is one run of a TASK node, so a node revisited by a loop starts a new task. A step is addressed by its step ID (`CompleteTaskStep(ctx, taskID, stepID, payload)`), and a call for a step that is no longer active is rejected with `ErrStaleStep`.
+- **The task row is written through guarded statements.** `ActiveStepID` and `Seq` change only via `ClaimStep`, `WriteRenderState`, `PersistSubmission` and `CompleteTask`, each one atomic conditional write whose 0-rows result means "stale, dropped".
 - **Plugins suspend with `plugins.ErrSuspended`.** Synchronous plugins return `nil`; the workflow advances without waiting.
 - **`StartTask` returns `activity.ErrResultPending`** on the happy path. The parent activity suspends until `onTaskCompleted` fires.
 - **Submission payloads are scoped** to the active step's `OutputNamespace` in `TaskRecord.Data`. Callers send a raw object; the server stamps the correct key.
 
 ## Task-level workflow constraint: no parallel paths
 
-**Task workflows must be strictly sequential.** A `TaskRecord` stores coordinates for exactly one active step at a time (`TaskWorkflowID`, `TaskRunID`, `SubTaskNodeID`). Using a `PARALLEL_SPLIT` gateway inside a task workflow would activate multiple step nodes simultaneously, but the record can only point at one — the others would be unreachable via `CompleteTaskStep` and the workflow would hang.
+**Task workflows must be strictly sequential.** A `TaskRecord` holds exactly one active step at a time (`ActiveStepID`). Using a `PARALLEL_SPLIT` gateway inside a task workflow would activate multiple step nodes simultaneously, but the record can only point at one — the others would be unreachable via `CompleteTaskStep` and the workflow would hang.
 
 `StartTask` enforces this at launch time: if the workflow definition contains a `PARALLEL_SPLIT` gateway node it returns an error immediately, before creating any DB record.
 
