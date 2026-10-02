@@ -19,6 +19,7 @@ import (
 	"github.com/OpenNSW/core/artifact/adapter/workflowdef"
 	"github.com/OpenNSW/core/shared/deepcopy"
 	"github.com/OpenNSW/core/shared/maputil"
+	"github.com/OpenNSW/core/taskflow/callbacktoken"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
@@ -74,9 +75,16 @@ Flow Diagram:
 // It is typically used to wake up the parent workflow with the final task output variables.
 type TaskCompletedCallback func(parentWorkflowID string, parentRunID string, parentNodeID string, finalVariables map[string]any) error
 
-// ErrStaleStep is returned (wrapped in a non-retryable Temporal error) by StartTaskStep when a later
-// step has already started, so this attempt is a late or duplicate one that must do nothing.
+// ErrStaleStep means the step a call addressed is not the task's active step. StartTaskStep returns
+// it (wrapped in a non-retryable Temporal error) for a late or duplicate attempt that must do
+// nothing. CompleteTaskStep returns it when the step it was asked to complete has already
+// completed, is not the active step, or the task is already completed; nothing was written. A
+// caller serving HTTP should answer it with 409: refresh the task and decide again.
 var ErrStaleStep = errors.New("step is no longer the active step of the task")
+
+// ErrStepIDRequired is returned by CompleteTaskStep when the caller did not say which step it is
+// completing. A caller serving HTTP should answer it with 400.
+var ErrStepIDRequired = errors.New("step ID is required")
 
 // TaskManager orchestrates decoupled tasks and interactions under parent workflows.
 // It bridges macro-level workflows and micro-level interactive tasks via a single DB entry per task.
@@ -325,84 +333,107 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 	return nil
 }
 
+// CompleteTaskStepByToken is CompleteTaskStep for a caller that holds the callback token the
+// dispatch carried (see plugins.CallbackToken), such as an external system calling back. It decodes
+// the token to the task and step it names. A malformed token returns an error wrapping
+// callbacktoken.ErrInvalid, which a caller serving HTTP should answer with 400.
+func (tm *TaskManager) CompleteTaskStepByToken(ctx context.Context, token string, payload map[string]any) error {
+	taskID, stepID, err := callbacktoken.Decode(token)
+	if err != nil {
+		return err
+	}
+	return tm.CompleteTaskStep(ctx, taskID, stepID, payload)
+}
+
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
-// data and resume the active step in the corresponding Task workflow.
-func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error {
+// data and resume the given step in the corresponding Task workflow. stepID is the step the caller
+// is acting on, as the task view reported it; it is required, and the call only ever completes
+// that step.
+//
+// Sequence:
+//
+//  1. Pre-check, from the task row: the task is not completed and stepID is its active step.
+//     This only turns away obviously stale calls early; the authority is step 4.
+//  2. Pre-resume extensions (authz, validation) run on deep copies and can reject the call. They
+//     must have no side effects.
+//  3. The submission is prepared: it is confined to the step's OutputNamespace and stripped of
+//     system keys.
+//  4. The step's Temporal Activity is completed. Exactly one caller wins; a step that is not
+//     pending (already completed, or an earlier run of a looping node) fails with ErrStaleStep and
+//     nothing is written.
+//  5. The submission is persisted with the state ADVANCING, guarded by the step and the seq read in
+//     step 1. If the workflow has already started the next step this matches no row and is dropped;
+//     the submission reached the workflow through the Activity result either way.
+//  6. Post-resume extensions start in the background (best effort, not awaited).
+//
+// Returning nil means the workflow accepted the step; the row shows ADVANCING (or the next step)
+// from then on. Clients should refetch the task rather than assume the state.
+func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID string, payload map[string]any) error {
+	if stepID == "" {
+		return ErrStepIDRequired
+	}
+
 	record, exists := tm.db.GetTask(ctx, taskID)
 	if !exists {
 		return fmt.Errorf("task %s not found", taskID)
 	}
-
 	if record.State == store.StateCompleted {
-		return fmt.Errorf("task %s already completed", taskID)
+		return fmt.Errorf("%w: task %s already completed", ErrStaleStep, taskID)
 	}
-
-	// No step is active until the first StartTaskStep has claimed it. Nothing addresses a step before
-	// then: a caller learns a step exists only from the task view or from a dispatch, and both
-	// come after the claim.
-	if record.ActiveStepID == "" || record.ActiveTaskTemplateID == "" {
-		return fmt.Errorf("task %s has no active step to complete", taskID)
+	if record.ActiveStepID != stepID {
+		// Also covers a task whose first step has not been claimed: no step ID names it yet.
+		return fmt.Errorf("%w: call was for step %q, active step is %q", ErrStaleStep, stepID, record.ActiveStepID)
 	}
+	seq := record.Seq
 
 	stepTemplate, err := steptemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
 	if err != nil {
 		return fmt.Errorf("failed to load active step template %q: %w", record.ActiveTaskTemplateID, err)
 	}
 
-	if record.Data == nil {
-		record.Data = make(map[string]any)
-	}
-
-	// 1. Run PRE_RESUME Extensions (Blocking, Read-only)
-	// Extensions receive deep copies of the record and payload so they can
-	// validate/inspect them but cannot mutate the data that gets persisted or
-	// sent to the workflow.
+	// Pre-resume extensions (blocking, read-only) receive deep copies of the record and payload so
+	// they can validate/inspect them but cannot mutate the data that gets persisted or sent to the
+	// workflow.
 	preResumeRecord := record.DeepCopy()
 	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, stepTemplate.Extensions, deepcopy.Map(payload), true); err != nil {
 		return err
 	}
 
-	// Writes are confined to the active step's declared OutputNamespace,
-	// which was loaded from the registry. An open
-	// top-level merge would let callers overwrite slots owned by other
-	// steps (or internal keys like _task_id), so the namespace is
-	// required for any non-empty payload. If it's missing we log loudly and
-	// drop the payload — the workflow still resumes so a misconfigured
-	// template doesn't break a running task.
-	if len(payload) > 0 {
-		if stepTemplate.OutputNamespace == "" {
-			tm.logger.WarnContext(ctx, "dropping submission payload: active step declares no output_namespace", "task_id", taskID, "template", record.ActiveTaskTemplateID, "dropped_keys", payloadKeys(payload))
-		} else {
-			// System variables (keys prefixed with "__") are runtime-internal
-			// and must not be persisted to the output namespace; they are still
-			// passed back to the workflow below.
-			record.Data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
-		}
-	}
-	tm.logger.InfoContext(ctx, "waking active activity", "step_id", record.ActiveStepID, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
+	data := tm.submissionData(ctx, record, stepTemplate, payload)
 
-	// CompleteActivation is intentionally called before SaveTask. Temporal enforces
-	// exactly-once completion per activity (CompleteActivityByID fails for
-	// any caller after the first), so on a duplicate/racing CompleteTaskStep
-	// call for the same step, only the winner reaches SaveTask below — the
-	// loser returns here without persisting its (possibly stale) Data. Do not
-	// reorder this without re-adding an equivalent guard: swapping it back
-	// re-opens a lost-update race where the loser's write can land after the
-	// winner's and silently overwrite it.
+	tm.logger.InfoContext(ctx, "waking active activity", "step_id", stepID, "seq", seq, "task_workflow_id", record.TaskWorkflowID, "task_id", taskID)
+
+	// This is the arbiter. Temporal completes an Activity exactly once, so of several racing or
+	// repeated calls for the step only one gets past here, and only it writes below. The workflow
+	// receives the full payload, system keys included.
 	err = tm.taskWorkflowManager.CompleteActivation(
 		ctx,
 		record.TaskWorkflowID,
 		"", // the workflow's current run: a step ID is unique within the workflow
-		record.ActiveStepID,
-		payload, // pass full namespaced state back to the workflow
+		stepID,
+		payload,
 	)
+	if errors.Is(err, engine.ErrActivationNotPending) {
+		return fmt.Errorf("%w: step %q is not pending", ErrStaleStep, stepID)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to resume task workflow: %w", err)
 	}
 
-	tm.db.SaveTask(ctx, record)
+	// The workflow has the submission now. Record it for the view. A failure here leaves the row
+	// showing the step as pending until the next step claims it, and the caller must not be told
+	// its accepted submission failed, since retrying it can only be rejected as stale.
+	rows, err := tm.db.PersistSubmission(ctx, taskID, stepID, seq, data)
+	switch {
+	case err != nil:
+		tm.logger.ErrorContext(ctx, "failed to persist an accepted submission; the row lags until the next step claims it", "task_id", taskID, "step_id", stepID, "seq", seq, "error", err)
+	case rows == 0:
+		tm.logger.InfoContext(ctx, "submission not persisted: the workflow already moved to the next step", "task_id", taskID, "step_id", stepID, "seq", seq)
+	default:
+		record.Data, record.State, record.Seq = data, store.StateAdvancing, seq+1
+	}
 
-	// 2. Run POST_RESUME Extensions (Non-Blocking, Immutable, Async)
+	// Post-resume extensions (non-blocking, immutable, async).
 	if tm.extensionsRegistry != nil && len(stepTemplate.Extensions) > 0 {
 		// Deep copy the payload and record so extensions cannot mutate the data
 		// that was persisted/sent to the workflow (the read-only contract). As a
@@ -410,6 +441,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 		// with the live data, avoiding concurrent-map data races.
 		copiedPayload := deepcopy.Map(payload)
 		copiedRecord := record.DeepCopy()
+		copiedRecord.Data = deepcopy.Map(data)
 
 		// Use context.WithoutCancel to propagate tracing/telemetry context without cancellation
 		bgCtx := context.WithoutCancel(ctx)
@@ -421,6 +453,30 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID string, payl
 	}
 
 	return nil
+}
+
+// submissionData returns the task data with payload stored in it. Writes are confined to the active
+// step's declared OutputNamespace, which was loaded from the registry. An open top-level merge
+// would let callers overwrite slots owned by other steps (or internal keys like _task_id), so the
+// namespace is required for any non-empty payload. If it's missing we log loudly and drop the
+// payload — the workflow still resumes so a misconfigured template doesn't break a running task.
+//
+// System variables (keys prefixed with "__") are runtime-internal and are not stored in the
+// namespace; they are still passed to the workflow.
+func (tm *TaskManager) submissionData(ctx context.Context, record store.TaskRecord, stepTemplate types.StepTemplate, payload map[string]any) map[string]any {
+	data := deepcopy.Map(record.Data)
+	if data == nil {
+		data = make(map[string]any)
+	}
+	if len(payload) == 0 {
+		return data
+	}
+	if stepTemplate.OutputNamespace == "" {
+		tm.logger.WarnContext(ctx, "dropping submission payload: active step declares no output_namespace", "task_id", record.TaskID, "template", record.ActiveTaskTemplateID, "dropped_keys", payloadKeys(payload))
+		return data
+	}
+	data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
+	return data
 }
 
 // runExtensions executes the configured extensions matching phase against the

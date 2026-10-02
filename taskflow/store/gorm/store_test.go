@@ -41,7 +41,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 	if err := db.Exec(`CREATE TABLE task_records_v2 (
 		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, render_config TEXT,
 		parent_workflow_id TEXT, parent_run_id TEXT, parent_step_id TEXT,
-		task_workflow_id TEXT, task_run_id TEXT, subtask_node_id TEXT,
+		task_workflow_id TEXT,
 		active_task_template_id TEXT, root_workflow_id TEXT NOT NULL DEFAULT '',
 		active_step_id TEXT NULL, seq INTEGER NOT NULL DEFAULT 0, data TEXT,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`).Error; err != nil {
