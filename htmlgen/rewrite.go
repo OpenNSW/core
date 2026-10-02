@@ -18,8 +18,9 @@ import (
 // rules ahead of it: a map or slice is an error instead of Go syntax, a
 // float64 never prints with an exponent, and the same value renders the same
 // way in both packages. Converting at the template rather than over the data
-// is what lets the rules also cover a range variable and a map key, and
-// leaves the data untouched.
+// is what lets the rules also cover a range variable, a map key and a
+// resolver's return value, and leaves the data untouched so resolvers
+// receive the caller's own Go values.
 //
 // It must run before the first Execute: html/template's escaping pass rewrites
 // the same trees then, and refuses changes afterwards.
