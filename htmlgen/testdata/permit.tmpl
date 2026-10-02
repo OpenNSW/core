@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Permit {{ .permit_number }}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { font-family: "Times New Roman", serif; font-size: 11pt; }
+  .document { max-width: 800px; margin: 0 auto; border: 1px solid #000; padding: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { border: 1px solid #000; padding: 4px 6px; vertical-align: top; }
+  td.label { width: 35%; font-weight: bold; }
+  td.value { white-space: pre-line; }
+</style>
+</head>
+<body>
+<div class="document">
+  <header>
+    <svg class="emblem" width="48" height="48" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="none" stroke="#000"/></svg>
+    <h1>Permit</h1>
+    <p>Permit No: {{ .permit_number }}<br>Ref. No: {{ .review.reference_number }}</p>
+  </header>
+  <table>
+    <tr><td class="label">Applicant</td><td class="value">{{ .application.applicant_name }}
+{{ .application.applicant_address }}</td></tr>
+    <tr><td class="label">Representative</td><td class="value">{{ .application.representative_name }}
+{{ .application.representative_address }}</td></tr>
+    <tr><td class="label">Purpose</td><td class="value">{{ .application.purpose }}</td></tr>
+    <tr><td class="label">Fee paid</td><td class="value">{{ decimal .application.fee_amount 2 }}</td></tr>
+    <tr><td class="label">Supporting documents</td><td class="value">{{ join .application.attachment_ids ", " }}</td></tr>
+    <tr><td class="label">Valid until</td><td class="value">{{ coalesce .application.valid_until "Not specified" }}</td></tr>
+    <tr><td class="label">Conditions</td><td class="value">{{ if .conditions }}{{ .conditions }}{{ else }}<em>None</em>{{ end }}</td></tr>
+  </table>
+  <ol class="items">
+  {{- range .application.items }}
+    <li>{{ .code }} &middot; quantity {{ .quantity }}</li>
+  {{- end }}
+  </ol>
+  <footer>
+    <p>Issued on {{ date .issued_at "2006-01-02" "02/01/2006" }}</p>
+    <p><a href="{{ .verify_url }}">Verify this permit</a></p>
+  </footer>
+</div>
+</body>
+</html>
