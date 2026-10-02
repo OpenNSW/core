@@ -13,14 +13,24 @@ import (
 )
 
 // funcText is the name htmlgen binds to its value conversion. The template
-// rewriter appends it to every printing action.
+// rewriter appends it to every printing action; a resolver may not use it.
 const funcText = "text"
 
 // helperFuncs returns the functions htmlgen defines itself: the value
-// conversion.
+// conversion and the built-in helper library.
 func helperFuncs() template.FuncMap {
 	return template.FuncMap{
 		funcText: fnText,
+
+		"split":    fnSplit,
+		"part":     fnPart,
+		"join":     fnJoin,
+		"date":     fnDate,
+		"decimal":  fnDecimal,
+		"lookup":   fnLookup,
+		"coalesce": fnCoalesce,
+		"trim":     fnTrim,
+		"zero":     fnZero,
 	}
 }
 

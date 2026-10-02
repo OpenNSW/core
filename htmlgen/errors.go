@@ -14,8 +14,8 @@ var (
 	ErrInvalidData = errors.New("htmlgen: data could not be decoded")
 
 	// ErrParseTemplate is returned when the template text cannot be parsed. A
-	// "function not defined" message means the template calls a function
-	// htmlgen does not define.
+	// "function not defined" message means the template calls a resolver that
+	// was not supplied.
 	ErrParseTemplate = errors.New("htmlgen: template could not be parsed")
 
 	// ErrUnsupportedTemplate is returned when the template contains a
@@ -44,6 +44,29 @@ var (
 	// ErrMissingKey is returned only under WithStrictKeys, when the template
 	// references a key the data does not contain.
 	ErrMissingKey = errors.New("htmlgen: data has no entry for a key the template uses")
+
+	// ErrHelper is returned when a built-in helper is misused — a date that
+	// does not match its layout, a non-numeric value passed to decimal, an odd
+	// number of arguments to lookup.
+	ErrHelper = errors.New("htmlgen: template helper failed")
+
+	// ErrInvalidResolverName is returned when a resolver's name is empty, is
+	// not a valid Go identifier, or its ResolveFunc is nil. Names are checked
+	// before they reach html/template, which panics on a bad name rather than
+	// returning an error.
+	ErrInvalidResolverName = errors.New("htmlgen: resolver name is not a valid identifier")
+
+	// ErrReservedResolverName is returned when a resolver's name collides with
+	// a template builtin, with one of html/template's internal escapers, or
+	// with a function htmlgen defines itself. A caller function silently
+	// shadows any of these, so this is rejected rather than allowed to change
+	// what index, printf or an escaper mean inside a template.
+	ErrReservedResolverName = errors.New("htmlgen: resolver name is reserved")
+
+	// ErrResolver is returned when a caller-supplied resolver returns an
+	// error. The resolver's own error is wrapped, so errors.Is also matches
+	// the caller's sentinel.
+	ErrResolver = errors.New("htmlgen: resolver returned an error")
 
 	// ErrRender is returned when template execution fails for any other reason.
 	ErrRender = errors.New("htmlgen: template execution failed")
