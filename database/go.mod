@@ -2,7 +2,11 @@ module github.com/OpenNSW/core/database
 
 go 1.26.0
 
-require modernc.org/sqlite v1.60.1
+require (
+	github.com/go-sql-driver/mysql v1.10.1
+	github.com/jackc/pgx/v5 v5.10.0
+	modernc.org/sqlite v1.60.1
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
