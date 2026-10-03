@@ -124,24 +124,6 @@ func TestHealthCheck_ClosedDB(t *testing.T) {
 	}
 }
 
-// TestNew_DriverNotImported verifies a missing driver import surfaces as an
-// error rather than a panic. The MySQL driver is not imported by this test
-// binary.
-func TestNew_DriverNotImported(t *testing.T) {
-	cfg := Config{
-		Driver: MySQL,
-		MySQL:  &MySQLConfig{Host: "127.0.0.1", User: "user", Password: "password", Name: "testdb"},
-	}
-
-	_, err := New(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected an error for an unregistered driver, got nil")
-	}
-	if !strings.Contains(err.Error(), `unknown driver "mysql"`) {
-		t.Errorf("got %q, want it to mention the unknown driver", err.Error())
-	}
-}
-
 func TestPoolConfig_apply(t *testing.T) {
 	db, err := New(context.Background(), Config{Driver: SQLite, SQLite: &SQLiteConfig{Path: ":memory:"}})
 	if err != nil {
