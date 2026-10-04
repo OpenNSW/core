@@ -40,7 +40,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 	// timestamptz cannot be used here. The guards under test are portable SQL.
 	if err := db.Exec(`CREATE TABLE task_records_v2 (
 		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, render_config TEXT,
-		parent_workflow_id TEXT, parent_run_id TEXT, parent_step_id TEXT,
+		parent_workflow_id TEXT, parent_step_id TEXT,
 		task_workflow_id TEXT,
 		active_task_template_id TEXT, root_workflow_id TEXT NOT NULL DEFAULT '',
 		active_step_id TEXT NULL, seq INTEGER NOT NULL DEFAULT 0, data TEXT,
@@ -50,7 +50,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 
 	s := New(db)
 	ctx := context.Background()
-	s.SaveTask(ctx, store.TaskRecord{TaskID: task1, TaskType: "TEST", State: "STARTING", Data: map[string]any{}})
+	s.InitTask(ctx, store.TaskRecord{TaskID: task1, TaskType: "TEST", State: "STARTING", Data: map[string]any{}})
 	return s, ctx
 }
 
@@ -84,19 +84,21 @@ func claim(step string, seq int64, data map[string]any) store.StepClaim {
 	return store.StepClaim{StepID: step, Seq: seq, ActiveTaskTemplateID: "tmpl-" + step[:2], State: "STARTING_STEP", Data: data}
 }
 
-// SaveTask is the full-record write. It must never touch the columns the guarded statements own,
-// or a stale save could move the active step backwards.
-func TestSaveTask_DoesNotWriteStepColumns(t *testing.T) {
+// InitTask is a no-op on conflict: TaskID is the parent's ActivationID, unique per invocation, so a
+// conflict can only be a retry of the same StartTask call, never a different task. It must not
+// overwrite anything — including columns it would otherwise own — or a retry that lands after the
+// row has already progressed could silently rewind it.
+func TestInitTask_IsANoOpOnConflict(t *testing.T) {
 	s, ctx := newTestStore(t)
 
 	n, err := s.ClaimStep(ctx, task1, claim(stepA, 4, map[string]any{"in": 1}))
 	wantRows(t, n, err, 1)
 
-	// A record read before the claim, saved after it.
-	s.SaveTask(ctx, store.TaskRecord{TaskID: task1, TaskType: "TEST", State: "OLD", ActiveStepID: stepB, Seq: 99, Data: map[string]any{}})
+	// A retry of StartTask for the same TaskID, as if the row had never progressed.
+	s.InitTask(ctx, store.TaskRecord{TaskID: task1, TaskType: "TEST", State: "OLD", ActiveStepID: stepB, Seq: 99, Data: map[string]any{}})
 
 	got := mustGet(t, s, ctx)
-	wantRow(t, got, stepA, 4, "OLD") // state is SaveTask's to write; the step columns are not
+	wantRow(t, got, stepA, 4, "STARTING_STEP") // untouched: the retry changed nothing
 }
 
 func TestClaimStep(t *testing.T) {

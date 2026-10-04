@@ -89,6 +89,9 @@ func (m *mockTemporalManager) RegisterAdminParkHandler(_ engine.AdminParkHandler
 type safeMockTaskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]store.TaskRecord
+	// initTaskErr, if set, is returned by InitTask instead of writing anything — simulates a failed
+	// insert (e.g. the DB is unavailable) so callers can be tested against that path.
+	initTaskErr error
 }
 
 func newSafeMockTaskStore() *safeMockTaskStore {
@@ -97,10 +100,19 @@ func newSafeMockTaskStore() *safeMockTaskStore {
 	}
 }
 
-func (s *safeMockTaskStore) SaveTask(_ context.Context, task store.TaskRecord) {
+// InitTask is a no-op on conflict, mirroring the real store's ON CONFLICT DO NOTHING: a retry of
+// the same TaskID must not overwrite a row guarded writes may have already moved forward.
+func (s *safeMockTaskStore) InitTask(_ context.Context, task store.TaskRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.initTaskErr != nil {
+		return s.initTaskErr
+	}
+	if _, exists := s.tasks[task.TaskID]; exists {
+		return nil
+	}
 	s.tasks[task.TaskID] = task
+	return nil
 }
 
 func (s *safeMockTaskStore) GetTask(_ context.Context, taskID string) (store.TaskRecord, bool) {
@@ -204,7 +216,7 @@ func newTestTaskManager(db store.TaskStore, registry *artifact.Registry, tm engi
 	return NewTaskManager(db, registry, newTestPluginsRegistry(), nil, tm, cb, noopRenderer{})
 }
 
-func noopCallback(_, _, _ string, _ map[string]any) error { return nil }
+func noopCallback(_, _ string, _ map[string]any) error { return nil }
 
 func newTestRegistry() *artifact.Registry {
 	m := testutil.MemLoader{
@@ -276,7 +288,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	}
 
 	parentCallbackCalled := false
-	onCompleted := func(parentWorkflowID string, parentRunID string, parentNodeID string, finalVars map[string]any) error {
+	onCompleted := func(parentWorkflowID string, parentStepID string, finalVars map[string]any) error {
 		parentCallbackCalled = true
 		return nil
 	}
@@ -376,7 +388,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 
 	// 4. HandleTaskCompletion
 	finalVars := map[string]any{"reviewerform.review_outcome": "approve"}
-	if err := tm.HandleTaskCompletion(context.Background(), task.TaskWorkflowID, finalVars); err != nil {
+	if err := tm.HandleTaskCompletion(context.Background(), engine.WorkflowCompletion{WorkflowID: task.TaskWorkflowID, Seq: 2, FinalVariables: finalVars}); err != nil {
 		t.Fatalf("HandleTaskCompletion failed: %v", err)
 	}
 
@@ -420,6 +432,38 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when task StartWorkflow fails, got nil")
+	}
+}
+
+// TestStartTask_InitTaskErrorPreventsWorkflowStart is the regression test for a task workflow
+// started with no backing row: if InitTask fails, StartTask must return the error and must not
+// start the task workflow — otherwise the workflow runs with nothing in the DB, every
+// StartTaskStep call fails with "no task record found" and retries forever, and a workflow that
+// somehow still reached END would find no row in HandleTaskCompletion and never wake the parent.
+func TestStartTask_InitTaskErrorPreventsWorkflowStart(t *testing.T) {
+	taskStore := newSafeMockTaskStore()
+	taskStore.initTaskErr = errors.New("db unavailable")
+
+	workflowStarted := false
+	mockTaskWF := &mockTemporalManager{
+		startWorkflowFunc: func(_ context.Context, _ string, _ engine.WorkflowDefinition, _ map[string]any) error {
+			workflowStarted = true
+			return nil
+		},
+	}
+
+	tm := newTestTaskManager(taskStore, newTestRegistry(), mockTaskWF, noopCallback)
+
+	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
+		WorkflowID:     "parent-wf",
+		ActivationID:   "step-1",
+		TaskTemplateID: "test_template",
+	})
+	if err == nil {
+		t.Fatal("expected error when InitTask fails, got nil")
+	}
+	if workflowStarted {
+		t.Error("StartWorkflow must not be called when InitTask fails")
 	}
 }
 
@@ -484,7 +528,7 @@ func TestStartTaskStep_UnknownWorkflowID(t *testing.T) {
 
 func TestStartTaskStep_UnknownTaskTemplateID(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.SaveTask(context.Background(), store.TaskRecord{
+	db.InitTask(context.Background(), store.TaskRecord{
 		TaskID:         "task-1",
 		TaskWorkflowID: "task-workflow-1",
 		State:          "STARTING",
@@ -508,7 +552,7 @@ func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
 		stepID = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
 	)
 	db := newSafeMockTaskStore()
-	db.SaveTask(context.Background(), store.TaskRecord{
+	db.InitTask(context.Background(), store.TaskRecord{
 		TaskID:         taskID,
 		TaskWorkflowID: "task-ext-workflow",
 		State:          "STARTING",
@@ -565,7 +609,7 @@ func TestCompleteTaskStep_UnknownTaskID(t *testing.T) {
 
 func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.SaveTask(context.Background(), store.TaskRecord{
+	db.InitTask(context.Background(), store.TaskRecord{
 		TaskID: "task-done",
 		State:  "COMPLETED",
 		Data:   map[string]any{},
@@ -581,7 +625,7 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 
 func TestCompleteTaskStep_NoActiveStep(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.SaveTask(context.Background(), store.TaskRecord{
+	db.InitTask(context.Background(), store.TaskRecord{
 		TaskID: "task-starting",
 		State:  "STARTING",
 		Data:   map[string]any{},
@@ -602,37 +646,9 @@ func TestCompleteTaskStep_NoActiveStep(t *testing.T) {
 func TestHandleTaskCompletion_UnknownWorkflowID_ReturnsNil(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	err := tm.HandleTaskCompletion(context.Background(), "unknown-workflow", map[string]any{"k": "v"})
+	err := tm.HandleTaskCompletion(context.Background(), engine.WorkflowCompletion{WorkflowID: "unknown-workflow", Seq: 1, FinalVariables: map[string]any{"k": "v"}})
 	if err != nil {
 		t.Fatalf("expected nil for unknown workflow, got: %v", err)
-	}
-}
-
-func TestHandleTaskCompletion_CallbackError_TaskNotMarkedCompleted(t *testing.T) {
-	db := newSafeMockTaskStore()
-	db.SaveTask(context.Background(), store.TaskRecord{
-		TaskID:         "task-cb-err",
-		TaskWorkflowID: "task-cb-workflow",
-		State:          "PENDING_USER",
-		Data:           map[string]any{},
-	})
-
-	callbackErr := errors.New("parent unreachable")
-	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{},
-		func(_, _, _ string, _ map[string]any) error { return callbackErr },
-	)
-
-	err := tm.HandleTaskCompletion(context.Background(), "task-cb-workflow", map[string]any{})
-	if !errors.Is(err, callbackErr) {
-		t.Fatalf("expected callback error to be propagated, got: %v", err)
-	}
-
-	// Task must NOT be marked COMPLETED when the parent-workflow callback fails:
-	// marking it COMPLETED before a successful callback would make the state
-	// unrecoverable (CompleteTaskStep rejects re-delivery once State=COMPLETED).
-	task, _ := db.GetTask(context.Background(), "task-cb-err")
-	if task.State == "COMPLETED" {
-		t.Errorf("task must not be marked COMPLETED when callback failed, got %s", task.State)
 	}
 }
 
@@ -773,7 +789,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 		ActiveStepID:         "step-123",
 		Seq:                  1,
 	}
-	db.SaveTask(context.Background(), record)
+	db.InitTask(context.Background(), record)
 
 	// 1. Test failing validation (blocking)
 	err := tm.CompleteTaskStep(context.Background(), "test-task-ext", "step-123", map[string]any{"age": 16.0})

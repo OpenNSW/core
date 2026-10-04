@@ -168,7 +168,7 @@ sequenceDiagram
     TM->>P: Execute(ctx, properties)
     P->>DB: set record.State = "PENDING_USER" (via TM)
     P-->>TM: return ErrSuspended
-    TM->>DB: SaveTask(record)
+    TM->>DB: InitTask(record)
     TM-->>TW: activity.ErrResultPending
 
     Note over TW: workflow parks on this step node
