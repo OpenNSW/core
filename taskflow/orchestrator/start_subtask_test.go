@@ -50,6 +50,12 @@ func startTaskStepFixture(t *testing.T) (*TaskManager, *safeMockTaskStore, *prob
 		TaskID: "task-1", TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf",
 		Data: map[string]any{"old": "value"},
 	})
+	return startTaskStepFixtureOver(t, db)
+}
+
+// startTaskStepFixtureOver is a task manager over db, with a probe plugin registered as USER_INPUT.
+func startTaskStepFixtureOver(t *testing.T, db *safeMockTaskStore) (*TaskManager, *safeMockTaskStore, *probePlugin) {
+	t.Helper()
 	probe := &probePlugin{}
 	pr := plugins.NewRegistry()
 	if err := pr.Register("USER_INPUT", probe); err != nil {
@@ -189,7 +195,7 @@ func TestStartTaskStep_RequiresAStepID(t *testing.T) {
 func TestCompleteTaskStep_BeforeAnyStepIsClaimedFails(t *testing.T) {
 	tm, _, _ := startTaskStepFixture(t)
 
-	if err := tm.CompleteTaskStep(context.Background(), "task-1", map[string]any{"x": 1}); err == nil {
-		t.Fatal("expected an error: no step has been claimed")
+	if err := tm.CompleteTaskStep(context.Background(), "task-1", stepA, map[string]any{"x": 1}); !errors.Is(err, ErrStaleStep) {
+		t.Fatalf("err = %v, want ErrStaleStep: no step has been claimed", err)
 	}
 }
