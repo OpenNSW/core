@@ -13,6 +13,7 @@ import (
 	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/testutil"
 	"github.com/OpenNSW/core/shared/maputil"
+	"github.com/OpenNSW/core/taskflow/callbacktoken"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/renderer"
@@ -502,30 +503,50 @@ func TestStartTaskStep_UnknownTaskTemplateID(t *testing.T) {
 }
 
 func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
+	const (
+		taskID = "5f0c9b1e-3d2a-4c6b-8e7f-0a1b2c3d4e5f"
+		stepID = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+	)
 	db := newSafeMockTaskStore()
 	db.SaveTask(context.Background(), store.TaskRecord{
-		TaskID:         "task-ext",
+		TaskID:         taskID,
 		TaskWorkflowID: "task-ext-workflow",
 		State:          "STARTING",
 		Data:           map[string]any{},
 	})
 
-	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	// The dispatcher receives the callback token for the step, not the bare task ID.
+	var dispatchedToken string
+	pr := plugins.NewRegistry()
+	pr.Register("EXTERNAL_REVIEW", plugins.NewExternalReviewPlugin(func(_ context.Context, _ string, token string, _ map[string]any) error {
+		dispatchedToken = token
+		return nil
+	}))
+	tm := NewTaskManager(db, newTestRegistry(), pr, nil, &mockTemporalManager{}, noopCallback, noopRenderer{})
 
 	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
 		WorkflowID:     "task-ext-workflow",
 		RunID:          "run-1",
 		NodeID:         "node-ext",
-		ActivationID:   "step-ext",
+		ActivationID:   stepID,
+		Seq:            1,
 		TaskTemplateID: "generic_external_review",
 	})
 	if err != nil && !errors.Is(err, activity.ErrResultPending) {
 		t.Fatalf("StartTaskStep for generic_external_review failed: %v", err)
 	}
 
-	task, _ := db.GetTask(context.Background(), "task-ext")
+	task, _ := db.GetTask(context.Background(), taskID)
 	if task.State != "QUEUED_EXTERNALLY" {
 		t.Errorf("expected status QUEUED_EXTERNALLY, got %s", task.State)
+	}
+
+	gotTask, gotStep, err := callbacktoken.Decode(dispatchedToken)
+	if err != nil {
+		t.Fatalf("dispatcher got %q, which is not a callback token: %v", dispatchedToken, err)
+	}
+	if gotTask != taskID || gotStep != stepID {
+		t.Errorf("token names (%s, %s), want (%s, %s)", gotTask, gotStep, taskID, stepID)
 	}
 }
 

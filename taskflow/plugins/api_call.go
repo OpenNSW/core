@@ -44,7 +44,11 @@ func (p *APICallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 
 	slog.InfoContext(ctx.Context, "api_call: dispatching", "task_id", ctx.Record.TaskID, "url", cfg.URL)
 
-	if err := p.dispatcher(ctx.Context, cfg.URL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
+	token, err := CallbackToken(ctx.Record)
+	if err != nil {
+		return err
+	}
+	if err := p.dispatcher(ctx.Context, cfg.URL, token, ctx.Record.Data); err != nil {
 		return fmt.Errorf("api call dispatch failed: %w", err)
 	}
 
