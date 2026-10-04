@@ -473,11 +473,11 @@ func TestAdminCompleteWithEmptyPatchContinuesPastParkedNode(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
-// TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps verifies that a resolution
-// signal targeting a NodeID nobody is waiting on, and a signal with a garbage Action, are
+// TestAdminResolutionUnknownActivationIDAndMalformedActionAreNoOps verifies that a resolution
+// signal targeting an ActivationID nobody is waiting on, and a signal with a garbage Action, are
 // both silently ignored rather than failing the node — only a deliberate, well-formed
 // resolution should ever move a parked node forward.
-func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
+func TestAdminResolutionUnknownActivationIDAndMalformedActionAreNoOps(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -721,7 +721,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 
 	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
 
-	var parkedActivationID string
+	var parkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(branchWorkflowID, "GetStatus")
 		require.NoError(t, err)
@@ -729,13 +729,13 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 		require.NoError(t, val.Get(&instance))
 
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["task_a"].Status)
-		parkedActivationID = instance.NodeInfo["task_a"].ActivationID
+		parkedID = instance.NodeInfo["task_a"].ActivationID
 	}, time.Second)
 
 	env.RegisterDelayedCallback(func() {
 		require.NoError(t, env.SignalWorkflowByID(branchWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:       "task_a",
-			ActivationID: parkedActivationID,
+			ActivationID: parkedID,
 			Action:       AdminActionAbort,
 		}))
 	}, 2*time.Second)
@@ -799,7 +799,7 @@ func TestAdminCompleteResolvesWaitForSignalOutputMappingError(t *testing.T) {
 	}, time.Millisecond)
 
 	// 2. Query to verify status is parked and CachedTaskResult holds the signal payload
-	var parkedActivationID string
+	var parkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
 		require.NoError(t, err)
@@ -808,14 +808,14 @@ func TestAdminCompleteResolvesWaitForSignalOutputMappingError(t *testing.T) {
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
 		require.Contains(t, instance.NodeInfo["wait"].LastError, "output mapping error")
 		require.Equal(t, "value", instance.NodeInfo["wait"].CachedTaskResult["incorrect_key"])
-		parkedActivationID = instance.NodeInfo["wait"].ActivationID
+		parkedID = instance.NodeInfo["wait"].ActivationID
 	}, 2*time.Millisecond)
 
 	// 3. Resolve the parked node with AdminActionComplete
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "wait",
-			ActivationID:           parkedActivationID,
+			ActivationID:           parkedID,
 			Action:                 AdminActionComplete,
 			WorkflowVariablesPatch: map[string]any{"global_target": "resolved-value"},
 		})
