@@ -89,9 +89,13 @@ type EnrichedComponent struct {
 // EnrichedComponent emitted by TaskRenderer; no separate top-level actions
 // list — actions ship inside their claiming zone's handles.
 type ZoneView struct {
-	TaskID    string          `json:"task_id"`
-	TaskType  string          `json:"task_type"`
-	State     string          `json:"state"`
+	TaskID   string `json:"task_id"`
+	TaskType string `json:"task_type"`
+	State    string `json:"state"`
+	// StepID is the step the task is on; actions taken on this view must send it back. Version
+	// increases every time the task moves on; it is read-only and never accepted as input.
+	StepID    string          `json:"step_id,omitempty"`
+	Version   int64           `json:"version"`
 	View      json.RawMessage `json:"view"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`

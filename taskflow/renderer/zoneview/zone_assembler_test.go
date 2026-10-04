@@ -138,3 +138,35 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 		t.Errorf("got %+v, want the record's task id and state carried through", zv)
 	}
 }
+
+// The view carries the step to act on and the version, and offers no action while the task is
+// ADVANCING: the submission was accepted and a second one would only be rejected as stale.
+func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testing.T) {
+	a := newTestAssembler(t)
+	claims := map[string]bool{"role:trader": false, "role:cha": true}
+
+	pending := pendingRecord(claimGatedConfig)
+	pending.ActiveStepID, pending.Seq = "0a0a0a0a-0000-4000-8000-00000000000a", 4
+	zv, err := a.Assemble(context.Background(), pending, claims)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if zv.StepID != pending.ActiveStepID || zv.Version != 4 {
+		t.Errorf("view step/version = (%q, %d), want (%q, 4)", zv.StepID, zv.Version, pending.ActiveStepID)
+	}
+
+	advancing := pending
+	advancing.State, advancing.Seq = store.StateAdvancing, 5
+	zv, err = a.Assemble(context.Background(), advancing, claims)
+	if err != nil {
+		t.Fatalf("Assemble while ADVANCING: %v", err)
+	}
+	if zv.State != store.StateAdvancing || zv.Version != 5 {
+		t.Errorf("view state/version = (%q, %d), want (ADVANCING, 5)", zv.State, zv.Version)
+	}
+	for _, c := range decodeView(t, zv.View) {
+		if len(c.Handles) != 0 {
+			t.Errorf("slot %q offers %d handles while ADVANCING, want none", c.ID, len(c.Handles))
+		}
+	}
+}

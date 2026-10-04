@@ -79,11 +79,8 @@ Flow Diagram:
 // as "already resumed".
 type TaskCompletedCallback func(parentWorkflowID string, parentStepID string, finalVariables map[string]any) error
 
-// ErrStaleStep means the step a call addressed is not the task's active step. StartTaskStep returns
-// it (wrapped in a non-retryable Temporal error) for a late or duplicate attempt that must do
-// nothing. CompleteTaskStep returns it when the step it was asked to complete has already
-// completed, is not the active step, or the task is already completed; nothing was written. A
-// caller serving HTTP should answer it with 409: refresh the task and decide again.
+// ErrStaleStep means the call named a step that is no longer active. Nothing was written.
+// Callers serving HTTP should answer 409 and have the client refetch.
 var ErrStaleStep = errors.New("step is no longer the active step of the task")
 
 // ErrStepIDRequired is returned by CompleteTaskStep when the caller did not say which step it is
@@ -549,6 +546,8 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		TaskID:    record.TaskID,
 		TaskType:  record.TaskType,
 		State:     record.State,
+		StepID:    record.ActiveStepID,
+		Version:   record.Seq,
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt,
 		View:      view, // actually attach the render output
@@ -571,6 +570,8 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string)
 			TaskID:    r.TaskID,
 			TaskType:  r.TaskType,
 			State:     r.State,
+			StepID:    r.ActiveStepID,
+			Version:   r.Seq,
 			CreatedAt: r.CreatedAt,
 			UpdatedAt: r.UpdatedAt,
 		})

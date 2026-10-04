@@ -851,3 +851,23 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 		t.Error("expected PRE_RESUME payload mutation to be discarded, but 'checked' was persisted")
 	}
 }
+
+// The task view and the list carry the step to act on and the version.
+func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
+	db := newSafeMockTaskStore()
+	db.InitTask(context.Background(), store.TaskRecord{TaskID: "task-v", TaskType: "TEST", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	view, err := tm.GetTaskRenderInfo(context.Background(), "task-v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.StepID != "step-9" || view.Version != 9 {
+		t.Errorf("view = (%q, %d), want (step-9, 9)", view.StepID, view.Version)
+	}
+
+	list := tm.GetAllTasks(context.Background(), "")
+	if len(list) != 1 || list[0].StepID != "step-9" || list[0].Version != 9 {
+		t.Errorf("list = %+v", list)
+	}
+}
