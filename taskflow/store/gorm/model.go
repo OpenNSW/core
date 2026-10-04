@@ -20,7 +20,7 @@ type TaskRecordModel struct {
 	ParentWorkflowID     string          `gorm:"column:parent_workflow_id;type:text;index"`
 	RootWorkflowID       string          `gorm:"column:root_workflow_id;type:text;not null;default:''"`
 	ParentRunID          string          `gorm:"column:parent_run_id;type:text"`
-	ParentNodeID         string          `gorm:"column:parent_node_id;type:text"`
+	ParentStepID         string          `gorm:"column:parent_step_id;type:text"`
 	TaskWorkflowID       string          `gorm:"column:task_workflow_id;type:text;index"`
 	TaskRunID            string          `gorm:"column:task_run_id;type:text"`
 	SubTaskNodeID        string          `gorm:"column:subtask_node_id;type:text"`
@@ -61,7 +61,7 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		RenderConfig:         m.RenderConfig,
 		ParentWorkflowID:     m.ParentWorkflowID,
 		ParentRunID:          m.ParentRunID,
-		ParentNodeID:         m.ParentNodeID,
+		ParentStepID:         m.ParentStepID,
 		RootWorkflowID:       m.RootWorkflowID,
 		TaskWorkflowID:       m.TaskWorkflowID,
 		TaskRunID:            m.TaskRunID,
@@ -95,7 +95,7 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		ParentWorkflowID:     r.ParentWorkflowID,
 		RootWorkflowID:       r.RootWorkflowID,
 		ParentRunID:          r.ParentRunID,
-		ParentNodeID:         r.ParentNodeID,
+		ParentStepID:         r.ParentStepID,
 		TaskWorkflowID:       r.TaskWorkflowID,
 		TaskRunID:            r.TaskRunID,
 		SubTaskNodeID:        r.SubTaskNodeID,

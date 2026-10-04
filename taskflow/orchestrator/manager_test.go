@@ -287,6 +287,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		WorkflowID:     "parent-workflow",
 		RunID:          "parent-run",
 		NodeID:         "node-1",
+		ActivationID:   "step-1",
 		TaskTemplateID: "test_template",
 		Inputs:         map[string]any{"userform.name": "Alice"},
 		RootWorkflowID: "parent-workflow",
@@ -321,6 +322,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		WorkflowID:     task.TaskWorkflowID,
 		RunID:          "task-run",
 		NodeID:         "task-node",
+		ActivationID:   "task-step",
 		TaskTemplateID: "generic_user_input",
 	}
 	if _, err := tm.StartTaskStep(context.Background(), payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
@@ -342,7 +344,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		if workflowID != task.TaskWorkflowID {
 			t.Errorf("expected task workflow ID %s, got %s", task.TaskWorkflowID, workflowID)
 		}
-		if activityID != "task-node" {
+		if activityID != "task-step" {
 			t.Errorf("expected active activity ID 'task-node', got %s", activityID)
 		}
 		return nil
@@ -443,6 +445,7 @@ func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
 				WorkflowID:     tc.workflowID,
 				RunID:          "run-1",
 				NodeID:         "node-1",
+				ActivationID:   "step-1",
 				TaskTemplateID: "test_template",
 				RootWorkflowID: tc.rootWorkflowID,
 			}
@@ -450,7 +453,7 @@ func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
 				t.Fatalf("StartTask failed: %v", err)
 			}
 
-			task, ok := db.GetTask(context.Background(), "node-1")
+			task, ok := db.GetTask(context.Background(), "step-1")
 			if !ok {
 				t.Fatal("expected task record to be saved")
 			}
@@ -512,6 +515,7 @@ func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
 		WorkflowID:     "task-ext-workflow",
 		RunID:          "run-1",
 		NodeID:         "node-ext",
+		ActivationID:   "step-ext",
 		TaskTemplateID: "generic_external_review",
 	})
 	if err != nil && !errors.Is(err, activity.ErrResultPending) {

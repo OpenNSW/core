@@ -142,9 +142,13 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
 
-	// Use the parent workflow node ID as the TaskID. It must be globally unique. Callers that know the node ID can address
-	// the task without a lookup.
-	taskID := payload.NodeID
+	// Use the parent's step ID as the TaskID. It names this run of the parent's TASK node, so it is
+	// globally unique and a node revisited by a loop starts a new task rather than reusing the old
+	// one. It is also a UUID.
+	taskID := payload.ActivationID
+	if taskID == "" {
+		return nil, fmt.Errorf("start task from template %q: payload has no step ID", payload.TaskTemplateID)
+	}
 	taskWorkflowID := "task-wf-" + taskID
 
 	initialData := make(map[string]any)
@@ -164,7 +168,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		RenderConfig:     renderConfig,
 		ParentWorkflowID: payload.WorkflowID,
 		ParentRunID:      payload.RunID,
-		ParentNodeID:     payload.NodeID,
+		ParentStepID:     payload.ActivationID, // the parent's Activity to complete: its step ID
 		RootWorkflowID:   rootWorkflowID,
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
@@ -198,7 +202,7 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 	}
 
 	record.TaskRunID = payload.RunID
-	record.SubTaskNodeID = payload.NodeID
+	record.SubTaskNodeID = payload.ActivationID
 	record.ActiveTaskTemplateID = payload.TaskTemplateID
 
 	for k, v := range payload.Inputs {
@@ -259,7 +263,7 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, workflowID stri
 		return nil
 	}
 
-	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentNodeID, finalVariables)
+	err := tm.onTaskCompleted(record.ParentWorkflowID, record.ParentRunID, record.ParentStepID, finalVariables)
 	if err != nil {
 		tm.logger.ErrorContext(ctx, "task completion callback failed", "task_id", record.TaskID, "error", err)
 		return err
