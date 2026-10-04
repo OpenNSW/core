@@ -22,8 +22,6 @@ type TaskRecordModel struct {
 	ParentRunID          string          `gorm:"column:parent_run_id;type:text"`
 	ParentStepID         string          `gorm:"column:parent_step_id;type:text"`
 	TaskWorkflowID       string          `gorm:"column:task_workflow_id;type:text;index"`
-	TaskRunID            string          `gorm:"column:task_run_id;type:text"`
-	SubTaskNodeID        string          `gorm:"column:subtask_node_id;type:text"`
 	ActiveTaskTemplateID string          `gorm:"column:active_task_template_id;type:text"`
 	// ActiveStepID and Seq belong to the guarded step statements in store.go. SaveTask never
 	// writes them (see TaskStore.SaveTask), so a full-record save cannot move them backwards.
@@ -64,8 +62,6 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		ParentStepID:         m.ParentStepID,
 		RootWorkflowID:       m.RootWorkflowID,
 		TaskWorkflowID:       m.TaskWorkflowID,
-		TaskRunID:            m.TaskRunID,
-		SubTaskNodeID:        m.SubTaskNodeID,
 		ActiveTaskTemplateID: m.ActiveTaskTemplateID,
 		ActiveStepID:         activeStepID,
 		Seq:                  m.Seq,
@@ -97,8 +93,6 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		ParentRunID:          r.ParentRunID,
 		ParentStepID:         r.ParentStepID,
 		TaskWorkflowID:       r.TaskWorkflowID,
-		TaskRunID:            r.TaskRunID,
-		SubTaskNodeID:        r.SubTaskNodeID,
 		ActiveTaskTemplateID: r.ActiveTaskTemplateID,
 		ActiveStepID:         activeStepID,
 		Seq:                  r.Seq,

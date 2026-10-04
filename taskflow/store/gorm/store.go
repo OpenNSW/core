@@ -44,8 +44,6 @@ func (s *TaskStore) SaveTask(ctx context.Context, record store.TaskRecord) {
 			"parent_step_id",
 			"root_workflow_id",
 			"task_workflow_id",
-			"task_run_id",
-			"subtask_node_id",
 			"active_task_template_id",
 			"data",
 			"updated_at",

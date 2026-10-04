@@ -66,8 +66,6 @@ func TestTaskStoreInterface(t *testing.T) {
 		ParentRunID:      "parent-run-1",
 		ParentStepID:     "step-1",
 		TaskWorkflowID:   "task-wf-1",
-		TaskRunID:        "task-run-1",
-		SubTaskNodeID:    "activity-1",
 		Data:             map[string]any{"userform": map[string]any{"name": "Alice"}},
 		CreatedAt:        time.Now(),
 	}

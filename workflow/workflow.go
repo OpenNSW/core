@@ -67,32 +67,9 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		instance.WorkflowVariables[VarRootWorkflowID] = instance.ID
 	}
 
-	// NodeInfo.ID still carries a ":<uuid>" suffix generated once per node at workflow start — a
-	// leftover from before ActivationID existed, when this was the only per-node identity available.
-	// Nothing in the engine or in taskflow reads NodeInfo.ID for activity-addressing anymore (only
-	// ActivationID is used for that, below); this is now display/observability-only, and the suffix no
-	// longer serves the purpose it was added for. Left as-is here rather than folded into this
-	// change, to keep this diff to what the step-identity fix actually requires — its removal is a
-	// separate, host-visible change (NodeInfo.ID is serialized via GetStatus, and at least one host
-	// consumer parses this exact "<node id>:<uuid>" format back apart) that deserves its own PR.
-	//
-	// TODO(#taskflow-guarded-writes): drop this composite ID once host consumers of NodeInfo.ID
-	// (e.g. admin-resolution code that parses "<template id>:<uuid>") are updated to stop relying
-	// on its format.
-	var generatedUUIDs map[string]string
-	if err := workflow.SideEffect(ctx, func(_ workflow.Context) interface{} {
-		uuids := make(map[string]string)
-		for _, node := range def.Nodes {
-			uuids[node.ID] = uuid.NewString()
-		}
-		return uuids
-	}).Get(&generatedUUIDs); err != nil {
-		return nil, fmt.Errorf("failed to generate UUIDs via SideEffect: %w", err)
-	}
-
 	for _, node := range def.Nodes {
 		instance.NodeInfo[node.ID] = &NodeInfo{
-			ID:             node.ID + ":" + generatedUUIDs[node.ID],
+			ID:             node.ID,
 			Type:           node.Type,
 			GatewayType:    node.GatewayType,
 			TaskTemplateID: node.TaskTemplateID,
@@ -103,20 +80,13 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	}
 
 	for i, edge := range def.Edges {
-		sourceNodeInfo, sourceExists := instance.NodeInfo[edge.SourceID]
-		if !sourceExists {
+		if _, ok := instance.NodeInfo[edge.SourceID]; !ok {
 			return nil, fmt.Errorf("invalid edge definition: source node '%s' not found for edge '%s'", edge.SourceID, edge.ID)
 		}
-		targetNodeInfo, targetExists := instance.NodeInfo[edge.TargetID]
-		if !targetExists {
+		if _, ok := instance.NodeInfo[edge.TargetID]; !ok {
 			return nil, fmt.Errorf("invalid edge definition: target node '%s' not found for edge '%s'", edge.TargetID, edge.ID)
 		}
-		instance.Edges[i] = Edge{
-			ID:        edge.ID,
-			SourceID:  sourceNodeInfo.ID,
-			TargetID:  targetNodeInfo.ID,
-			Condition: edge.Condition,
-		}
+		instance.Edges[i] = edge
 	}
 
 	// Initialize our interpreter struct
