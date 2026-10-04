@@ -33,6 +33,17 @@ func parkedActivationID(t *testing.T, env *testsuite.TestWorkflowEnvironment, no
 	return instance.NodeInfo[nodeID].ActivationID
 }
 
+// An admin tool reads the ActivationID from GetStatus (NodeInfo) and sends it back in
+// AdminResolutionSignal, so both must use the same JSON name.
+func TestAdminResolutionSignalUsesNodeInfoJSONNameForActivationID(t *testing.T) {
+	info, err := json.Marshal(NodeInfo{ActivationID: "a1"})
+	require.NoError(t, err)
+	sig, err := json.Marshal(AdminResolutionSignal{ActivationID: "a1"})
+	require.NoError(t, err)
+	require.Contains(t, string(info), `"step_id":"a1"`)
+	require.Contains(t, string(sig), `"step_id":"a1"`)
+}
+
 func TestApplyVariablesPatchIsDeterministicForOverlappingKeys(t *testing.T) {
 	// "a" is written first and "a.y" inside it. Applied in sorted order the parent always goes
 	// first, so both survive on every run.

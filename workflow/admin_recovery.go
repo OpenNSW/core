@@ -84,8 +84,10 @@ type AdminResolutionSignal struct {
 	// ActivationID is the routing key: it must match the ActivationID the engine sent in
 	// AdminParkPayload for the parking being resolved. A signal whose ActivationID doesn't match any
 	// currently-parked node is dropped — including one echoing an earlier parking of the same
-	// NodeID, since a retry or loop revisit mints a new ActivationID each time it parks.
-	ActivationID string `json:"activationID"`
+	// NodeID, since a retry or loop revisit mints a new ActivationID each time it parks. Its JSON
+	// name, step_id, matches NodeInfo.ActivationID's, so a value read from GetStatus is sent back
+	// under the same name.
+	ActivationID string `json:"step_id"`
 	// Action determines how the node is resolved. See AdminResolutionAction constants.
 	Action AdminResolutionAction `json:"action"`
 	// WorkflowVariablesPatch sets workflow variables before the action takes effect, for
