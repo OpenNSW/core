@@ -5,6 +5,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"strconv"
 	"testing"
