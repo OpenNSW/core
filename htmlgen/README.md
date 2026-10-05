@@ -198,8 +198,9 @@ helper, or one of html/template's internal `_html_template_*` escapers is refuse
 `Validate(tmpl, resolverNames...)` checks a template without rendering it: syntax, calls to
 functions that were not declared, and html/template's escaping pass, which a plain parse does not
 run. Use it when a template is stored or loaded, and in CI over a template directory, so a broken
-template fails at deploy rather than when someone requests a document. It cannot detect data
-problems; only `Generate` can.
+template fails at deploy rather than when someone requests a document. It does not check the
+arguments passed to helpers or resolvers, even literal ones such as a date that does not match its
+layout; those, like data problems, only `Generate` can find.
 
 Every failure matches a sentinel with `errors.Is`: `ErrParseTemplate`, `ErrUnsupportedTemplate`,
 `ErrUnsafeTemplate`, `ErrInvalidData`, `ErrUnsupportedValue`, `ErrUnsafeValue`, `ErrMissingKey`,
