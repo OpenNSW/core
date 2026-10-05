@@ -62,9 +62,8 @@ func TestDownloadContent_LocalDriver_Success(t *testing.T) {
 	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("expected X-Content-Type-Options nosniff, got %q", got)
 	}
-	// PDFs are exempt from the sandbox so the browser's PDF viewer still loads.
-	if got := rec.Header().Get("Content-Security-Policy"); got != "" {
-		t.Errorf("expected no Content-Security-Policy for a PDF, got %q", got)
+	if got := rec.Header().Get("Content-Security-Policy"); got != "sandbox" {
+		t.Errorf("expected Content-Security-Policy sandbox, got %q", got)
 	}
 
 	if !bytes.Equal(rec.Body.Bytes(), content) {
