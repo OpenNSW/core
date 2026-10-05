@@ -26,12 +26,12 @@ type graphInterpreter struct {
 	outEdges map[string][]Edge
 	inEdges  map[string][]Edge
 
-	// seq is the workflow-wide step counter: it is advanced each time a TASK node starts a run, and
-	// its value identifies that run (see activationID). It only ever grows.
+	// seq is the workflow-wide step counter: it is advanced each time any node starts a run, and
+	// its value identifies that run (see mintActivation). It only ever grows.
 	seq int64
 
 	// pendingAdminResolutions holds a Settable for each node currently parked in
-	// NodeStatusAwaitingAdmin, keyed by node template ID. See admin_recovery.go.
+	// NodeStatusAwaitingAdmin, keyed by that park's ActivationID. See admin_recovery.go.
 	pendingAdminResolutions map[string]workflow.Settable
 }
 
@@ -217,6 +217,7 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 
 	outEdges := g.outEdges[node.ID]
 
+	g.mintActivation(nodeInfo, node)
 	err := g.dispatchNodeHandler(ctx, nodeInfo, node, outEdges)
 	if err == nil {
 		return nil
@@ -325,10 +326,9 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	// forever. The parent aggregates each branch's result and fires the hook once when its own END
 	// node is reached.
 	if workflow.GetInfo(ctx).ParentWorkflowExecution == nil {
-		// The end takes the next value of the step counter, so the host can order its completion
-		// write after every step's writes.
-		g.seq++
-		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables, g.seq).Get(ctx, nil)
+		// nodeInfo.Seq was minted by the caller (mintActivation) for this run of the END node, so the
+		// host can order its completion write after every other node's writes.
+		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables, nodeInfo.Seq).Get(ctx, nil)
 		if err != nil {
 			return withCategory(ParkCategoryTaskFailure, fmt.Errorf("unable to complete workflow: %w", err))
 		}
@@ -346,6 +346,16 @@ var activationIDNamespace = uuid.MustParse("6f1c2c0e-5b58-4a55-9a4e-3d7a1f0c8b21
 // deterministic under Temporal replay without a side effect, and it is a valid UUID.
 func newActivationID(workflowID, nodeID string, seq int64) string {
 	return uuid.NewSHA1(activationIDNamespace, []byte(fmt.Sprintf("%s:%s:%d", workflowID, nodeID, seq))).String()
+}
+
+// mintActivation advances the workflow's step counter and records a fresh ActivationID on nodeInfo
+// for this run of node. It is called once per dispatch of a node's handler — both a fresh
+// execution and an admin retry — so a node revisited by a loop, or re-run by an admin action, is
+// addressed as a new run: anything addressed to an earlier run no longer matches and is rejected.
+func (g *graphInterpreter) mintActivation(nodeInfo *NodeInfo, node *Node) {
+	g.seq++
+	nodeInfo.ActivationID = newActivationID(g.instance.ID, node.ID, g.seq)
+	nodeInfo.Seq = g.seq
 }
 
 // mapTaskInputs builds the task's inputs from the workflow variables.
@@ -434,21 +444,16 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 
 	var result map[string]any
 
-	// Each run of a TASK node gets its own step ID and the next value of the workflow's counter, so
-	// a node revisited by a loop, or re-run by an admin retry, is a new step. Anything addressed to
-	// an earlier run of the node no longer matches a pending Activity and is rejected.
-	g.seq++
-	activationID := newActivationID(g.instance.ID, node.ID, g.seq)
-	nodeInfo.ActivationID = activationID
-	nodeInfo.Seq = g.seq
-
+	// nodeInfo.ActivationID was minted by the caller (mintActivation, via executeNode or an admin
+	// retry) before dispatching here; the Activity is addressed by that same ID so a stale
+	// completion from an earlier run of this node no longer matches.
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ActivityID:          activationID,
+		ActivityID:          nodeInfo.ActivationID,
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
 
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID(),
-		ActivationRef{NodeID: node.ID, Seq: g.seq}).Get(ctx, &result)
+		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq}).Get(ctx, &result)
 	if err != nil {
 		return withCategory(ParkCategoryTaskFailure, err)
 	}

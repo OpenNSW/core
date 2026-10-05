@@ -363,17 +363,23 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
 		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "m_fanout", branchID)
 		env.RegisterDelayedCallback(func() {
+			val, qerr := env.QueryWorkflowByID(childWorkflowID, "GetStatus")
+			s.Require().NoError(qerr)
+			var instance WorkflowInstance
+			s.Require().NoError(val.Get(&instance))
 			err := env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
-				NodeID: "c_task",
-				Action: AdminActionAbort,
+				NodeID:       "c_task",
+				ActivationID: instance.NodeInfo["c_task"].ActivationID,
+				Action:       AdminActionAbort,
 			})
 			s.NoError(err)
 		}, 15*time.Second)
 	}
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "m_fanout",
-			Action: AdminActionAbort,
+			NodeID:       "m_fanout",
+			ActivationID: parkedActivationID(s.T(), env, "m_fanout"),
+			Action:       AdminActionAbort,
 		})
 	}, 16*time.Second)
 

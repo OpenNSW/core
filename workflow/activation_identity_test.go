@@ -74,10 +74,13 @@ func TestTaskNodeInLoopGetsNewActivationIDEachRun(t *testing.T) {
 	})
 
 	require.Len(t, seen, 3)
+	// Every node along the path (START, GATEWAY, TIMER) consumes a Seq value too, not just TASK, so
+	// poll's three runs land on 2, 6, 10 rather than being contiguous with each other.
+	wantSeqs := []int64{2, 6, 10}
 	ids := map[string]bool{}
 	for i, s := range seen {
 		require.Equal(t, "poll", s.step.NodeID, "the node ID names the definition and repeats")
-		require.Equal(t, int64(i+1), s.step.Seq, "seq grows by one per step")
+		require.Equal(t, wantSeqs[i], s.step.Seq, "seq is workflow-wide, not just over TASK runs")
 		require.Equal(t, newActivationID(instance.ID, "poll", s.step.Seq), s.activityID, "the step ID is the Activity ID")
 		_, err := uuid.Parse(s.activityID)
 		require.NoError(t, err, "a step ID is a UUID")
@@ -87,11 +90,11 @@ func TestTaskNodeInLoopGetsNewActivationIDEachRun(t *testing.T) {
 
 	// The end takes the next value of the counter, above every step's.
 	require.Equal(t, instance.ID, completion.WorkflowID)
-	require.Equal(t, int64(4), completion.Seq)
+	require.Equal(t, int64(12), completion.Seq)
 
 	info := instance.NodeInfo["poll"]
 	require.Equal(t, "poll", info.ID)
-	require.Equal(t, int64(3), info.Seq)
+	require.Equal(t, int64(10), info.Seq)
 	require.Equal(t, seen[2].activityID, info.ActivationID, "NodeInfo describes the latest run")
 }
 
@@ -105,12 +108,13 @@ func TestSeqIsWorkflowWideAcrossNodes(t *testing.T) {
 	})
 
 	require.Len(t, seen, 2)
-	require.Equal(t, ActivationRef{NodeID: "node1", Seq: 1}, seen[0].step)
-	require.Equal(t, ActivationRef{NodeID: "node2", Seq: 2}, seen[1].step)
+	// START consumes seq 1 before node1 runs, since every node now takes its own value.
+	require.Equal(t, ActivationRef{NodeID: "node1", Seq: 2}, seen[0].step)
+	require.Equal(t, ActivationRef{NodeID: "node2", Seq: 3}, seen[1].step)
 	require.NotEqual(t, seen[0].activityID, seen[1].activityID)
-	require.Equal(t, int64(1), instance.NodeInfo["node1"].Seq)
-	require.Equal(t, int64(2), instance.NodeInfo["node2"].Seq)
-	require.Equal(t, int64(3), completion.Seq, "the workflow's end is the next step of the same counter")
+	require.Equal(t, int64(2), instance.NodeInfo["node1"].Seq)
+	require.Equal(t, int64(3), instance.NodeInfo["node2"].Seq)
+	require.Equal(t, int64(4), completion.Seq, "the workflow's end is the next step of the same counter")
 }
 
 // Step IDs are derived, not random, so they come out the same on every replay of the workflow.
