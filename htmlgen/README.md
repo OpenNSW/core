@@ -183,8 +183,12 @@ doc, err := htmlgen.Generate(ctx, tmpl, data, htmlgen.WithResolvers(htmlgen.Reso
 Each resolver is registered under its own name, so a template calling one that was not supplied
 fails when the template is **parsed** — not at execution, if and when a branch happens to reach it.
 Arguments arrive as the caller's own Go values (`string`, `json.Number`, `map[string]any`, `nil`),
-and the return value is escaped like any other. A name that would shadow a template builtin, a
-helper, or one of html/template's internal `_html_template_*` escapers is refused.
+and the return value goes through the same rules as a data value — including the
+[trusted values](#trusted-values) exception, so a resolver returning `template.HTML` is printed
+unescaped. Resolvers are where content from a database or another service enters the document:
+return it as a plain `string`, never wrapped in a `template.*` type. A name that would shadow a
+template builtin, a helper, the `break` or `continue` keywords, or one of html/template's internal
+`_html_template_*` escapers is refused.
 
 > [!IMPORTANT]
 > A resolver must not have durable side effects. The template engine calls a function once per

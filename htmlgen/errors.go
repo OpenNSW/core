@@ -58,9 +58,12 @@ var (
 
 	// ErrReservedResolverName is returned when a resolver's name collides with
 	// a template builtin, with one of html/template's internal escapers, or
-	// with a function htmlgen defines itself. A caller function silently
-	// shadows any of these, so this is rejected rather than allowed to change
-	// what index, printf or an escaper mean inside a template.
+	// with a function htmlgen defines itself, or with the break and continue
+	// keywords. A caller function silently shadows a builtin or a helper, and
+	// demotes a keyword to an ordinary call, so this is rejected rather than
+	// allowed to change what index, printf or break mean inside a template.
+	// html/template's escapers already take precedence over a caller function,
+	// so their names are reserved as a safeguard.
 	ErrReservedResolverName = errors.New("htmlgen: resolver name is reserved")
 
 	// ErrResolver is returned when a caller-supplied resolver returns an

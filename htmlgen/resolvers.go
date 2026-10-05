@@ -30,8 +30,10 @@ var builtinFuncs = map[string]bool{
 var keywordFuncs = map[string]bool{"break": true, "continue": true}
 
 // escaperPrefix begins the names of the escaping functions html/template
-// inserts into every action. A caller function under one of those names would
-// replace the escaper itself.
+// inserts into every action. html/template installs its own escapers after the
+// caller's functions, so a caller function under one of those names would not
+// actually replace one; the names are reserved as a safeguard, so that
+// guarantee does not rest on an html/template implementation detail.
 const escaperPrefix = "_html_template_"
 
 // reservedName reports whether a name is one a resolver may not take.
@@ -62,8 +64,9 @@ func reservedName(name string) bool {
 type ResolveFunc func(ctx context.Context, args ...any) (any, error)
 
 // Resolvers maps template-visible names to functions. Each name must be a
-// valid Go identifier and must not collide with a template builtin, an
-// html/template escaper, or a function htmlgen defines itself.
+// valid Go identifier and must not collide with a template builtin, the break
+// or continue keywords, an html/template escaper, or a function htmlgen
+// defines itself.
 //
 // Each resolver is registered under its own name, so {{ codelist ... }} rather
 // than {{ resolve "codelist" ... }}. A template that calls a resolver which

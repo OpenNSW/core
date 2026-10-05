@@ -119,8 +119,9 @@ func TestResolvers_NameValidation(t *testing.T) {
 	})
 
 	t.Run("shadowing a builtin or a helper is refused", func(t *testing.T) {
-		// html/template inserts its escapers as functions named _html_template_*,
-		// so a resolver under one of those names would replace the escaper.
+		// html/template inserts its escapers as functions named _html_template_*.
+		// Its own escapers win over a caller function of the same name, but the
+		// prefix is reserved anyway as a safeguard.
 		// break and continue are keywords only while no function of that name
 		// exists, so registering one silently changes what {{ break }} does in
 		// every template rather than merely shadowing a function.
