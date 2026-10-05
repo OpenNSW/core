@@ -29,6 +29,7 @@ func TestPostgresConfig_DSN_ParsesWithPgx(t *testing.T) {
 			},
 			wantHost: "localhost",
 			wantPort: 5432,
+			wantTLS:  false,
 		},
 		{
 			name: "ipv6 host",
@@ -42,6 +43,7 @@ func TestPostgresConfig_DSN_ParsesWithPgx(t *testing.T) {
 			},
 			wantHost: "::1",
 			wantPort: 5432,
+			wantTLS:  true,
 		},
 	}
 
@@ -67,8 +69,8 @@ func TestPostgresConfig_DSN_ParsesWithPgx(t *testing.T) {
 			if parsed.Database != tt.cfg.Name {
 				t.Errorf("database = %q, want %q", parsed.Database, tt.cfg.Name)
 			}
-			if parsed.RuntimeParams["sslmode"] != tt.cfg.SSLMode {
-				t.Errorf("sslmode = %q, want %q", parsed.RuntimeParams["sslmode"], tt.cfg.SSLMode)
+			if (parsed.TLSConfig != nil) != tt.wantTLS {
+				t.Errorf("TLSConfig present = %t, want %t for sslmode %q", parsed.TLSConfig != nil, tt.wantTLS, tt.cfg.SSLMode)
 			}
 		})
 	}
