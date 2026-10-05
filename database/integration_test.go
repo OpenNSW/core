@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	integrationMaxOpen = 4
-	integrationMaxIdle = 2
+	integrationMaxOpen         = 4
+	integrationMaxIdle         = 1
 	integrationLifetimeSeconds = 60
 )
 
@@ -84,6 +84,26 @@ func testLiveDatabase(t *testing.T, cfg Config) {
 	if stats.MaxOpenConnections != integrationMaxOpen {
 		t.Errorf("MaxOpenConnections = %d, want %d", stats.MaxOpenConnections, integrationMaxOpen)
 	}
+
+	conns := make([]*sql.Conn, 0, integrationMaxIdle+1)
+	for i := 0; i < integrationMaxIdle+1; i++ {
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("db.Conn() failed for connection %d: %v", i+1, err)
+		}
+		if err := conn.PingContext(ctx); err != nil {
+			_ = conn.Close()
+			t.Fatalf("connection %d ping failed: %v", i+1, err)
+		}
+		conns = append(conns, conn)
+	}
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil {
+			t.Errorf("closing pooled connection failed: %v", err)
+		}
+	}
+
+	stats = db.Stats()
 	if stats.Idle > integrationMaxIdle {
 		t.Errorf("Idle connections = %d, want at most %d", stats.Idle, integrationMaxIdle)
 	}
