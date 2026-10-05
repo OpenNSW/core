@@ -240,7 +240,7 @@ func TestUploadService_DownloadURL_InvalidKey(t *testing.T) {
 }
 
 func TestUploadService_Policy(t *testing.T) {
-	pdfOnly := []ServiceOption{WithAllowedContentTypes("application/pdf")}
+	pdfOnly := []ServiceOption{WithAllowedUploadTypes("application/pdf")}
 
 	tests := []struct {
 		name     string
@@ -255,7 +255,7 @@ func TestUploadService_Policy(t *testing.T) {
 		{name: "allowlisted type accepted", opts: pdfOnly, mimeType: "application/pdf", size: 1024},
 		{name: "type outside allowlist rejected", opts: pdfOnly, mimeType: "application/x-msdownload", size: 1024, wantErr: ErrContentTypeNotAllowed},
 		{name: "missing type checked as octet-stream", opts: pdfOnly, mimeType: "", size: 1024, wantErr: ErrContentTypeNotAllowed},
-		{name: "empty allowlist rejects everything", opts: []ServiceOption{WithAllowedContentTypes()}, mimeType: "application/pdf", size: 1024, wantErr: ErrContentTypeNotAllowed},
+		{name: "empty allowlist rejects everything", opts: []ServiceOption{WithAllowedUploadTypes()}, mimeType: "application/pdf", size: 1024, wantErr: ErrContentTypeNotAllowed},
 		{name: "zero size rejected", mimeType: "application/pdf", size: 0, wantErr: ErrInvalidSize},
 		{name: "negative size rejected", mimeType: "application/pdf", size: -1, wantErr: ErrInvalidSize},
 		{name: "size checked before type", opts: pdfOnly, mimeType: "application/x-msdownload", size: 32<<20 + 1, wantErr: &FileTooLargeError{}},

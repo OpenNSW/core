@@ -79,15 +79,15 @@ The Service doesn't apply an upload policy of its own. `Upload` accepts any MIME
 
 ```go
 svc := storage.NewService(driver,
-    storage.WithAllowedContentTypes("application/pdf", "image/png"), // others: ErrContentTypeNotAllowed
-    storage.WithMaxUploadSize(10<<20),                               // bytes; default 32MB
+    storage.WithAllowedUploadTypes("application/pdf", "image/png"), // others: ErrContentTypeNotAllowed
+    storage.WithMaxUploadSize(10<<20),                              // bytes; default 32MB
 )
 ```
 
-| Option                              | Default           | Effect                                                                                                           |
-|-------------------------------------|-------------------|------------------------------------------------------------------------------------------------------------------|
-| `WithAllowedContentTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload    |
-| `WithMaxUploadSize(n)`              | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                           |
+| Option                             | Default           | Effect                                                                                                        |
+|------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|
+| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload |
+| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                        |
 
 `Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400.
 
@@ -166,7 +166,7 @@ The routes stay at `/api/v1/storage/{key}/content` unless you set `Local.RoutePr
 The HTTP handler used to accept only these upload types: PDF, JPEG, PNG, GIF, WebP and XLSX. The limits now belong to the Service, and it accepts any type by default. To keep the old behavior, pass that list to `NewService`:
 
 ```go
-svc := storage.NewService(driver, storage.WithAllowedContentTypes(
+svc := storage.NewService(driver, storage.WithAllowedUploadTypes(
     "application/pdf",
     "image/jpeg",
     "image/png",

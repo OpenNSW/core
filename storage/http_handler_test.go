@@ -206,7 +206,7 @@ func TestUpload_PolicyErrors(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "any type by default", mimeType: "application/x-msdownload", size: 1024, want: http.StatusOK},
-		{name: "type outside allowlist", opts: []ServiceOption{WithAllowedContentTypes("application/pdf")}, mimeType: "application/x-msdownload", size: 1024, want: http.StatusUnsupportedMediaType, wantErr: "invalid or prohibited file type"},
+		{name: "type outside allowlist", opts: []ServiceOption{WithAllowedUploadTypes("application/pdf")}, mimeType: "application/x-msdownload", size: 1024, want: http.StatusUnsupportedMediaType, wantErr: "invalid or prohibited file type"},
 		{name: "size missing", mimeType: "application/pdf", size: 0, want: http.StatusBadRequest, wantErr: "size must be greater than 0"},
 		{name: "over the default limit", mimeType: "application/pdf", size: 32<<20 + 1, want: http.StatusBadRequest, wantErr: "file size exceeds 32MB limit"},
 		{name: "over a custom limit", opts: []ServiceOption{WithMaxUploadSize(1 << 20)}, mimeType: "application/pdf", size: 1<<20 + 1, want: http.StatusBadRequest, wantErr: "file size exceeds 1MB limit"},

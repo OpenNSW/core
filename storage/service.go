@@ -32,7 +32,7 @@ var (
 	// ErrInvalidSize is returned by Upload for a size that is not positive.
 	ErrInvalidSize = errors.New("storage: size must be greater than 0")
 	// ErrContentTypeNotAllowed is returned by Upload for a MIME type outside
-	// the list set with WithAllowedContentTypes.
+	// the list set with WithAllowedUploadTypes.
 	ErrContentTypeNotAllowed = errors.New("storage: content type not allowed")
 )
 
@@ -53,8 +53,8 @@ const defaultMaxUploadSize int64 = 32 << 20
 type Service struct {
 	Driver StorageDriver
 
-	// allowedContentTypes limits Upload to these MIME types; nil allows any.
-	allowedContentTypes map[string]struct{}
+	// allowedUploadTypes limits Upload to these MIME types; nil allows any.
+	allowedUploadTypes map[string]struct{}
 	// maxUploadSize is the largest file Upload accepts; 0 means
 	// defaultMaxUploadSize.
 	maxUploadSize int64
@@ -63,14 +63,14 @@ type Service struct {
 // ServiceOption configures a Service.
 type ServiceOption func(*Service)
 
-// WithAllowedContentTypes limits Upload to the given MIME types; any other
+// WithAllowedUploadTypes limits Upload to the given MIME types; any other
 // type is rejected with ErrContentTypeNotAllowed. Called with no types, it
 // rejects every upload. Without it, Upload accepts any type.
-func WithAllowedContentTypes(types ...string) ServiceOption {
+func WithAllowedUploadTypes(types ...string) ServiceOption {
 	return func(s *Service) {
-		s.allowedContentTypes = make(map[string]struct{}, len(types))
+		s.allowedUploadTypes = make(map[string]struct{}, len(types))
 		for _, t := range types {
-			s.allowedContentTypes[t] = struct{}{}
+			s.allowedUploadTypes[t] = struct{}{}
 		}
 	}
 }
@@ -124,8 +124,8 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 	if mime == "" {
 		mime = drivers.DefaultMime
 	}
-	if s.allowedContentTypes != nil {
-		if _, ok := s.allowedContentTypes[mime]; !ok {
+	if s.allowedUploadTypes != nil {
+		if _, ok := s.allowedUploadTypes[mime]; !ok {
 			return nil, fmt.Errorf("%w: %q", ErrContentTypeNotAllowed, mime)
 		}
 	}
