@@ -170,7 +170,11 @@ func parkAndInspect(t *testing.T, def WorkflowDefinition, vars map[string]any, n
 		parked = instance.NodeInfo[nodeID]
 	}, 100*time.Millisecond)
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{NodeID: nodeID, Action: AdminActionAbort})
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       nodeID,
+			ActivationID: parked.ActivationID,
+			Action:       AdminActionAbort,
+		})
 	}, 200*time.Millisecond)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, vars)
@@ -334,8 +338,9 @@ func TestParkCategoryOfNodeInsideParallelBranch(t *testing.T) {
 	}, time.Second)
 	env.RegisterDelayedCallback(func() {
 		require.NoError(t, env.SignalWorkflowByID(branchWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task_a",
-			Action: AdminActionAbort,
+			NodeID:       "task_a",
+			ActivationID: branchNode.ActivationID,
+			Action:       AdminActionAbort,
 		}))
 	}, 2*time.Second)
 
@@ -365,6 +370,7 @@ func TestParkCategoryIsClearedOnceResolved(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "task",
+			ActivationID:           parkedActivationID(t, env, "task"),
 			Action:                 AdminActionRetry,
 			WorkflowVariablesPatch: map[string]any{"missing_global_var": "fixed"},
 		})
@@ -507,7 +513,11 @@ func TestRetryOnParkedSignalWaitWaitsForANewSignal(t *testing.T) {
 		env.SignalWorkflow("my_test_signal", map[string]any{"incorrect_key": "value"})
 	}, time.Millisecond)
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{NodeID: "wait", Action: AdminActionRetry})
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "wait",
+			ActivationID: parkedActivationID(t, env, "wait"),
+			Action:       AdminActionRetry,
+		})
 	}, 100*time.Millisecond)
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
