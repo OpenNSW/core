@@ -192,22 +192,29 @@ cd database && go test ./...
 
 The integration tests exercise `New`, pool configuration, `HealthCheck`, and a real `SELECT 1` against PostgreSQL and MySQL. They are skipped unless their corresponding host variable is set, so normal unit-test runs remain self-contained.
 
-Start local containers:
+Start local containers in the background:
 
 ```bash
-docker run --rm --name open-nsw-postgres \
+docker run -d --rm --name open-nsw-postgres \
   -e POSTGRES_PASSWORD='p@ss:w/rd#?' \
   -e POSTGRES_DB=database_test \
   -p 5432:5432 \
   postgres:16-alpine
 
-docker run --rm --name open-nsw-mysql \
+docker run -d --rm --name open-nsw-mysql \
   -e MYSQL_ROOT_PASSWORD='p@ss:w/rd#?' \
   -e MYSQL_DATABASE=database_test \
   -e MYSQL_USER=test \
   -e MYSQL_PASSWORD='p@ss:w/rd#?' \
   -p 3306:3306 \
   mysql:8.4
+```
+
+Wait until both servers are ready:
+
+```bash
+until docker exec open-nsw-postgres pg_isready -U postgres -d database_test >/dev/null 2>&1; do sleep 1; done
+until docker exec open-nsw-mysql mysqladmin ping -h 127.0.0.1 -uroot -p'p@ss:w/rd#?' --silent >/dev/null 2>&1; do sleep 1; done
 ```
 
 Set the integration-test connection variables in another shell:
@@ -233,4 +240,8 @@ cd database
 go test -v -race ./...
 ```
 
-The CI database-module job starts equivalent PostgreSQL 16 and MySQL 8.4 services and exports the same variables before running the module tests.
+The CI database-module job starts equivalent PostgreSQL 16 and MySQL 8.4 services and exports the same variables before running the module tests. Stop the local containers when finished:
+
+```bash
+docker rm -f open-nsw-postgres open-nsw-mysql
+```
