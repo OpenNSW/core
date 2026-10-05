@@ -14,9 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// validStorageKey returns true if key matches UUID or UUID plus extension (e.g. .pdf).
+// storageKeyRx matches a UUID, optionally followed by a dot and an alphanumeric extension.
 var storageKeyRx = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\.[a-zA-Z0-9]+)?$`)
 
+// validStorageKey returns true if key matches UUID or UUID plus extension (e.g. .pdf).
 func validStorageKey(key string) bool {
 	return len(key) >= 36 && storageKeyRx.MatchString(key)
 }
