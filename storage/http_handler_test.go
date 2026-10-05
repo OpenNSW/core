@@ -8,10 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 	"time"
 
@@ -20,89 +18,6 @@ import (
 )
 
 // ... existing code ...
-
-func TestDownloadContent_LocalDriver_Success(t *testing.T) {
-	tempDir := t.TempDir()
-	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
-	service := NewService(driver)
-	handler := NewHTTPHandler(service)
-
-	ctx := context.Background()
-	key := "550e8400-e29b-41d4-a716-446655440000.pdf"
-	content := []byte("test content")
-	if err := driver.Save(ctx, key, bytes.NewReader(content), "application/pdf"); err != nil {
-		t.Fatalf("failed to save test file: %v", err)
-	}
-
-	// Generate valid signed URL using the driver
-	downloadURL, err := driver.GetDownloadURL(ctx, key)
-	if err != nil {
-		t.Fatalf("Failed to get download URL: %v", err)
-	}
-
-	parsedURL, err := url.Parse(downloadURL)
-	if err != nil {
-		t.Fatalf("Failed to parse download URL: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, parsedURL.String(), nil)
-	req.SetPathValue("key", key)
-	rec := httptest.NewRecorder()
-
-	// No auth context set — should still succeed because this endpoint is signature-secured instead of auth-secured.
-	handler.DownloadContent(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
-	}
-
-	if rec.Header().Get("Content-Type") != "application/pdf" {
-		t.Errorf("expected Content-Type application/pdf, got %s", rec.Header().Get("Content-Type"))
-	}
-	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Errorf("expected X-Content-Type-Options nosniff, got %q", got)
-	}
-	if got := rec.Header().Get("Content-Security-Policy"); got != "sandbox" {
-		t.Errorf("expected Content-Security-Policy sandbox, got %q", got)
-	}
-
-	if !bytes.Equal(rec.Body.Bytes(), content) {
-		t.Error("body does not match")
-	}
-}
-
-func TestDownloadContent_LocalDriver_SandboxesHTML(t *testing.T) {
-	tempDir := t.TempDir()
-	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
-	handler := NewHTTPHandler(NewService(driver))
-
-	ctx := context.Background()
-	key := "550e8400-e29b-41d4-a716-446655440000.html"
-	if err := driver.Save(ctx, key, bytes.NewReader([]byte("<script>alert(1)</script>")), "text/html"); err != nil {
-		t.Fatalf("failed to save test file: %v", err)
-	}
-
-	downloadURL, err := driver.GetDownloadURL(ctx, key)
-	if err != nil {
-		t.Fatalf("Failed to get download URL: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, downloadURL, nil)
-	req.SetPathValue("key", key)
-	rec := httptest.NewRecorder()
-
-	handler.DownloadContent(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Security-Policy"); got != "sandbox" {
-		t.Errorf("expected Content-Security-Policy sandbox, got %q", got)
-	}
-	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Errorf("expected X-Content-Type-Options nosniff, got %q", got)
-	}
-}
 
 // withAuthContext returns a context with the given AuthContext injected.
 func withAuthContext(ctx context.Context, ac *authn.AuthContext) context.Context {
@@ -359,55 +274,6 @@ func TestUpload_Success(t *testing.T) {
 	}
 }
 
-func TestUploadContentLocal_Success(t *testing.T) {
-	tempDir := t.TempDir()
-	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
-	service := NewService(driver)
-	handler := NewHTTPHandler(service)
-
-	key := "550e8400-e29b-41d4-a716-446655440000.pdf"
-	content := []byte("pdf content")
-
-	// Generate valid upload URL using the driver
-	contentType := "application/pdf"
-	maxSizeBytes := int64(32 << 20)
-
-	uploadURL, err := driver.GetUploadURL(context.Background(), key, contentType, maxSizeBytes)
-	if err != nil {
-		t.Fatalf("Failed to get upload URL: %v", err)
-	}
-
-	parsedURL, err := url.Parse(uploadURL)
-	if err != nil {
-		t.Fatalf("Failed to parse upload URL: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPut, parsedURL.RequestURI(), bytes.NewReader(content))
-	req.SetPathValue("key", key)
-	req.Header.Set("Content-Type", "application/pdf")
-	rec := httptest.NewRecorder()
-
-	handler.UploadContentLocal(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected status 204, got %d. Body: %s", rec.Code, rec.Body.String())
-	}
-
-	// Verify file was saved
-	reader, ct, err := driver.Get(context.Background(), key)
-	if err != nil {
-		t.Fatalf("failed to get saved file: %v", err)
-	}
-	defer reader.Close()
-	if ct != "application/pdf" {
-		t.Errorf("expected content type application/pdf, got %s", ct)
-	}
-	savedContent, _ := io.ReadAll(reader)
-	if !bytes.Equal(savedContent, content) {
-		t.Error("saved content does not match")
-	}
-}
-
 func TestDelete_Unauthorized(t *testing.T) {
 	handler := NewHTTPHandler(NewService(&MockDriver{}))
 
@@ -440,20 +306,5 @@ func TestDelete_InvalidKeyFormat(t *testing.T) {
 	}
 	if mock.DeleteCalled {
 		t.Error("Delete reached the driver with an invalid key")
-	}
-}
-
-func TestDownloadContent_NonLocalDriver_NotFound(t *testing.T) {
-	// For non-local drivers, DownloadContent should be disabled and return 404
-	handler := NewHTTPHandler(NewService(&MockDriver{}))
-
-	req := httptest.NewRequest(http.MethodGet, "/storage/550e8400-e29b-41d4-a716-446655440000.pdf/content", nil)
-	req.SetPathValue("key", "550e8400-e29b-41d4-a716-446655440000.pdf")
-	rec := httptest.NewRecorder()
-
-	handler.DownloadContent(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected status 404, got %d", rec.Code)
 	}
 }

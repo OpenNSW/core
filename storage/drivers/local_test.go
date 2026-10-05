@@ -23,7 +23,7 @@ func TestLocalFSDriver_DirectoryHashing(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	driver, err := NewLocalFSDriver(tempDir, "/uploads", "local-dev-secret", 15*time.Minute)
+	driver, err := NewLocalFSDriver(tempDir, "http://localhost:8080", "local-dev-secret", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to create driver: %v", err)
 	}
@@ -57,12 +57,12 @@ func TestLocalFSDriver_DirectoryHashing(t *testing.T) {
 		t.Errorf("expected content type application/pdf, got %s", contentType)
 	}
 
-	// Verify GetDownloadURL: should be tokenized and include /uploads
+	// Verify GetDownloadURL: should point at the content route and be tokenized
 	url, err := driver.GetDownloadURL(ctx, key)
 	if err != nil {
 		t.Errorf("GetDownloadURL failed: %v", err)
 	}
-	if !strings.Contains(url, "/uploads") || !strings.Contains(url, "token=") || !strings.Contains(url, "expiresAt=") {
+	if !strings.HasPrefix(url, "http://localhost:8080/api/v1/storage/"+key+"/content?") || !strings.Contains(url, "token=") || !strings.Contains(url, "expiresAt=") {
 		t.Errorf("unexpected URL format: %s", url)
 	}
 
@@ -84,7 +84,7 @@ func TestLocalFSDriver_RejectsPathTraversal(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	driver, err := NewLocalFSDriver(tempDir, "/uploads", "local-dev-secret", 15*time.Minute)
+	driver, err := NewLocalFSDriver(tempDir, "http://localhost:8080", "local-dev-secret", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to create driver: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestLocalFSDriver_ConcurrentWritesSameDir(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	driver, err := NewLocalFSDriver(tempDir, "/uploads", "local-dev-secret", 15*time.Minute)
+	driver, err := NewLocalFSDriver(tempDir, "http://localhost:8080", "local-dev-secret", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to create driver: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestLocalFSDriver_RejectsKeyWithNullOrSpecialChars(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	driver, err := NewLocalFSDriver(tempDir, "/uploads", "local-dev-secret", 15*time.Minute)
+	driver, err := NewLocalFSDriver(tempDir, "http://localhost:8080", "local-dev-secret", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to create driver: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestLocalFSDriver_PathTraversal(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	driver, err := NewLocalFSDriver(tempDir, "/uploads", "local-dev-secret", 15*time.Minute)
+	driver, err := NewLocalFSDriver(tempDir, "http://localhost:8080", "local-dev-secret", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("failed to create driver: %v", err)
 	}
@@ -222,7 +222,7 @@ func BenchmarkLocalFSDriver_Get(b *testing.B) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	driver, err := NewLocalFSDriver(tempDir, "/uploads", "local-dev-secret", 15*time.Minute)
+	driver, err := NewLocalFSDriver(tempDir, "http://localhost:8080", "local-dev-secret", 15*time.Minute)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestLocalFSDriver_LinkVerification(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	secret := "test-secret"
-	driver, _ := NewLocalFSDriver(tempDir, "/uploads", secret, 15*time.Minute)
+	driver, _ := NewLocalFSDriver(tempDir, "http://localhost:8080", secret, 15*time.Minute)
 	key := "test-file.pdf"
 
 	// 1. Valid Link
@@ -293,5 +293,62 @@ func TestLocalFSDriver_PresignTTL(t *testing.T) {
 	}
 	if got := defaulted.PresignTTL(); got != DefaultPresignTTL {
 		t.Errorf("PresignTTL() = %v, want %v", got, DefaultPresignTTL)
+	}
+}
+
+func TestLocalFSDriver_URLsRequirePublicURL(t *testing.T) {
+	driver, err := NewLocalFSDriver(t.TempDir(), "", "local-dev-secret", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	if _, err := driver.GetDownloadURL(context.Background(), "550e8400-e29b-41d4-a716-446655440000.pdf"); err == nil {
+		t.Error("GetDownloadURL succeeded without a PublicURL")
+	}
+	if _, err := driver.GetUploadURL(context.Background(), "550e8400-e29b-41d4-a716-446655440000.pdf", "application/pdf", 4); err == nil {
+		t.Error("GetUploadURL succeeded without a PublicURL")
+	}
+}
+
+func TestLocalFSDriver_RoutePrefix(t *testing.T) {
+	const key = "550e8400-e29b-41d4-a716-446655440000.pdf"
+	tests := []struct {
+		name        string
+		opts        []LocalOption
+		wantPattern string
+	}{
+		{name: "default", wantPattern: "/api/v1/storage/{key}/content"},
+		{name: "custom", opts: []LocalOption{WithRoutePrefix("/files")}, wantPattern: "/files/{key}/content"},
+		{name: "nested", opts: []LocalOption{WithRoutePrefix("/svc/storage/v2")}, wantPattern: "/svc/storage/v2/{key}/content"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver, err := NewLocalFSDriver(t.TempDir(), "http://localhost:8080/", "secret", 15*time.Minute, tt.opts...)
+			if err != nil {
+				t.Fatalf("NewLocalFSDriver: %v", err)
+			}
+			if got := driver.ContentPattern(); got != tt.wantPattern {
+				t.Errorf("ContentPattern() = %q, want %q", got, tt.wantPattern)
+			}
+			// The URL is built from the same pattern, and a trailing slash on
+			// PublicURL does not double up.
+			url, err := driver.GetDownloadURL(context.Background(), key)
+			if err != nil {
+				t.Fatalf("GetDownloadURL: %v", err)
+			}
+			want := "http://localhost:8080" + strings.Replace(tt.wantPattern, "{key}", key, 1) + "?"
+			if !strings.HasPrefix(url, want) {
+				t.Errorf("GetDownloadURL = %s, want prefix %s", url, want)
+			}
+		})
+	}
+}
+
+func TestLocalFSDriver_RejectsInvalidRoutePrefix(t *testing.T) {
+	for _, prefix := range []string{"", "files", "/", "/files/", "/a//b", "/a/../b", "/{key}", "/a b", "/a?b", "/a#b"} {
+		t.Run(prefix, func(t *testing.T) {
+			if _, err := NewLocalFSDriver(t.TempDir(), "http://localhost:8080", "secret", 15*time.Minute, WithRoutePrefix(prefix)); err == nil {
+				t.Errorf("NewLocalFSDriver accepted route prefix %q", prefix)
+			}
+		})
 	}
 }

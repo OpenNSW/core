@@ -6,15 +6,10 @@ package storage
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
-	"time"
 
 	"github.com/OpenNSW/core/authn"
-	"github.com/OpenNSW/core/storage/drivers"
 )
 
 var allowedContentTypes = map[string]struct{}{
@@ -105,97 +100,6 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// UploadContentLocal acts as a mock S3 bucket for local development.
-// It accepts a PUT request with the raw file body.
-func (h *HTTPHandler) UploadContentLocal(w http.ResponseWriter, r *http.Request) {
-	// This endpoint is only available when using LocalFSDriver (local development).
-	driver, ok := h.Service.Driver.(*drivers.LocalFSDriver)
-	if !ok {
-		writeJSONError(w, http.StatusNotFound, "not found")
-		return
-	}
-
-	if r.Method != http.MethodPut {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	key := r.PathValue("key")
-	if key == "" {
-		writeJSONError(w, http.StatusBadRequest, "key is required")
-		return
-	}
-	if !validStorageKey(key) {
-		writeJSONError(w, http.StatusBadRequest, "invalid key format")
-		return
-	}
-
-	// Extract security constraints from query parameters
-	token := r.URL.Query().Get("token")
-	expiresAtStr := r.URL.Query().Get("expiresAt")
-	encodedContentType := r.URL.Query().Get("contentType")
-	maxSizeBytesStr := r.URL.Query().Get("maxSizeBytes")
-
-	if token == "" || expiresAtStr == "" || encodedContentType == "" || maxSizeBytesStr == "" {
-		writeJSONError(w, http.StatusUnauthorized, "missing security token or constraints")
-		return
-	}
-
-	expiresAt, err := strconv.ParseInt(expiresAtStr, 10, 64)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid expiration format")
-		return
-	}
-
-	maxSizeBytes, err := strconv.ParseInt(maxSizeBytesStr, 10, 64)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid max size format")
-		return
-	}
-
-	// Verify HMAC token (signs all constraints)
-	if !driver.VerifyToken(key, token, expiresAt, encodedContentType, maxSizeBytes) {
-		writeJSONError(w, http.StatusUnauthorized, "invalid security token")
-		return
-	}
-
-	// 1. Enforce TTL (Time-To-Live)
-	if time.Now().Unix() > expiresAt {
-		writeJSONError(w, http.StatusForbidden, "upload link expired")
-		return
-	}
-
-	// 2. Enforce Content-Type (Strict Check)
-	var contentType string
-	contentType = r.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = drivers.DefaultMime
-	}
-	if contentType != encodedContentType {
-		writeJSONError(w, http.StatusUnsupportedMediaType, "content-type mismatch")
-		return
-	}
-
-	// 3. Prevent Local Disk Exhaustion (DoS) - enforce dynamic limit from URL
-	r.Body = http.MaxBytesReader(w, r.Body, maxSizeBytes)
-
-	// Save using the local driver
-	err = driver.Save(r.Context(), key, r.Body, contentType)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "local upload failed", "key", key, "error", err)
-		// MaxBytesReader returns a specific error when exceeded
-		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
-			writeJSONError(w, http.StatusRequestEntityTooLarge, "file size exceeds specified limit")
-		} else {
-			writeJSONError(w, http.StatusInternalServerError, "failed to save file")
-		}
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	// TODO: Uncomment when M2M AUTH Implemented.
 	//if authn.GetAuthContext(r.Context()) == nil {
@@ -227,89 +131,6 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		"expires_at":   expiresAt,
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
-	}
-}
-
-// DownloadContent streams the file body directly from the local filesystem driver.
-// It is intended only for local development when using LocalFSDriver; in non-local
-// environments (e.g. S3) callers should use GetDownloadURL and presigned URLs instead.
-func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
-	// This endpoint is only available when using LocalFSDriver (local development).
-	// It serves the same role as an S3 presigned URL — no auth required since the
-	// caller was already authenticated when obtaining the URL via GET /uploads/{key}.
-	driver, ok := h.Service.Driver.(*drivers.LocalFSDriver)
-	if !ok {
-		writeJSONError(w, http.StatusNotFound, "not found")
-		return
-	}
-
-	key := r.PathValue("key")
-	if key == "" {
-		writeJSONError(w, http.StatusBadRequest, "key is required")
-		return
-	}
-	if !validStorageKey(key) {
-		writeJSONError(w, http.StatusBadRequest, "invalid key format")
-		return
-	}
-
-	// Extract and verify security constraints
-	token := r.URL.Query().Get("token")
-	expiresAtStr := r.URL.Query().Get("expiresAt")
-	if token == "" || expiresAtStr == "" {
-		writeJSONError(w, http.StatusUnauthorized, "missing security token or expiration")
-		return
-	}
-
-	expiresAt, err := strconv.ParseInt(expiresAtStr, 10, 64)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid expiration format")
-		return
-	}
-
-	// Verify HMAC signature
-	if !driver.VerifyDownloadToken(key, token, expiresAt) {
-		writeJSONError(w, http.StatusUnauthorized, "invalid security token")
-		return
-	}
-
-	// Enforce TTL
-	if time.Now().Unix() > expiresAt {
-		writeJSONError(w, http.StatusForbidden, "download link expired")
-		return
-	}
-
-	body, contentType, err := h.Service.Download(r.Context(), key)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "download content failed", "key", key, "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "failed to get file")
-		return
-	}
-	defer func() { _ = body.Close() }()
-
-	w.Header().Set("Content-Type", contentType)
-	// The file is served from the API's own origin, so stop the browser from
-	// sniffing it into something executable, and sandbox anything rendered
-	// inline so an uploaded HTML or SVG file cannot run script here. This
-	// applies to PDFs too: Chromium still displays a PDF served with a
-	// sandbox policy (see its CSPWithSandboxDoesNotBlockPDF browser test).
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "sandbox")
-	// Check if the body can report its size (standard for files/drivers)
-	w.Header().Set("Content-Disposition", "inline")
-	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
-		if fi, err := stater.Stat(); err == nil {
-			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
-		}
-	}
-
-	// Ensure headers (including Content-Length) are written before the body so
-	// that browsers can correctly display download progress.
-	w.WriteHeader(http.StatusOK)
-
-	_, err = io.Copy(w, body)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "Failed to stream download content", "key", key, "error", err)
 	}
 }
 
