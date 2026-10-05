@@ -377,6 +377,27 @@ func TestDelete_Unauthorized(t *testing.T) {
 	}
 }
 
+func TestDelete_InvalidKeyFormat(t *testing.T) {
+	mock := &MockDriver{}
+	handler := NewHTTPHandler(NewService(mock))
+
+	req := httptest.NewRequest(http.MethodDelete, "/storage/invalid-key-format", nil)
+	req.SetPathValue("key", "invalid-key-format")
+	req = req.WithContext(withAuthContext(req.Context(), &authn.AuthContext{
+		User: &authn.UserContext{ID: "trader-1"},
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.Delete(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+	if mock.DeleteCalled {
+		t.Error("Delete reached the driver with an invalid key")
+	}
+}
+
 func TestDownloadContent_NonLocalDriver_NotFound(t *testing.T) {
 	// For non-local drivers, DownloadContent should be disabled and return 404
 	handler := NewHTTPHandler(NewService(&MockDriver{}))

@@ -11,6 +11,9 @@ import (
 	"testing"
 )
 
+// testKey is a key Upload could have created.
+const testKey = "550e8400-e29b-41d4-a716-446655440000.pdf"
+
 // MockDriver implements StorageDriver for testing
 type MockDriver struct {
 	SavedKey       string
@@ -118,7 +121,7 @@ func TestUploadService_Download(t *testing.T) {
 	service := NewService(mock)
 
 	ctx := context.Background()
-	reader, contentType, err := service.Download(ctx, "test-key")
+	reader, contentType, err := service.Download(ctx, testKey)
 	if err != nil {
 		t.Fatalf("Download failed: %v", err)
 	}
@@ -139,7 +142,7 @@ func TestUploadService_GetDownloadURL_Success(t *testing.T) {
 	service := NewService(mock)
 
 	ctx := context.Background()
-	const key = "test-key"
+	const key = testKey
 
 	url, err := service.GetDownloadURL(ctx, key)
 	if err != nil {
@@ -156,11 +159,36 @@ func TestUploadService_GetDownloadURL_Error(t *testing.T) {
 	mock := &MockDriver{GenerateURLErr: expectedErr}
 	service := NewService(mock)
 
-	_, err := service.GetDownloadURL(context.Background(), "test-key")
+	_, err := service.GetDownloadURL(context.Background(), testKey)
 	if err == nil {
 		t.Fatal("expected error from GetDownloadURL, got nil")
 	}
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("expected error %v, got %v", expectedErr, err)
+	}
+}
+
+func TestUploadService_RejectsInvalidKeys(t *testing.T) {
+	keys := []string{"", "test-key", "../etc/passwd", "550e8400-e29b-41d4-a716-446655440000/other", "550e8400-e29b-41d4-a716-446655440000.final-v2"}
+
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			mock := &MockDriver{}
+			service := NewService(mock)
+			ctx := context.Background()
+
+			if _, _, err := service.Download(ctx, key); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("Download: expected ErrInvalidKey, got %v", err)
+			}
+			if _, err := service.GetDownloadURL(ctx, key); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("GetDownloadURL: expected ErrInvalidKey, got %v", err)
+			}
+			if err := service.Delete(ctx, key); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("Delete: expected ErrInvalidKey, got %v", err)
+			}
+			if mock.DeleteCalled {
+				t.Error("Delete reached the driver with an invalid key")
+			}
+		})
 	}
 }
