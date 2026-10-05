@@ -16,6 +16,7 @@ func TestPostgresConfig_DSN_ParsesWithPgx(t *testing.T) {
 		cfg      PostgresConfig
 		wantHost string
 		wantPort uint16
+		wantTLS  bool
 	}{
 		{
 			name: "ipv4 host",
