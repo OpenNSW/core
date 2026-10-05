@@ -59,9 +59,49 @@ func TestDownloadContent_LocalDriver_Success(t *testing.T) {
 	if rec.Header().Get("Content-Type") != "application/pdf" {
 		t.Errorf("expected Content-Type application/pdf, got %s", rec.Header().Get("Content-Type"))
 	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("expected X-Content-Type-Options nosniff, got %q", got)
+	}
+	// PDFs are exempt from the sandbox so the browser's PDF viewer still loads.
+	if got := rec.Header().Get("Content-Security-Policy"); got != "" {
+		t.Errorf("expected no Content-Security-Policy for a PDF, got %q", got)
+	}
 
 	if !bytes.Equal(rec.Body.Bytes(), content) {
 		t.Error("body does not match")
+	}
+}
+
+func TestDownloadContent_LocalDriver_SandboxesHTML(t *testing.T) {
+	tempDir := t.TempDir()
+	driver, _ := drivers.NewLocalFSDriver(tempDir, "/api/v1/storage", "local-dev-secret", 15*time.Minute)
+	handler := NewHTTPHandler(NewService(driver))
+
+	ctx := context.Background()
+	key := "550e8400-e29b-41d4-a716-446655440000.html"
+	if err := driver.Save(ctx, key, bytes.NewReader([]byte("<script>alert(1)</script>")), "text/html"); err != nil {
+		t.Fatalf("failed to save test file: %v", err)
+	}
+
+	downloadURL, err := driver.GetDownloadURL(ctx, key)
+	if err != nil {
+		t.Fatalf("Failed to get download URL: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, downloadURL, nil)
+	req.SetPathValue("key", key)
+	rec := httptest.NewRecorder()
+
+	handler.DownloadContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "sandbox" {
+		t.Errorf("expected Content-Security-Policy sandbox, got %q", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("expected X-Content-Type-Options nosniff, got %q", got)
 	}
 }
 
