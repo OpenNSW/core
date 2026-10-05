@@ -55,8 +55,8 @@ The client uploads directly to the storage backend — the file never passes thr
 content, mimeType, err := svc.Download(ctx, fileKey)
 
 // Or get a presigned download URL for the client
-meta, err := svc.GetDownloadURL(ctx, fileKey)
-// meta.DownloadURL — presigned GET URL valid for a short window
+url, err := svc.GetDownloadURL(ctx, fileKey)
+// url — presigned GET URL, valid for PresignTTLSeconds
 ```
 
 ### Delete
@@ -69,11 +69,11 @@ err := svc.Delete(ctx, fileKey)
 
 ```go
 type StorageDriver interface {
-    Save(ctx context.Context, key string, r io.Reader, size int64, mimeType string) error
+    Save(ctx context.Context, key string, body io.Reader, contentType string) error
     Get(ctx context.Context, key string) (io.ReadCloser, string, error)
     Delete(ctx context.Context, key string) error
     GetDownloadURL(ctx context.Context, key string) (string, error)
-    GetUploadURL(ctx context.Context, key, mimeType string, size int64) (string, error)
+    GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error)
 }
 ```
 
@@ -85,13 +85,13 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 
 ### S3 (`Config.S3`, `drivers.S3Config`, `yaml:"s3"`)
 
-| Field                     | YAML key                  | Description                                                                                                 |
-|---------------------------|---------------------------|-------------------------------------------------------------------------------------------------------------|
-| `Endpoint`                | `endpoint`                | Optional custom endpoint URL for S3-compatible stores (e.g. MinIO or LocalStack). Empty targets AWS S3      |
-| `Bucket`                  | `bucket`                  | S3 bucket name                                                                                              |
-| `Region`                  | `region`                  | AWS region (e.g. `ap-southeast-2`)                                                                          |
-| `AccessKey` / `SecretKey` | `accessKey` / `secretKey` | Static credentials; must be set together. Empty uses the default AWS credential chain                       |
-| `PublicURL`               | `publicURL`               | Optional base URL files are served from (e.g. a CDN in front of the bucket)                                 |
+| Field                     | YAML key                  | Description                                                                                                                                          |
+|---------------------------|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Endpoint`                | `endpoint`                | Optional custom endpoint URL for S3-compatible stores (e.g. MinIO or LocalStack). Empty targets AWS S3                                               |
+| `Bucket`                  | `bucket`                  | S3 bucket name                                                                                                                                       |
+| `Region`                  | `region`                  | AWS region (e.g. `ap-southeast-2`)                                                                                                                   |
+| `AccessKey` / `SecretKey` | `accessKey` / `secretKey` | Static credentials; must be set together. Empty uses the default AWS credential chain                                                                |
+| `PublicURL`               | `publicURL`               | Optional base URL files are served from (e.g. a CDN in front of the bucket). Currently unused: download URLs are always presigned against the bucket |
 
 ### Local filesystem (`Config.Local`, `drivers.LocalConfig`, `yaml:"local"`)
 
