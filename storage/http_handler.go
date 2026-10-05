@@ -10,20 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/OpenNSW/core/authn"
 	"github.com/OpenNSW/core/storage/drivers"
 )
-
-// validStorageKey returns true if key matches UUID or UUID plus extension (e.g. .pdf).
-var storageKeyRx = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\.[a-zA-Z0-9]+)?$`)
-
-func validStorageKey(key string) bool {
-	return len(key) >= 36 && storageKeyRx.MatchString(key)
-}
 
 var allowedContentTypes = map[string]struct{}{
 	"application/pdf": {},
