@@ -9,6 +9,9 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
+
+	"github.com/OpenNSW/core/storage/drivers"
 )
 
 // testKey is a key Upload could have created.
@@ -190,5 +193,48 @@ func TestUploadService_RejectsInvalidKeys(t *testing.T) {
 				t.Error("Delete reached the driver with an invalid key")
 			}
 		})
+	}
+}
+
+// ttlDriver is a MockDriver that reports how long its presigned URLs last.
+type ttlDriver struct {
+	MockDriver
+	ttl time.Duration
+}
+
+func (d *ttlDriver) PresignTTL() time.Duration { return d.ttl }
+
+func TestUploadService_DownloadURL_ExpiresAt(t *testing.T) {
+	tests := []struct {
+		name   string
+		driver StorageDriver
+		ttl    time.Duration
+	}{
+		{name: "driver reports its TTL", driver: &ttlDriver{ttl: 5 * time.Minute}, ttl: 5 * time.Minute},
+		{name: "driver without a TTL falls back to the default", driver: &MockDriver{}, ttl: drivers.DefaultPresignTTL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := time.Now()
+			url, expiresAt, err := NewService(tt.driver).DownloadURL(context.Background(), testKey)
+			if err != nil {
+				t.Fatalf("DownloadURL failed: %v", err)
+			}
+			if url != "/test/download/"+testKey {
+				t.Errorf("unexpected URL: %s", url)
+			}
+
+			want := before.Add(tt.ttl).Unix()
+			if expiresAt < want || expiresAt > want+2 {
+				t.Errorf("expiresAt = %d, want about %d (now + %v)", expiresAt, want, tt.ttl)
+			}
+		})
+	}
+}
+
+func TestUploadService_DownloadURL_InvalidKey(t *testing.T) {
+	if _, _, err := NewService(&MockDriver{}).DownloadURL(context.Background(), "test-key"); !errors.Is(err, ErrInvalidKey) {
+		t.Errorf("expected ErrInvalidKey, got %v", err)
 	}
 }

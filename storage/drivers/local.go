@@ -48,6 +48,11 @@ func NewLocalFSDriver(baseDir, publicURL, secretKey string, presignTTL time.Dura
 	return &LocalFSDriver{BaseDir: baseDir, PublicURL: publicURL, secretKey: secretKey, presignTTL: presignTTL}, nil
 }
 
+// PresignTTL reports how long the driver's presigned URLs stay valid.
+func (d *LocalFSDriver) PresignTTL() time.Duration {
+	return d.presignTTL
+}
+
 // getHashedPath generates a two-level deep path for a key to avoid flat directory issues.
 func (d *LocalFSDriver) getHashedPath(key string) string {
 	if len(key) < 4 {

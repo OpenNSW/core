@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/OpenNSW/core/storage/drivers"
 	"github.com/google/uuid"
@@ -92,6 +93,28 @@ func (s *Service) GetDownloadURL(ctx context.Context, key string) (string, error
 		return "", err
 	}
 	return s.Driver.GetDownloadURL(ctx, key)
+}
+
+// DownloadURL is GetDownloadURL plus the time, in unix seconds, at which the
+// URL stops working.
+func (s *Service) DownloadURL(ctx context.Context, key string) (string, int64, error) {
+	// Taken before the URL is signed so the reported expiry is never later
+	// than the real one.
+	expiresAt := time.Now().Add(s.presignTTL()).Unix()
+	url, err := s.GetDownloadURL(ctx, key)
+	if err != nil {
+		return "", 0, err
+	}
+	return url, expiresAt, nil
+}
+
+// presignTTL reports how long the driver's presigned URLs stay valid. A
+// driver that does not say is assumed to use drivers.DefaultPresignTTL.
+func (s *Service) presignTTL() time.Duration {
+	if d, ok := s.Driver.(interface{ PresignTTL() time.Duration }); ok {
+		return d.PresignTTL()
+	}
+	return drivers.DefaultPresignTTL
 }
 
 // Delete removes a file from storage
