@@ -19,15 +19,17 @@ type TaskRecordModel struct {
 	RenderConfig         json.RawMessage `gorm:"column:render_config;type:jsonb;serializer:json"`
 	ParentWorkflowID     string          `gorm:"column:parent_workflow_id;type:text;index"`
 	RootWorkflowID       string          `gorm:"column:root_workflow_id;type:text;not null;default:''"`
-	ParentRunID          string          `gorm:"column:parent_run_id;type:text"`
-	ParentNodeID         string          `gorm:"column:parent_node_id;type:text"`
+	ParentStepID         string          `gorm:"column:parent_step_id;type:text"`
 	TaskWorkflowID       string          `gorm:"column:task_workflow_id;type:text;index"`
-	TaskRunID            string          `gorm:"column:task_run_id;type:text"`
-	SubTaskNodeID        string          `gorm:"column:subtask_node_id;type:text"`
 	ActiveTaskTemplateID string          `gorm:"column:active_task_template_id;type:text"`
-	Data                 json.RawMessage `gorm:"column:data;type:jsonb;serializer:json"`
-	CreatedAt            time.Time       `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime"`
-	UpdatedAt            time.Time       `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime"`
+	// ActiveStepID and Seq belong to the guarded step statements in store.go. InitTask never
+	// writes them (see TaskStore.InitTask), so a full-record save cannot move them backwards.
+	// The table needs: active_step_id UUID NULL, seq BIGINT NOT NULL DEFAULT 0.
+	ActiveStepID *string         `gorm:"column:active_step_id;type:uuid"`
+	Seq          int64           `gorm:"column:seq;not null;default:0"`
+	Data         json.RawMessage `gorm:"column:data;type:jsonb;serializer:json"`
+	CreatedAt    time.Time       `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime"`
+	UpdatedAt    time.Time       `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime"`
 }
 
 func (TaskRecordModel) TableName() string {
@@ -44,19 +46,23 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		}
 	}
 
+	var activeStepID string
+	if m.ActiveStepID != nil {
+		activeStepID = *m.ActiveStepID
+	}
+
 	return store.TaskRecord{
 		TaskID:               m.TaskID,
 		TaskType:             m.TaskType,
 		State:                m.State,
 		RenderConfig:         m.RenderConfig,
 		ParentWorkflowID:     m.ParentWorkflowID,
-		ParentRunID:          m.ParentRunID,
-		ParentNodeID:         m.ParentNodeID,
+		ParentStepID:         m.ParentStepID,
 		RootWorkflowID:       m.RootWorkflowID,
 		TaskWorkflowID:       m.TaskWorkflowID,
-		TaskRunID:            m.TaskRunID,
-		SubTaskNodeID:        m.SubTaskNodeID,
 		ActiveTaskTemplateID: m.ActiveTaskTemplateID,
+		ActiveStepID:         activeStepID,
+		Seq:                  m.Seq,
 		Data:                 data,
 		CreatedAt:            m.CreatedAt,
 		UpdatedAt:            m.UpdatedAt,
@@ -70,6 +76,11 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		slog.Error("taskflow gorm store: FromDomain failed to marshal Data", "task_id", r.TaskID, "error", err)
 	}
 
+	var activeStepID *string
+	if r.ActiveStepID != "" {
+		activeStepID = &r.ActiveStepID
+	}
+
 	return TaskRecordModel{
 		TaskID:               r.TaskID,
 		TaskType:             r.TaskType,
@@ -77,12 +88,11 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		RenderConfig:         r.RenderConfig,
 		ParentWorkflowID:     r.ParentWorkflowID,
 		RootWorkflowID:       r.RootWorkflowID,
-		ParentRunID:          r.ParentRunID,
-		ParentNodeID:         r.ParentNodeID,
+		ParentStepID:         r.ParentStepID,
 		TaskWorkflowID:       r.TaskWorkflowID,
-		TaskRunID:            r.TaskRunID,
-		SubTaskNodeID:        r.SubTaskNodeID,
 		ActiveTaskTemplateID: r.ActiveTaskTemplateID,
+		ActiveStepID:         activeStepID,
+		Seq:                  r.Seq,
 		Data:                 dataBytes,
 	}
 }

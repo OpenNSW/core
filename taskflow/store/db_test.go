@@ -14,8 +14,9 @@ type testStore struct {
 	tasks map[string]TaskRecord
 }
 
-func (t *testStore) SaveTask(_ context.Context, record TaskRecord) {
+func (t *testStore) InitTask(_ context.Context, record TaskRecord) error {
 	t.tasks[record.TaskID] = record
+	return nil
 }
 
 func (t *testStore) GetTask(_ context.Context, taskID string) (TaskRecord, bool) {
@@ -43,6 +44,18 @@ func (t *testStore) GetAllTasks(_ context.Context, parentWorkflowID string) []Ta
 	return list
 }
 
+func (t *testStore) ClaimStep(context.Context, string, StepClaim) (int64, error) { return 0, nil }
+
+func (t *testStore) WriteRenderState(context.Context, string, string, int64, string, map[string]any) (int64, error) {
+	return 0, nil
+}
+
+func (t *testStore) PersistSubmission(context.Context, string, string, int64, map[string]any) (int64, error) {
+	return 0, nil
+}
+
+func (t *testStore) CompleteTask(context.Context, string, int64) (int64, error) { return 0, nil }
+
 func TestTaskStoreInterface(t *testing.T) {
 	var store TaskStore = &testStore{tasks: make(map[string]TaskRecord)}
 
@@ -51,17 +64,14 @@ func TestTaskStoreInterface(t *testing.T) {
 		TaskType:         "TEST",
 		State:            "PENDING_USER",
 		ParentWorkflowID: "parent-wf-1",
-		ParentRunID:      "parent-run-1",
-		ParentNodeID:     "node-1",
+		ParentStepID:     "step-1",
 		TaskWorkflowID:   "task-wf-1",
-		TaskRunID:        "task-run-1",
-		SubTaskNodeID:    "activity-1",
 		Data:             map[string]any{"userform": map[string]any{"name": "Alice"}},
 		CreatedAt:        time.Now(),
 	}
 
 	ctx := context.Background()
-	store.SaveTask(ctx, record)
+	store.InitTask(ctx, record)
 
 	fetched, ok := store.GetTask(ctx, "test-1")
 	if !ok {

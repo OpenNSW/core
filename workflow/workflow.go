@@ -26,6 +26,10 @@ type graphInterpreter struct {
 	outEdges map[string][]Edge
 	inEdges  map[string][]Edge
 
+	// seq is the workflow-wide step counter: it is advanced each time a TASK node starts a run, and
+	// its value identifies that run (see activationID). It only ever grows.
+	seq int64
+
 	// pendingAdminResolutions holds a Settable for each node currently parked in
 	// NodeStatusAwaitingAdmin, keyed by node template ID. See admin_recovery.go.
 	pendingAdminResolutions map[string]workflow.Settable
@@ -63,22 +67,9 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		instance.WorkflowVariables[VarRootWorkflowID] = instance.ID
 	}
 
-	// Generate UUIDs deterministically
-	var generatedUUIDs map[string]string
-	if err := workflow.SideEffect(ctx, func(_ workflow.Context) interface{} {
-		uuids := make(map[string]string)
-		for _, node := range def.Nodes {
-			uuids[node.ID] = uuid.NewString()
-		}
-		return uuids
-	}).Get(&generatedUUIDs); err != nil {
-		return nil, fmt.Errorf("failed to generate UUIDs via SideEffect: %w", err)
-	}
-
 	for _, node := range def.Nodes {
 		instance.NodeInfo[node.ID] = &NodeInfo{
-			// Create a unique ID for the node. node.ID is the ID in our template.
-			ID:             node.ID + ":" + generatedUUIDs[node.ID],
+			ID:             node.ID,
 			Type:           node.Type,
 			GatewayType:    node.GatewayType,
 			TaskTemplateID: node.TaskTemplateID,
@@ -88,22 +79,14 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		}
 	}
 
-	// Resolve Source and Target IDs in edges to the generated node instance IDs
 	for i, edge := range def.Edges {
-		sourceNodeInfo, sourceExists := instance.NodeInfo[edge.SourceID]
-		if !sourceExists {
+		if _, ok := instance.NodeInfo[edge.SourceID]; !ok {
 			return nil, fmt.Errorf("invalid edge definition: source node '%s' not found for edge '%s'", edge.SourceID, edge.ID)
 		}
-		targetNodeInfo, targetExists := instance.NodeInfo[edge.TargetID]
-		if !targetExists {
+		if _, ok := instance.NodeInfo[edge.TargetID]; !ok {
 			return nil, fmt.Errorf("invalid edge definition: target node '%s' not found for edge '%s'", edge.TargetID, edge.ID)
 		}
-		instance.Edges[i] = Edge{
-			ID:        edge.ID,
-			SourceID:  sourceNodeInfo.ID,
-			TargetID:  targetNodeInfo.ID,
-			Condition: edge.Condition,
-		}
+		instance.Edges[i] = edge
 	}
 
 	// Initialize our interpreter struct
@@ -342,7 +325,10 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	// forever. The parent aggregates each branch's result and fires the hook once when its own END
 	// node is reached.
 	if workflow.GetInfo(ctx).ParentWorkflowExecution == nil {
-		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+		// The end takes the next value of the step counter, so the host can order its completion
+		// write after every step's writes.
+		g.seq++
+		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables, g.seq).Get(ctx, nil)
 		if err != nil {
 			return withCategory(ParkCategoryTaskFailure, fmt.Errorf("unable to complete workflow: %w", err))
 		}
@@ -350,6 +336,16 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
 	return nil
+}
+
+// activationIDNamespace is the UUIDv5 namespace step IDs are derived in. It must never change: a step ID
+// has to come out the same on every replay of the workflow.
+var activationIDNamespace = uuid.MustParse("6f1c2c0e-5b58-4a55-9a4e-3d7a1f0c8b21")
+
+// newActivationID returns the ID of one run of a node. It is a pure function of its inputs, so it is
+// deterministic under Temporal replay without a side effect, and it is a valid UUID.
+func newActivationID(workflowID, nodeID string, seq int64) string {
+	return uuid.NewSHA1(activationIDNamespace, []byte(fmt.Sprintf("%s:%s:%d", workflowID, nodeID, seq))).String()
 }
 
 // mapTaskInputs builds the task's inputs from the workflow variables.
@@ -438,12 +434,21 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 
 	var result map[string]any
 
+	// Each run of a TASK node gets its own step ID and the next value of the workflow's counter, so
+	// a node revisited by a loop, or re-run by an admin retry, is a new step. Anything addressed to
+	// an earlier run of the node no longer matches a pending Activity and is rejected.
+	g.seq++
+	activationID := newActivationID(g.instance.ID, node.ID, g.seq)
+	nodeInfo.ActivationID = activationID
+	nodeInfo.Seq = g.seq
+
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ActivityID:          nodeInfo.ID,
+		ActivityID:          activationID,
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
 
-	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID()).Get(ctx, &result)
+	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID(),
+		ActivationRef{NodeID: node.ID, Seq: g.seq}).Get(ctx, &result)
 	if err != nil {
 		return withCategory(ParkCategoryTaskFailure, err)
 	}

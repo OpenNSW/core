@@ -15,7 +15,7 @@ import (
 	"go.temporal.io/sdk/mocks"
 )
 
-// TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace guards against TaskDone completing the
+// TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace guards against CompleteActivation completing the
 // activity in a namespace other than the one the manager was configured with.
 func TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace(t *testing.T) {
 	mockClient := &mocks.Client{}
@@ -30,7 +30,7 @@ func TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace(t *testing.T) {
 	m := NewTemporalManager(lazyClient, "staging", "some-queue", nil, nil).(*temporalManagerImpl)
 	m.temporalClient = mockClient
 
-	require.NoError(t, m.TaskDone(context.Background(), "wf-1", "run-1", "node-1", output))
+	require.NoError(t, m.CompleteActivation(context.Background(), "wf-1", "run-1", "node-1", output))
 	mockClient.AssertExpectations(t)
 }
 

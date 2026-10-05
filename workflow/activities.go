@@ -17,13 +17,13 @@ type Activities struct {
 	// ExecuteTaskActivityHandler is invoked when the workflow engine encounters a task node.
 	// - For synchronous execution, it should return a nil error with a map containing the results.
 	// - For asynchronous execution, it should return a nil map and an ErrResultPending error,
-	//   which pauses the workflow activity until an external handler triggers TaskDone.
+	//   which pauses the workflow activity until an external handler triggers CompleteActivation.
 	ExecuteTaskActivityHandler func(TaskPayload) (map[string]any, error)
 
 	// WorkflowCompletedActivityHandler is invoked when the overall workflow execution succeeds and reaches
 	// an End node. It receives the workflow ID and the final accumulated workflow variables, allowing the
 	// host application to run any necessary completion triggers, notify listeners, or persist final state.
-	WorkflowCompletedActivityHandler func(string, map[string]any) error
+	WorkflowCompletedActivityHandler func(WorkflowCompletion) error
 
 	// FetchWorkflowDefinitionHandler is invoked to dynamically retrieve the workflow definition structure
 	// for a given template ID during SPLIT_TASK execution.
@@ -42,13 +42,24 @@ func (a *Activities) FetchWorkflowDefinitionActivity(_ context.Context, template
 	return a.FetchWorkflowDefinitionHandler(templateID)
 }
 
+// ActivationRef is what the workflow tells ExecuteTaskActivity about the run it is starting, beyond what
+// the Activity's own info carries.
+type ActivationRef struct {
+	// NodeID is the node's ID in the workflow definition (Node.ID).
+	NodeID string `json:"node_id"`
+	// Seq is the workflow-wide step counter value for this run.
+	Seq int64 `json:"seq"`
+}
+
 // ExecuteTaskActivity pushes the task to your application and sleeps waiting for it or completes synchronously
-func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, rootWorkflowID string) (map[string]any, error) {
+func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, rootWorkflowID string, step ActivationRef) (map[string]any, error) {
 	info := activity.GetInfo(ctx)
 	payload := TaskPayload{
 		WorkflowID:     info.WorkflowExecution.ID,
 		RunID:          info.WorkflowExecution.RunID,
-		NodeID:         info.ActivityID, // this is Node.ID which was passed in workflow.WithActivityOptions(ctx, nodeActOpts)
+		NodeID:         step.NodeID,
+		ActivationID:   info.ActivityID, // the step ID the workflow passed as the ActivityID
+		Seq:            step.Seq,
 		TaskTemplateID: taskTemplateID,
 		Inputs:         inputs,
 		RootWorkflowID: rootWorkflowID,
@@ -66,8 +77,8 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 }
 
 // WorkflowCompletedActivity is a Temporal activity that executes when a workflow completes successfully.
-func (a *Activities) WorkflowCompletedActivity(_ context.Context, workflowID string, finalContext map[string]any) error {
-	return a.WorkflowCompletedActivityHandler(workflowID, finalContext)
+func (a *Activities) WorkflowCompletedActivity(_ context.Context, workflowID string, finalContext map[string]any, seq int64) error {
+	return a.WorkflowCompletedActivityHandler(WorkflowCompletion{WorkflowID: workflowID, Seq: seq, FinalVariables: finalContext})
 }
 
 // AdminParkActivity is a Temporal activity that notifies the host application whenever a node

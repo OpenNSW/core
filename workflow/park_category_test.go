@@ -224,7 +224,7 @@ func TestParkCategoryIsRecordedForEachFailureKind(t *testing.T) {
 			vars:   map[string]any{},
 			nodeID: "task",
 			setup: func(env *testsuite.TestWorkflowEnvironment) {
-				env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+				env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 					Return(map[string]any{}, nil).Once()
 			},
 			category: ParkCategoryOutputMapping,
@@ -235,7 +235,7 @@ func TestParkCategoryIsRecordedForEachFailureKind(t *testing.T) {
 			vars:   map[string]any{},
 			nodeID: "task",
 			setup: func(env *testsuite.TestWorkflowEnvironment) {
-				env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+				env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 					Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
 			},
 			category: ParkCategoryTaskFailure,
@@ -317,9 +317,9 @@ func TestParkCategoryOfNodeInsideParallelBranch(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
 	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
@@ -358,9 +358,9 @@ func TestParkCategoryIsClearedOnceResolved(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -394,9 +394,9 @@ func TestNodeInfoMappingsAreOnlySetWhileParked(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_INPUTS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_INPUTS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{"global_user_email": "user@example.com"})
 	require.True(t, env.IsWorkflowCompleted())
@@ -419,7 +419,7 @@ func TestNodeInfoCarriesMappingsForParkedTask(t *testing.T) {
 
 	def = mustParseDefinition(t, missingRequiredOutputWorkflowJSON)
 	parked = parkAndInspect(t, def, map[string]any{}, "task", func(env *testsuite.TestWorkflowEnvironment) {
-		env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+		env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 			Return(map[string]any{}, nil).Once()
 	})
 
@@ -432,7 +432,7 @@ func TestNodeInfoCarriesMappingsForParkedTask(t *testing.T) {
 func TestNilActivityResultWithRequiredMappingParks(t *testing.T) {
 	def := mustParseDefinition(t, missingRequiredOutputWorkflowJSON)
 	parked := parkAndInspect(t, def, map[string]any{}, "task", func(env *testsuite.TestWorkflowEnvironment) {
-		env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+		env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil, nil).Once()
 	})
 
@@ -500,7 +500,7 @@ func TestRetryOnParkedSignalWaitWaitsForANewSignal(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	var afterRetry *NodeInfo
 	env.RegisterDelayedCallback(func() {

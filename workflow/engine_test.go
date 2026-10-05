@@ -224,28 +224,28 @@ func TestCustomsExportLCLFlow(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"consignment_type": "LCL"}, nil).Once()
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PAY_DUTIES", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PAY_DUTIES", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CREATE_LCL_CDN", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CREATE_LCL_CDN", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
 	// CREATE_FCL_CDN should NEVER be called since the LCL path was evaluated.
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "CREATE_FCL_CDN", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "CREATE_FCL_CDN", mock.Anything, mock.Anything, mock.Anything)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "ACK_CDNS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "ACK_CDNS", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CREATE_BOAT_NOTE", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CREATE_BOAT_NOTE", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "APPROVE_BOAT_NOTE", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "APPROVE_BOAT_NOTE", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
@@ -278,17 +278,17 @@ func TestParallelJoinFlow(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
 	// TASK_C must only be called ONCE to prove join synchronization works
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyMap, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
@@ -329,9 +329,9 @@ func TestTaskNodeAppliesInputMapping(t *testing.T) {
 		}
 		value, exists := inputs["local_email"]
 		return exists && value == "user@example.com"
-	}), mock.Anything).Return(map[string]any{}, nil).Once()
+	}), mock.Anything, mock.Anything).Return(map[string]any{}, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
@@ -361,9 +361,9 @@ func TestTaskNodeWithEmptyInputMappingPassesNoInputs(t *testing.T) {
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_EMPTY_INPUTS", mock.MatchedBy(func(inputs map[string]any) bool {
 		return len(inputs) == 0
-	}), mock.Anything).Return(map[string]any{}, nil).Once()
+	}), mock.Anything, mock.Anything).Return(map[string]any{}, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
@@ -419,7 +419,7 @@ func TestNodeOutputFlowsIntoSubsetInputMapping(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "NODE1_TASK", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "NODE1_TASK", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"task_email": "user@example.com",
 			"task_phone": "+123456789",
@@ -431,9 +431,9 @@ func TestNodeOutputFlowsIntoSubsetInputMapping(t *testing.T) {
 		}
 		value, exists := inputs["local_email"]
 		return exists && value == "user@example.com"
-	}), mock.Anything).Return(map[string]any{}, nil).Once()
+	}), mock.Anything, mock.Anything).Return(map[string]any{}, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
@@ -473,9 +473,9 @@ func TestTaskNodeSkipsOptionalInputWhenMissing(t *testing.T) {
 		}
 		value, exists := inputs["local_email"]
 		return exists && value == "user@example.com"
-	}), mock.Anything).Return(map[string]any{}, nil).Once()
+	}), mock.Anything, mock.Anything).Return(map[string]any{}, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
@@ -510,9 +510,9 @@ func TestTaskNodeAppliesOptionalInputWhenPresent(t *testing.T) {
 		email, emailOk := inputs["local_email"]
 		phone, phoneOk := inputs["local_phone"]
 		return emailOk && email == "user@example.com" && phoneOk && phone == "+123456789"
-	}), mock.Anything).Return(map[string]any{}, nil).Once()
+	}), mock.Anything, mock.Anything).Return(map[string]any{}, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, initialWorkflowVariables)
@@ -535,10 +535,10 @@ func TestTaskNodeSkipsOptionalOutputWhenMissing(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_OUTPUTS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_OPTIONAL_OUTPUTS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"task_email": "user@example.com"}, nil).Once()
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
@@ -569,7 +569,7 @@ func TestTaskNodeFailsWhenRequiredOutputMissing(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
 	// The output mapping error parks the node for admin intervention. Abort it so the workflow fails.
@@ -602,14 +602,14 @@ func TestEdgesAreReturnedInWorkflowInstance(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Critical: ensure condition variable exists
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUBMIT_CUSDEC", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"consignment_type": "LCL"}, nil)
 
 	// fallback
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
@@ -648,10 +648,10 @@ func TestEdgesReferenceValidNodeInstanceIDs(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil)
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
@@ -736,7 +736,7 @@ func TestEmitSignalStandaloneWarns(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// No _parent_workflow_id set, so the EMIT should warn and proceed without failing.
 	initialVars := map[string]any{}
@@ -849,7 +849,7 @@ func TestEmitSignalAuditTrailOnFailure(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Mock SignalExternalWorkflow to fail for non-existent-parent
 	env.OnSignalExternalWorkflow(
@@ -949,11 +949,11 @@ func TestTimerNodeLoopsUntilDelivered(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Not delivered twice, then delivered on the third poll.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"delivered": false}, nil).Twice()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"delivered": true}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	start := env.Now()
@@ -990,9 +990,9 @@ func TestTimerNodeStopsAtAttemptCap(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	// Never delivered: the cap must stop the loop at exactly 3 polls.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "POLL_STATUS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"delivered": false}, nil).Times(3)
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
@@ -1142,7 +1142,7 @@ func TestTimerNodeDefaultsCounterKeyToNodeID(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	start := env.Now()
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
