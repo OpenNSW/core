@@ -150,8 +150,11 @@ func GenerateTo(ctx context.Context, w io.Writer, tmpl []byte, data any, opts ..
 //
 // It is for load-time checks — validating a template as it is stored, or a CI
 // sweep over a template directory — so a broken template fails at deploy
-// rather than when someone requests a document. It cannot detect data
-// problems; only Generate can.
+// rather than when someone requests a document.
+//
+// It does not check the arguments passed to helpers or resolvers — a date
+// that does not match its layout, say — even when they are written into the
+// template as literals. Those, like data problems, only Generate can find.
 func Validate(tmpl []byte, resolverNames ...string) error {
 	resolvers := make(Resolvers, len(resolverNames))
 	for _, n := range resolverNames {
@@ -163,8 +166,8 @@ func Validate(tmpl []byte, resolverNames ...string) error {
 	}
 	// html/template works out each action's context lazily, on the first
 	// Execute, so that is the only way to surface an escaping error. The
-	// writer refuses the first byte, so nothing beyond the escaping pass runs:
-	// an escaping error is reported before any output is attempted.
+	// escaping pass covers the whole template before execution starts, and
+	// the writer refuses the first byte, so execution stops there.
 	err = t.Execute(refuseWriter{}, nil)
 	if escapeErr, ok := asEscapeError(err); ok {
 		return fmt.Errorf("%w: %w", ErrUnsafeTemplate, escapeErr)
