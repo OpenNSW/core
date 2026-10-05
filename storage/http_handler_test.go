@@ -196,41 +196,51 @@ func TestUpload_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestUpload_ContentTypes(t *testing.T) {
+func TestUpload_PolicyErrors(t *testing.T) {
 	tests := []struct {
 		name     string
-		filename string
+		opts     []ServiceOption
 		mimeType string
+		size     int64
 		want     int
+		wantErr  string
 	}{
-		{name: "xlsx allowed", filename: "bags.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", want: http.StatusOK},
-		{name: "legacy xls prohibited (macro vector)", filename: "bags.xls", mimeType: "application/vnd.ms-excel", want: http.StatusUnsupportedMediaType},
-		{name: "executable prohibited", filename: "evil.exe", mimeType: "application/x-msdownload", want: http.StatusUnsupportedMediaType},
+		{name: "any type by default", mimeType: "application/x-msdownload", size: 1024, want: http.StatusOK},
+		{name: "type outside allowlist", opts: []ServiceOption{WithAllowedContentTypes("application/pdf")}, mimeType: "application/x-msdownload", size: 1024, want: http.StatusUnsupportedMediaType, wantErr: "invalid or prohibited file type"},
+		{name: "size missing", mimeType: "application/pdf", size: 0, want: http.StatusBadRequest, wantErr: "size must be greater than 0"},
+		{name: "over the default limit", mimeType: "application/pdf", size: 32<<20 + 1, want: http.StatusBadRequest, wantErr: "file size exceeds 32MB limit"},
+		{name: "over a custom limit", opts: []ServiceOption{WithMaxUploadSize(1 << 20)}, mimeType: "application/pdf", size: 1<<20 + 1, want: http.StatusBadRequest, wantErr: "file size exceeds 1MB limit"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHTTPHandler(NewService(&MockDriver{}))
+			handler := NewHTTPHandler(NewService(&MockDriver{}, tt.opts...))
 
-			body := map[string]any{
-				"filename":  tt.filename,
+			jsonBody, _ := json.Marshal(map[string]any{
+				"filename":  "upload.bin",
 				"mime_type": tt.mimeType,
-				"size":      1024,
-			}
-			jsonBody, _ := json.Marshal(body)
-
+				"size":      tt.size,
+			})
 			req := httptest.NewRequest(http.MethodPost, "/uploads", bytes.NewReader(jsonBody))
 			req.Header.Set("Content-Type", "application/json")
-			ctx := withAuthContext(req.Context(), &authn.AuthContext{
+			req = req.WithContext(withAuthContext(req.Context(), &authn.AuthContext{
 				User: &authn.UserContext{ID: "trader-1"},
-			})
-			req = req.WithContext(ctx)
+			}))
 			rec := httptest.NewRecorder()
 
 			handler.Upload(rec, req)
 
 			if rec.Code != tt.want {
 				t.Fatalf("expected status %d, got %d. Body: %s", tt.want, rec.Code, rec.Body.String())
+			}
+			if tt.wantErr != "" {
+				var resp map[string]string
+				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode error body: %v", err)
+				}
+				if resp["error"] != tt.wantErr {
+					t.Errorf("expected error %q, got %q", tt.wantErr, resp["error"])
+				}
 			}
 		})
 	}

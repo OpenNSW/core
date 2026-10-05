@@ -6,28 +6,12 @@ package storage
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/OpenNSW/core/authn"
 )
-
-var allowedContentTypes = map[string]struct{}{
-	"application/pdf": {},
-	"image/jpeg":      {},
-	"image/png":       {},
-	"image/gif":       {},
-	"image/webp":      {},
-	// .xlsx only: the OOXML spreadsheet format cannot carry VBA macros
-	// (macro-enabled workbooks use .xlsm), unlike legacy .xls which is a
-	// known malware vector and stays prohibited.
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
-}
-
-func isAllowedContentType(ct string) bool {
-	_, ok := allowedContentTypes[ct]
-	return ok
-}
 
 type HTTPHandler struct {
 	Service *Service
@@ -72,22 +56,20 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "mime_type is required")
 		return
 	}
-	if req.Size <= 0 {
+
+	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
+	var tooLarge *FileTooLargeError
+	switch {
+	case errors.Is(err, ErrInvalidSize):
 		writeJSONError(w, http.StatusBadRequest, "size must be greater than 0")
 		return
-	}
-
-	if req.Size > 32<<20 {
-		writeJSONError(w, http.StatusBadRequest, "file size exceeds 32MB limit")
+	case errors.As(err, &tooLarge):
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("file size exceeds %s limit", formatSize(tooLarge.Limit)))
 		return
-	}
-
-	if !isAllowedContentType(req.MimeType) {
+	case errors.Is(err, ErrContentTypeNotAllowed):
 		writeJSONError(w, http.StatusUnsupportedMediaType, "invalid or prohibited file type")
 		return
 	}
-
-	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "upload preparation failed", "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to prepare upload")

@@ -238,3 +238,90 @@ func TestUploadService_DownloadURL_InvalidKey(t *testing.T) {
 		t.Errorf("expected ErrInvalidKey, got %v", err)
 	}
 }
+
+func TestUploadService_Policy(t *testing.T) {
+	pdfOnly := []ServiceOption{WithAllowedContentTypes("application/pdf")}
+
+	tests := []struct {
+		name     string
+		opts     []ServiceOption
+		mimeType string
+		size     int64
+		wantErr  error
+	}{
+		{name: "any type by default: xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 1024},
+		{name: "any type by default: legacy xls", mimeType: "application/vnd.ms-excel", size: 1024},
+		{name: "any type by default: executable", mimeType: "application/x-msdownload", size: 1024},
+		{name: "allowlisted type accepted", opts: pdfOnly, mimeType: "application/pdf", size: 1024},
+		{name: "type outside allowlist rejected", opts: pdfOnly, mimeType: "application/x-msdownload", size: 1024, wantErr: ErrContentTypeNotAllowed},
+		{name: "missing type checked as octet-stream", opts: pdfOnly, mimeType: "", size: 1024, wantErr: ErrContentTypeNotAllowed},
+		{name: "empty allowlist rejects everything", opts: []ServiceOption{WithAllowedContentTypes()}, mimeType: "application/pdf", size: 1024, wantErr: ErrContentTypeNotAllowed},
+		{name: "zero size rejected", mimeType: "application/pdf", size: 0, wantErr: ErrInvalidSize},
+		{name: "negative size rejected", mimeType: "application/pdf", size: -1, wantErr: ErrInvalidSize},
+		{name: "size checked before type", opts: pdfOnly, mimeType: "application/x-msdownload", size: 32<<20 + 1, wantErr: &FileTooLargeError{}},
+		{name: "default limit: 32MB accepted", mimeType: "application/pdf", size: 32 << 20},
+		{name: "default limit: one byte over rejected", mimeType: "application/pdf", size: 32<<20 + 1, wantErr: &FileTooLargeError{}},
+		{name: "custom limit: one byte over rejected", opts: []ServiceOption{WithMaxUploadSize(1 << 20)}, mimeType: "application/pdf", size: 1<<20 + 1, wantErr: &FileTooLargeError{}},
+		{name: "custom limit: above the default accepted", opts: []ServiceOption{WithMaxUploadSize(64 << 20)}, mimeType: "application/pdf", size: 33 << 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(&MockDriver{}, tt.opts...).Upload(context.Background(), "upload.bin", tt.size, tt.mimeType)
+
+			switch want := tt.wantErr.(type) {
+			case nil:
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+			case *FileTooLargeError:
+				var tooLarge *FileTooLargeError
+				if !errors.As(err, &tooLarge) {
+					t.Fatalf("expected *FileTooLargeError, got %v", err)
+				}
+			default:
+				if !errors.Is(err, want) {
+					t.Fatalf("expected %v, got %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+func TestFileTooLargeError_Message(t *testing.T) {
+	tests := []struct {
+		limit int64
+		want  string
+	}{
+		{limit: 32 << 20, want: "storage: file size exceeds 32MB limit"},
+		{limit: 1000, want: "storage: file size exceeds 1000 bytes limit"},
+	}
+	for _, tt := range tests {
+		if got := (&FileTooLargeError{Limit: tt.limit}).Error(); got != tt.want {
+			t.Errorf("Error() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestWithMaxUploadSize_PanicsOnNonPositive(t *testing.T) {
+	for _, n := range []int64{0, -1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("WithMaxUploadSize(%d) did not panic", n)
+				}
+			}()
+			WithMaxUploadSize(n)
+		}()
+	}
+}
+
+func TestUploadService_StructLiteralUsesDefaults(t *testing.T) {
+	// A Service built without NewService still gets the default limit rather
+	// than rejecting every upload.
+	service := &Service{Driver: &MockDriver{}}
+
+	if _, err := service.Upload(context.Background(), "test.pdf", 1024, "application/pdf"); err != nil {
+		t.Fatalf("Upload failed: %v", err)
+	}
+}

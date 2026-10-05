@@ -28,20 +28,106 @@ func validStorageKey(key string) bool {
 	return len(key) >= 36 && storageKeyRx.MatchString(key)
 }
 
+var (
+	// ErrInvalidSize is returned by Upload for a size that is not positive.
+	ErrInvalidSize = errors.New("storage: size must be greater than 0")
+	// ErrContentTypeNotAllowed is returned by Upload for a MIME type outside
+	// the list set with WithAllowedContentTypes.
+	ErrContentTypeNotAllowed = errors.New("storage: content type not allowed")
+)
+
+// FileTooLargeError is returned by Upload for a file larger than the limit.
+type FileTooLargeError struct {
+	Limit int64
+}
+
+func (e *FileTooLargeError) Error() string {
+	return fmt.Sprintf("storage: file size exceeds %s limit", formatSize(e.Limit))
+}
+
+// defaultMaxUploadSize is the largest file Upload accepts unless
+// WithMaxUploadSize sets another limit.
+const defaultMaxUploadSize int64 = 32 << 20
+
 // Service coordinates file storage operations and manages metadata
 type Service struct {
 	Driver StorageDriver
+
+	// allowedContentTypes limits Upload to these MIME types; nil allows any.
+	allowedContentTypes map[string]struct{}
+	// maxUploadSize is the largest file Upload accepts; 0 means
+	// defaultMaxUploadSize.
+	maxUploadSize int64
 }
 
-func NewService(driver StorageDriver) *Service {
-	return &Service{Driver: driver}
+// ServiceOption configures a Service.
+type ServiceOption func(*Service)
+
+// WithAllowedContentTypes limits Upload to the given MIME types; any other
+// type is rejected with ErrContentTypeNotAllowed. Called with no types, it
+// rejects every upload. Without it, Upload accepts any type.
+func WithAllowedContentTypes(types ...string) ServiceOption {
+	return func(s *Service) {
+		s.allowedContentTypes = make(map[string]struct{}, len(types))
+		for _, t := range types {
+			s.allowedContentTypes[t] = struct{}{}
+		}
+	}
+}
+
+// WithMaxUploadSize sets the largest file, in bytes, that Upload accepts.
+// Without it the limit is 32MB. It panics if n is not positive.
+func WithMaxUploadSize(n int64) ServiceOption {
+	if n <= 0 {
+		panic(fmt.Sprintf("storage: WithMaxUploadSize: size must be positive, got %d", n))
+	}
+	return func(s *Service) {
+		s.maxUploadSize = n
+	}
+}
+
+func NewService(driver StorageDriver, opts ...ServiceOption) *Service {
+	s := &Service{Driver: driver}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *Service) uploadLimit() int64 {
+	if s.maxUploadSize == 0 {
+		return defaultMaxUploadSize
+	}
+	return s.maxUploadSize
+}
+
+// formatSize renders n in whole megabytes when it is a multiple of one, so
+// the default reads "32MB", and in bytes otherwise.
+func formatSize(n int64) string {
+	if n%(1<<20) == 0 {
+		return fmt.Sprintf("%dMB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 // Upload handles the preparation of a file upload by generating a unique key
-// and a presigned/upload URL via the storage driver.
+// and a presigned/upload URL via the storage driver. The size and type are
+// checked against the Service's limits here, because the presigned URL is
+// what binds the upload to them.
 func (s *Service) Upload(ctx context.Context, filename string, size int64, mime string) (*FileMetadata, error) {
+	if size <= 0 {
+		return nil, ErrInvalidSize
+	}
+	if limit := s.uploadLimit(); size > limit {
+		return nil, &FileTooLargeError{Limit: limit}
+	}
 	if mime == "" {
 		mime = drivers.DefaultMime
+	}
+	if s.allowedContentTypes != nil {
+		if _, ok := s.allowedContentTypes[mime]; !ok {
+			return nil, fmt.Errorf("%w: %q", ErrContentTypeNotAllowed, mime)
+		}
 	}
 	id := uuid.NewString()
 	key := id + filepath.Ext(filename)
