@@ -94,7 +94,7 @@ taskCompletionHandler(WorkflowCompletion)
 
 A node ID in a workflow definition names the *definition*. A node that a loop visits twice is two *runs*, and something addressed to the first run must not be applied to the second. So every run of a TASK node is a **step**:
 
-- The workflow keeps a counter, `seq`, that goes up by one each time a TASK node starts a run (and once more when the workflow ends). It never repeats or goes backwards.
+- The workflow keeps a counter, `seq`, that goes up by one each time any node starts a run (START, GATEWAY, TIMER and END too, not just TASK). It never repeats or goes backwards, but one TASK node's `seq` is not necessarily the previous TASK node's plus one, so compare `seq` values only for order.
 - The step ID is a UUIDv5 of `(workflow ID, node ID, seq)`. It is a pure function of those, so it is the same on every replay, and it is the ID of the Temporal Activity.
 - `TaskPayload` carries `NodeID` (the definition), `ActivationID` and `Seq`.
 
