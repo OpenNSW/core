@@ -19,15 +19,21 @@ const testKey = "550e8400-e29b-41d4-a716-446655440000.pdf"
 
 // MockDriver implements StorageDriver for testing
 type MockDriver struct {
-	SavedKey       string
-	SavedBody      []byte
-	GenerateURLErr error
-	DeleteCalled   bool
-	DeleteKey      string
+	SavedKey         string
+	SavedBody        []byte
+	SavedContentType string
+	SaveErr          error
+	GenerateURLErr   error
+	DeleteCalled     bool
+	DeleteKey        string
 }
 
 func (m *MockDriver) Save(ctx context.Context, key string, body io.Reader, contentType string) error {
+	if m.SaveErr != nil {
+		return m.SaveErr
+	}
 	m.SavedKey = key
+	m.SavedContentType = contentType
 	content, err := io.ReadAll(body)
 	if err != nil {
 		return err
@@ -98,22 +104,32 @@ func TestUploadService_KeyExtension(t *testing.T) {
 		{filename: "README", wantExt: ""},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.filename, func(t *testing.T) {
-			service := NewService(&MockDriver{})
+	// Upload and Save must create keys the same way.
+	create := map[string]func(*Service, string) (*FileMetadata, error){
+		"Upload": func(s *Service, filename string) (*FileMetadata, error) {
+			return s.Upload(context.Background(), filename, 1024, "application/pdf")
+		},
+		"Save": func(s *Service, filename string) (*FileMetadata, error) {
+			return s.Save(context.Background(), filename, "application/pdf", bytes.NewReader([]byte("data")), 4)
+		},
+	}
 
-			metadata, err := service.Upload(context.Background(), tt.filename, 1024, "application/pdf")
-			if err != nil {
-				t.Fatalf("Upload failed: %v", err)
-			}
+	for method, fn := range create {
+		for _, tt := range tests {
+			t.Run(method+"/"+tt.filename, func(t *testing.T) {
+				metadata, err := fn(NewService(&MockDriver{}), tt.filename)
+				if err != nil {
+					t.Fatalf("%s failed: %v", method, err)
+				}
 
-			if want := metadata.ID + tt.wantExt; metadata.Key != want {
-				t.Errorf("expected key %s, got %s", want, metadata.Key)
-			}
-			if !validStorageKey(metadata.Key) {
-				t.Errorf("key %s is rejected by validStorageKey", metadata.Key)
-			}
-		})
+				if want := metadata.ID + tt.wantExt; metadata.Key != want {
+					t.Errorf("expected key %s, got %s", want, metadata.Key)
+				}
+				if !validStorageKey(metadata.Key) {
+					t.Errorf("key %s is rejected by validStorageKey", metadata.Key)
+				}
+			})
+		}
 	}
 }
 
@@ -323,5 +339,88 @@ func TestUploadService_StructLiteralUsesDefaults(t *testing.T) {
 
 	if _, err := service.Upload(context.Background(), "test.pdf", 1024, "application/pdf"); err != nil {
 		t.Fatalf("Upload failed: %v", err)
+	}
+}
+
+func TestUploadService_Save(t *testing.T) {
+	mock := &MockDriver{}
+	content := []byte("<certificate/>")
+
+	metadata, err := NewService(mock).Save(context.Background(), "certificate.xml", "application/xml", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	if metadata.Name != "certificate.xml" || metadata.MimeType != "application/xml" || metadata.Size != int64(len(content)) {
+		t.Errorf("unexpected metadata: %+v", metadata)
+	}
+	if metadata.Key != metadata.ID+".xml" {
+		t.Errorf("expected key %s.xml, got %s", metadata.ID, metadata.Key)
+	}
+	if metadata.UploadURL != "" {
+		t.Errorf("expected no upload URL, got %s", metadata.UploadURL)
+	}
+	if mock.SavedKey != metadata.Key || mock.SavedContentType != "application/xml" || !bytes.Equal(mock.SavedBody, content) {
+		t.Errorf("driver got key %q, type %q, body %q", mock.SavedKey, mock.SavedContentType, mock.SavedBody)
+	}
+}
+
+func TestUploadService_Save_DefaultMime(t *testing.T) {
+	mock := &MockDriver{}
+
+	metadata, err := NewService(mock).Save(context.Background(), "blob", "", bytes.NewReader([]byte("data")), 4)
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	if metadata.MimeType != drivers.DefaultMime || mock.SavedContentType != drivers.DefaultMime {
+		t.Errorf("expected %s, got metadata %q and driver %q", drivers.DefaultMime, metadata.MimeType, mock.SavedContentType)
+	}
+}
+
+func TestUploadService_Save_IgnoresUploadLimits(t *testing.T) {
+	// The upload limits govern what clients may upload; a service decides for
+	// itself what it stores (#271).
+	mock := &MockDriver{}
+	service := NewService(mock, WithAllowedUploadTypes("application/pdf"), WithMaxUploadSize(10))
+	content := bytes.Repeat([]byte("x"), 100)
+
+	if _, err := service.Save(context.Background(), "report.xml", "text/xml", bytes.NewReader(content), int64(len(content))); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	if !bytes.Equal(mock.SavedBody, content) {
+		t.Error("driver did not receive the content")
+	}
+}
+
+func TestUploadService_Save_DriverError(t *testing.T) {
+	want := errors.New("disk full")
+
+	_, err := NewService(&MockDriver{SaveErr: want}).Save(context.Background(), "report.pdf", "application/pdf", bytes.NewReader([]byte("data")), 4)
+	if !errors.Is(err, want) {
+		t.Fatalf("expected the driver error, got %v", err)
+	}
+}
+
+func TestUploadService_Save_RoundTrip(t *testing.T) {
+	driver, err := drivers.NewLocalFSDriver(t.TempDir(), "http://localhost:8080", "secret", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	service := NewService(driver)
+	content := []byte("%PDF-1.7 generated")
+
+	metadata, err := service.Save(context.Background(), "receipt.pdf", "application/pdf", bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	body, contentType, err := service.Download(context.Background(), metadata.Key)
+	if err != nil {
+		t.Fatalf("Download failed: %v", err)
+	}
+	defer body.Close()
+	got, _ := io.ReadAll(body)
+	if !bytes.Equal(got, content) || contentType != "application/pdf" {
+		t.Errorf("Download returned %q (%s), want %q (application/pdf)", got, contentType, content)
 	}
 }

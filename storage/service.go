@@ -65,7 +65,8 @@ type ServiceOption func(*Service)
 
 // WithAllowedUploadTypes limits Upload to the given MIME types; any other
 // type is rejected with ErrContentTypeNotAllowed. Called with no types, it
-// rejects every upload. Without it, Upload accepts any type.
+// rejects every upload. Without it, Upload accepts any type. It does not
+// apply to Save.
 func WithAllowedUploadTypes(types ...string) ServiceOption {
 	return func(s *Service) {
 		s.allowedUploadTypes = make(map[string]struct{}, len(types))
@@ -76,7 +77,8 @@ func WithAllowedUploadTypes(types ...string) ServiceOption {
 }
 
 // WithMaxUploadSize sets the largest file, in bytes, that Upload accepts.
-// Without it the limit is 32MB. It panics if n is not positive.
+// Without it the limit is 32MB. It panics if n is not positive. It does not
+// apply to Save.
 func WithMaxUploadSize(n int64) ServiceOption {
 	if n <= 0 {
 		panic(fmt.Sprintf("storage: WithMaxUploadSize: size must be positive, got %d", n))
@@ -129,14 +131,7 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 			return nil, fmt.Errorf("%w: %q", ErrContentTypeNotAllowed, mime)
 		}
 	}
-	id := uuid.NewString()
-	key := id + filepath.Ext(filename)
-	// Keep the filename's extension only when the result is a key the
-	// download and delete routes accept; otherwise the file could be uploaded
-	// but never fetched or removed again.
-	if !validStorageKey(key) {
-		key = id
-	}
+	id, key := newKey(filename)
 
 	// Generate a presigned URL for the upload
 	uploadURL, err := s.Driver.GetUploadURL(ctx, key, mime, size)
@@ -154,6 +149,48 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 	}
 
 	return metadata, nil
+}
+
+// Save stores content the caller already holds under a new key and returns
+// its metadata. Unlike Upload, there is no URL for anyone to upload to, and
+// the Service's upload limits (WithAllowedUploadTypes, WithMaxUploadSize)
+// don't apply: they govern what clients may upload, and a service decides
+// for itself what it stores.
+//
+// size is recorded in the returned metadata as given; Save doesn't count or
+// check it. body is passed to the driver as is. For S3 over plain HTTP (e.g.
+// a local MinIO), pass a seekable reader such as *bytes.Reader or *os.File.
+func (s *Service) Save(ctx context.Context, filename, mime string, body io.Reader, size int64) (*FileMetadata, error) {
+	if mime == "" {
+		mime = drivers.DefaultMime
+	}
+	id, key := newKey(filename)
+
+	if err := s.Driver.Save(ctx, key, body, mime); err != nil {
+		return nil, fmt.Errorf("failed to save file: %w", err)
+	}
+
+	return &FileMetadata{
+		ID:       id,
+		Name:     filename,
+		Key:      key,
+		Size:     size,
+		MimeType: mime,
+	}, nil
+}
+
+// newKey creates the ID and storage key for a file named filename, for both
+// Upload and Save.
+func newKey(filename string) (id, key string) {
+	id = uuid.NewString()
+	key = id + filepath.Ext(filename)
+	// Keep the filename's extension only when the result is a key the
+	// download and delete routes accept; otherwise the file could be stored
+	// but never fetched or removed again.
+	if !validStorageKey(key) {
+		key = id
+	}
+	return id, key
 }
 
 // checkKey rejects a key Upload could not have created, so a caller cannot
