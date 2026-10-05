@@ -170,7 +170,7 @@ func Validate(tmpl []byte, resolverNames ...string) error {
 	// the writer refuses the first byte, so execution stops there.
 	err = t.Execute(refuseWriter{}, nil)
 	if escapeErr, ok := asEscapeError(err); ok {
-		return fmt.Errorf("%w: %w", ErrUnsafeTemplate, escapeErr)
+		return escapeFailure(escapeErr)
 	}
 	return nil
 }
@@ -234,7 +234,7 @@ func executionError(w *limitWriter, err error) error {
 		return w.err
 	}
 	if escapeErr, ok := asEscapeError(err); ok {
-		return fmt.Errorf("%w: %w", ErrUnsafeTemplate, escapeErr)
+		return escapeFailure(escapeErr)
 	}
 	if re, ok := asResolverError(err); ok {
 		return fmt.Errorf("%w: %s: %w", ErrResolver, re.name, re.err)
@@ -251,6 +251,17 @@ func asEscapeError(err error) (*template.Error, bool) {
 	var e *template.Error
 	ok := errors.As(err, &e)
 	return e, ok
+}
+
+// escapeFailure maps an error from html/template's escaping pass to its
+// sentinel. The pass is also what resolves {{ template "name" }} calls, so a
+// call to a template that was never defined surfaces here; that is a mistake
+// in the template text rather than an escaping problem.
+func escapeFailure(e *template.Error) error {
+	if e.ErrorCode == template.ErrNoSuchTemplate {
+		return fmt.Errorf("%w: %w", ErrParseTemplate, e)
+	}
+	return fmt.Errorf("%w: %w", ErrUnsafeTemplate, e)
 }
 
 // prepareData decodes JSON input and passes anything else through untouched.

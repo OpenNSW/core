@@ -231,6 +231,13 @@ func TestGenerate_Failures(t *testing.T) {
 		require.ErrorIs(t, err, htmlgen.ErrParseTemplate)
 	})
 
+	t.Run("a call to an undefined template is a parse error", func(t *testing.T) {
+		_, err := htmlgen.Generate(context.Background(), []byte(`<p>{{ template "nosuch" }}</p>`), nil)
+		require.ErrorIs(t, err, htmlgen.ErrParseTemplate)
+		require.NotErrorIs(t, err, htmlgen.ErrUnsafeTemplate)
+		assert.Contains(t, err.Error(), "no such template")
+	})
+
 	t.Run("an ambiguous context is an unsafe template", func(t *testing.T) {
 		_, err := htmlgen.Generate(context.Background(),
 			[]byte(`{{ if .x }}<a href="{{ else }}<b>{{ end }}`), map[string]any{})
@@ -289,6 +296,15 @@ func TestValidate(t *testing.T) {
 		err := htmlgen.Validate([]byte(`<p>{{ if .x }}{{ codelist .y }}{{ end }}</p>`))
 		require.ErrorIs(t, err, htmlgen.ErrParseTemplate)
 		assert.Contains(t, err.Error(), "not defined")
+	})
+
+	t.Run("reports a call to a template that was not defined", func(t *testing.T) {
+		// Like a missing function, but html/template only resolves template
+		// calls in its escaping pass, so this also covers a branch not taken.
+		err := htmlgen.Validate([]byte(`<p>{{ if .x }}{{ template "nosuch" }}{{ end }}</p>`))
+		require.ErrorIs(t, err, htmlgen.ErrParseTemplate)
+		require.NotErrorIs(t, err, htmlgen.ErrUnsafeTemplate)
+		assert.Contains(t, err.Error(), "no such template")
 	})
 
 	t.Run("accepts a call to a declared resolver", func(t *testing.T) {

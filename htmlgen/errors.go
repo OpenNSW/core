@@ -15,7 +15,8 @@ var (
 
 	// ErrParseTemplate is returned when the template text cannot be parsed. A
 	// "function not defined" message means the template calls a resolver that
-	// was not supplied.
+	// was not supplied; "no such template" means a {{ template }} call names a
+	// template that is never defined.
 	ErrParseTemplate = errors.New("htmlgen: template could not be parsed")
 
 	// ErrUnsupportedTemplate is returned when the template contains a
