@@ -35,23 +35,23 @@ type Config struct {
 
 func (c Config) Validate() error {
 	if c.JWKSURL == "" {
-		return fmt.Errorf("AUTH_JWKS_URL is required")
+		return fmt.Errorf("jwksURL is required")
 	}
-	if err := validation.HTTPURL("AUTH_JWKS_URL", c.JWKSURL); err != nil {
+	if err := validation.HTTPURL("jwksURL", c.JWKSURL); err != nil {
 		return err
 	}
 	if c.Issuer == "" {
-		return fmt.Errorf("AUTH_ISSUER is required")
+		return fmt.Errorf("issuer is required")
 	}
-	if err := validation.HTTPURL("AUTH_ISSUER", c.Issuer); err != nil {
+	if err := validation.HTTPURL("issuer", c.Issuer); err != nil {
 		return err
 	}
 	if c.Audience == "" {
-		return fmt.Errorf("AUTH_AUDIENCE is required")
+		return fmt.Errorf("audience is required")
 	}
 
 	if len(c.ClientIDs) == 0 {
-		return fmt.Errorf("AUTH_CLIENT_IDS is required")
+		return fmt.Errorf("clientIDs is required")
 	}
 
 	if err := validateRolesClaimName(c.rolesClaim()); err != nil {
