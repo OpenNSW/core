@@ -7,7 +7,7 @@ A template is the target HTML with [`html/template`](https://pkg.go.dev/html/tem
 it, so it reads like the document it produces. Every value it prints is escaped for the context it
 appears in, numbers keep their exact text, and a value html/template refuses fails the render
 instead of reaching the document. It is the HTML sibling of [`xmlgen`](../xmlgen/README.md): same
-shape, same rules for values.
+shape, same helpers, same rules for values.
 
 htmlgen does not produce PDF. Its output is an HTML document with print CSS; a browser prints it
 (or saves it as PDF), and a server-side converter can turn the same bytes into a file.
@@ -21,8 +21,8 @@ tmpl := []byte(`<!DOCTYPE html>
   <h1>Permit</h1>
   <p>Permit No: {{ .permit_number }}</p>
   <p>Applicant: {{ .application.applicant_name }}</p>
-  <p>Fee paid: {{ .application.fee_amount }}</p>
-  <p>Issued on {{ .issued_at }}</p>
+  <p>Fee paid: {{ decimal .application.fee_amount 2 }}</p>
+  <p>Issued on {{ date .issued_at "2006-01-02" "02/01/2006" }}</p>
 </body></html>`)
 
 data := []byte(`{
@@ -37,8 +37,8 @@ doc, err := htmlgen.Generate(ctx, tmpl, data)
 ```html
   <p>Permit No: PRM-2026-00555</p>
   <p>Applicant: Smith &amp; Co</p>
-  <p>Fee paid: 10000000</p>
-  <p>Issued on 2026-10-01</p>
+  <p>Fee paid: 10000000.00</p>
+  <p>Issued on 01/10/2026</p>
 ```
 
 Output is bytes, never a file. Return it to a browser to preview and print, hand it to `storage`,
@@ -67,8 +67,8 @@ objects in one document, and the template addresses them by path:
 
 Keeping data access out of the template keeps it in code the caller can authorize, test and log,
 and makes a render reproducible: the same template and data always give the same bytes. That
-includes dates: put the issue date in the data (`"issued_at": "2026-10-01"`), in the timezone the
-document should state.
+includes dates — there is no `today` helper. Put the issue date in the data (`"issued_at":
+"2026-10-01"`), in the timezone the document should state, and format it with `date`.
 
 ## Data
 
@@ -109,7 +109,7 @@ need to write `text` yourself.
 Never write `html`, `js` or `urlquery` either. The value is already escaped for where it appears,
 so a second escaper would escape it twice — `{{ .ref | js }}` in a script would put the escape
 sequences themselves into the string. Templates that call one are rejected with
-`ErrUnsupportedTemplate`.
+`ErrUnsupportedTemplate`, by `Validate` as well as `Generate`.
 
 ### Trusted values
 
@@ -135,16 +135,88 @@ Static assets such as an emblem can also be written straight into the template a
 > `template.HTML` and its siblings are a genuine hole. Use them only for values your own code
 > produced, never for a string that came from a request.
 
-## Errors
+## Helpers
+
+Always available, pure, and deterministic. They are identical to xmlgen's.
+
+| Helper | Example | Result |
+|---|---|---|
+| `part` | `{{ part .ref "/" 0 }}` on `"OFF1/A/42/2026"` | `OFF1` — past the end gives `""`, not an error |
+| `split` | `{{ range split .codes "," }}` | iterate the fields |
+| `join` | `{{ join .attachment_ids ", " }}` | `DOC-0001, DOC-0002` |
+| `date` | `{{ date .issued_at "2006-01-02" "02/01/2006" }}` on `"2026-10-01"` | `01/10/2026` — a value that does not match the input layout is an error, never a guess |
+| `decimal` | `{{ decimal .fee_amount 2 }}` on `1400` | `1400.00` — exact, see below |
+| `lookup` | `{{ lookup .grade "A" "Premium" "B" "Standard" }}` | `Premium` — an unmapped value passes through unchanged |
+| `zero` | `{{ if zero .gain }}` | true for nil, `""`, `false`, and numeric zero |
+| `coalesce` | `{{ coalesce .valid_until "Not specified" }}` | first value present |
+| `trim` | `{{ trim .name }}` | surrounding whitespace removed |
+
+`zero` exists because JSON numbers are carried as `json.Number`, which is a string underneath, so
+`{{ if .quantity }}` is true even when the quantity is `0`. Use `{{ if zero .quantity }}`.
+
+`decimal` holds the value exactly rather than as a `float64`: an integer past 2^53 keeps every
+digit, and a half rounds away from zero, applied to the digits as written. A magnitude beyond
+roughly 1200 digits is refused rather than expanded.
+
+An absent value stays absent throughout. A missing key, a JSON `null` and an empty string all render
+as nothing rather than as `0.00` or a zero date — writing a figure the data never carried would be a
+silent change of the document. A value that really is `0` still formats as `0.00`.
+
+## Resolvers
+
+Most templates need none: the document's content belongs in the data, and the helpers cover
+formatting. Supply a resolver only for a value that cannot reasonably be put in the data, such as a
+lookup against a code list:
+
+```go
+doc, err := htmlgen.Generate(ctx, tmpl, data, htmlgen.WithResolvers(htmlgen.Resolvers{
+    "codelist": func(ctx context.Context, args ...any) (any, error) {
+        return store.Describe(ctx, args[0].(string), args[1].(string))
+    },
+}))
+```
+
+```html
+<td>{{ codelist "country" .destination }}</td>
+```
+
+Each resolver is registered under its own name, so a template calling one that was not supplied
+fails when the template is **parsed** — not at execution, if and when a branch happens to reach it.
+Arguments arrive as the caller's own Go values (`string`, `json.Number`, `map[string]any`, `nil`),
+and the return value goes through the same rules as a data value — including the
+[trusted values](#trusted-values) exception, so a resolver returning `template.HTML` is printed
+unescaped. Resolvers are where content from a database or another service enters the document:
+return it as a plain `string`, never wrapped in a `template.*` type. A name that would shadow a
+template builtin, a helper, the `break` or `continue` keywords, or one of html/template's internal
+`_html_template_*` escapers is refused.
+
+> [!IMPORTANT]
+> A resolver must not have durable side effects. The template engine calls a function once per
+> *evaluated* occurrence and skips occurrences in branches it does not take, so minting a
+> document number inside `{{ if .approved }}…{{ end }}` would make the counter depend on the
+> shape of the template, and a retried render would advance it again. Mint the number before
+> calling `Generate` and put it in the data.
+
+## Validation
+
+`Validate(tmpl, resolverNames...)` checks a template without rendering it: syntax, calls to
+functions that were not declared, and html/template's escaping pass, which a plain parse does not
+run. Use it when a template is stored or loaded, and in CI over a template directory, so a broken
+template fails at deploy rather than when someone requests a document. It does not check the
+arguments passed to helpers or resolvers, even literal ones such as a date that does not match its
+layout; those, like data problems, only `Generate` can find.
 
 Every failure matches a sentinel with `errors.Is`: `ErrParseTemplate`, `ErrUnsupportedTemplate`,
 `ErrUnsafeTemplate`, `ErrInvalidData`, `ErrUnsupportedValue`, `ErrUnsafeValue`, `ErrMissingKey`,
-`ErrRender`, `ErrOutputTooLarge`.
+`ErrHelper`, `ErrResolver`, `ErrRender`, `ErrOutputTooLarge`, `ErrInvalidResolverName`,
+`ErrReservedResolverName`. A resolver's own error stays reachable, so `errors.Is(err, ErrResolver)`
+and `errors.Is(err, yourSentinel)` are both true.
 
 ## Options
 
 | Option | Effect |
 |---|---|
+| `WithResolvers(r)` | caller functions a template may call by name |
 | `WithStrictKeys()` | a referenced-but-absent key becomes an error; for tests and CI |
 | `WithMaxOutputBytes(n)` | caps the document; default 32 MiB, negative removes the cap |
 
