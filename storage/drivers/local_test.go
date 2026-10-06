@@ -277,3 +277,21 @@ func TestLocalFSDriver_LinkVerification(t *testing.T) {
 		t.Error("invalid token signature was accepted")
 	}
 }
+
+func TestLocalFSDriver_PresignTTL(t *testing.T) {
+	configured, err := NewLocalFSDriver(t.TempDir(), "/api/v1/storage", "secret", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	if got := configured.PresignTTL(); got != 5*time.Minute {
+		t.Errorf("PresignTTL() = %v, want %v", got, 5*time.Minute)
+	}
+
+	defaulted, err := NewLocalFSDriver(t.TempDir(), "/api/v1/storage", "secret", 0)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	if got := defaulted.PresignTTL(); got != DefaultPresignTTL {
+		t.Errorf("PresignTTL() = %v, want %v", got, DefaultPresignTTL)
+	}
+}

@@ -210,7 +210,7 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.Service.GetDownloadURL(r.Context(), key)
+	url, expiresAt, err := h.Service.DownloadURL(r.Context(), key)
 	if errors.Is(err, ErrInvalidKey) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
@@ -224,7 +224,7 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"download_url": url,
-		"expires_at":   time.Now().Add(drivers.DefaultPresignTTL).Unix(),
+		"expires_at":   expiresAt,
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
 	}

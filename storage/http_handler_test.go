@@ -194,6 +194,51 @@ func TestDownload_GenerateURLError(t *testing.T) {
 	}
 }
 
+func TestDownload_ExpiresAtMatchesDriverTTL(t *testing.T) {
+	localDriver, err := drivers.NewLocalFSDriver(t.TempDir(), "/api/v1/storage", "local-dev-secret", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		driver StorageDriver
+		ttl    time.Duration
+	}{
+		{name: "driver reports its TTL", driver: localDriver, ttl: 5 * time.Minute},
+		{name: "driver without a TTL falls back to the default", driver: &MockDriver{}, ttl: drivers.DefaultPresignTTL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /files/{key}", NewHTTPHandler(NewService(tt.driver)).Download)
+
+			req := httptest.NewRequest(http.MethodGet, "/files/550e8400-e29b-41d4-a716-446655440000.pdf", nil)
+			rec := httptest.NewRecorder()
+
+			before := time.Now()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d. Body: %s", rec.Code, rec.Body.String())
+			}
+
+			var resp struct {
+				ExpiresAt int64 `json:"expires_at"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			want := before.Add(tt.ttl).Unix()
+			if resp.ExpiresAt < want || resp.ExpiresAt > want+2 {
+				t.Errorf("expires_at = %d, want about %d (now + %v)", resp.ExpiresAt, want, tt.ttl)
+			}
+		})
+	}
+}
+
 func TestDownload_InvalidKeyFormat(t *testing.T) {
 	handler := NewHTTPHandler(NewService(&MockDriver{}))
 

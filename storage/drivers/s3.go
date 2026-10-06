@@ -36,6 +36,11 @@ func NewS3Driver(client *s3.Client, bucket string, publicURL string, presignTTL 
 	}
 }
 
+// PresignTTL reports how long the driver's presigned URLs stay valid.
+func (d *S3Driver) PresignTTL() time.Duration {
+	return d.presignTTL
+}
+
 func (d *S3Driver) Save(ctx context.Context, key string, content io.Reader, contentType string) error {
 	_, err := d.Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(d.Bucket),
