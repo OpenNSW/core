@@ -296,6 +296,13 @@ func (h *HTTPHandler) DownloadContent(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = body.Close() }()
 
 	w.Header().Set("Content-Type", contentType)
+	// The file is served from the API's own origin, so stop the browser from
+	// sniffing it into something executable, and sandbox anything rendered
+	// inline so an uploaded HTML or SVG file cannot run script here. This
+	// applies to PDFs too: Chromium still displays a PDF served with a
+	// sandbox policy (see its CSPWithSandboxDoesNotBlockPDF browser test).
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
 	// Check if the body can report its size (standard for files/drivers)
 	w.Header().Set("Content-Disposition", "inline")
 	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
