@@ -152,10 +152,13 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 }
 
 // Save stores content the caller already holds under a new key and returns
-// its metadata. Unlike Upload, there is no URL for anyone to upload to, and
-// the Service's upload limits (WithAllowedUploadTypes, WithMaxUploadSize)
-// don't apply: they govern what clients may upload, and a service decides
-// for itself what it stores.
+// its metadata. Persist the returned Key: Save stores only the bytes and the
+// content type, so the key is the only way to find the file again.
+//
+// Unlike Upload, there is no URL for anyone to upload to, and the Service's
+// upload limits (WithAllowedUploadTypes, WithMaxUploadSize) don't apply: they
+// govern what clients may upload, and a service decides for itself what it
+// stores.
 //
 // size is recorded in the returned metadata as given; Save doesn't count or
 // check it. body is passed to the driver as is. For S3 over plain HTTP (e.g.

@@ -419,7 +419,10 @@ func TestUploadService_Save_RoundTrip(t *testing.T) {
 		t.Fatalf("Download failed: %v", err)
 	}
 	defer body.Close()
-	got, _ := io.ReadAll(body)
+	got, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("reading the downloaded body: %v", err)
+	}
 	if !bytes.Equal(got, content) || contentType != "application/pdf" {
 		t.Errorf("Download returned %q (%s), want %q (application/pdf)", got, contentType, content)
 	}

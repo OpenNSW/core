@@ -62,7 +62,8 @@ For content your service already holds, such as a document it generated or a fil
 
 ```go
 meta, err := svc.Save(ctx, "certificate.pdf", "application/pdf", bytes.NewReader(pdf), int64(len(pdf)))
-// meta.Key — storage key, created the same way as for Upload
+// meta.Key — opaque storage key; persist this to your database. Save stores only the
+//            bytes and content type, so the key is the only way to find the file again.
 ```
 
 - There's no upload URL. The bytes go straight to the backend through the driver.
