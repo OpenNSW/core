@@ -1,11 +1,17 @@
-# notification
+# notifications
+
+`github.com/OpenNSW/core/notifications` is its own Go module. It moved from `github.com/OpenNSW/core/notification` in the root module. The package is still named `notification`, so only the import path changes; code keeps using `notification.X`. Import it with the name written out, as `goimports` writes it when a package's name differs from its path:
+
+```go
+import notification "github.com/OpenNSW/core/notifications"
+```
 
 A multi-channel notification router with a pluggable provider model. Your application registers one provider per channel type (email, SMS, etc.); the manager dispatches each `Request` to the correct provider at runtime.
 
 ## Usage
 
 ```go
-import "github.com/OpenNSW/core/notification"
+import notification "github.com/OpenNSW/core/notifications"
 
 manager, err := notification.NewManager(
     notification.Config{
