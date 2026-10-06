@@ -13,7 +13,7 @@
 //	{{- end }}
 //
 // It is the HTML sibling of xmlgen and follows the same shape: bytes in,
-// bytes out, and the same rules for values. The caller
+// bytes out, the same helpers, and the same rules for values. The caller
 // assembles everything the document needs into data before calling Generate;
 // the template only arranges and formats it.
 //
@@ -73,12 +73,22 @@ const defaultMaxOutputBytes int64 = 32 << 20 // 32 MiB
 const unsafeMarker = "ZgotmplZ"
 
 type options struct {
+	resolvers      Resolvers
 	strictKeys     bool
 	maxOutputBytes int64
 }
 
 // Option configures a render.
 type Option func(*options)
+
+// WithResolvers supplies caller functions a template may call by name. They
+// are for values that cannot be computed from the data — a lookup against a
+// code list or another service. Formatting is already covered by the built-in
+// helpers, and the document's own data belongs in data, so most templates
+// need none.
+func WithResolvers(r Resolvers) Option {
+	return func(o *options) { o.resolvers = r }
+}
 
 // WithStrictKeys makes a key the template references but the data does not
 // contain an error rather than an empty value.
@@ -114,7 +124,7 @@ func newOptions(opts []Option) options {
 // literals keep their exact text, or any value html/template can walk: a
 // map[string]any, a slice, or a struct addressed by Go field name.
 //
-// Generate is safe for concurrent use.
+// Generate is safe for concurrent use, provided any resolvers are.
 func Generate(ctx context.Context, tmpl []byte, data any, opts ...Option) ([]byte, error) {
 	return generate(ctx, tmpl, data, newOptions(opts))
 }
@@ -133,16 +143,53 @@ func GenerateTo(ctx context.Context, w io.Writer, tmpl []byte, data any, opts ..
 	return err
 }
 
+// Validate reports whether tmpl is a usable htmlgen template, without
+// rendering it. resolverNames are the names it is allowed to call beyond the
+// built-in helpers; a call to anything else is reported here, as is a
+// template html/template cannot escape safely.
+//
+// It is for load-time checks — validating a template as it is stored, or a CI
+// sweep over a template directory — so a broken template fails at deploy
+// rather than when someone requests a document.
+//
+// It does not check the arguments passed to helpers or resolvers — a date
+// that does not match its layout, say — even when they are written into the
+// template as literals. Those, like data problems, only Generate can find.
+func Validate(tmpl []byte, resolverNames ...string) error {
+	resolvers := make(Resolvers, len(resolverNames))
+	for _, n := range resolverNames {
+		resolvers[n] = func(context.Context, ...any) (any, error) { return nil, nil }
+	}
+	t, err := compile(context.Background(), tmpl, options{resolvers: resolvers})
+	if err != nil {
+		return err
+	}
+	// html/template works out each action's context lazily, on the first
+	// Execute, so that is the only way to surface an escaping error. The
+	// escaping pass covers the whole template before execution starts, and
+	// the writer refuses the first byte, so execution stops there.
+	err = t.Execute(refuseWriter{}, nil)
+	if escapeErr, ok := asEscapeError(err); ok {
+		return escapeFailure(escapeErr)
+	}
+	return nil
+}
+
 // compile parses a template and rewrites it to apply htmlgen's value rules.
-func compile(tmpl []byte, opts options) (*template.Template, error) {
-	// Funcs must precede Parse: only then does a call to a function the
-	// template names but htmlgen does not define fail at parse time rather
-	// than at execution, on whichever branch happens to reach it.
-	t := template.New("htmlgen").Funcs(helperFuncs())
+func compile(ctx context.Context, tmpl []byte, opts options) (*template.Template, error) {
+	funcs, err := buildFuncMap(ctx, opts.resolvers)
+	if err != nil {
+		return nil, err
+	}
+
+	// Funcs must precede Parse: only then does a call to a function that was
+	// never supplied fail at parse time rather than at execution, on whichever
+	// branch happens to reach it.
+	t := template.New("htmlgen").Funcs(funcs)
 	if opts.strictKeys {
 		t = t.Option("missingkey=error")
 	}
-	t, err := t.Parse(string(stripBOM(tmpl)))
+	t, err = t.Parse(string(stripBOM(tmpl)))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrParseTemplate, err)
 	}
@@ -155,7 +202,7 @@ func compile(tmpl []byte, opts options) (*template.Template, error) {
 }
 
 func generate(ctx context.Context, tmpl []byte, data any, opts options) ([]byte, error) {
-	t, err := compile(tmpl, opts)
+	t, err := compile(ctx, tmpl, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +234,10 @@ func executionError(w *limitWriter, err error) error {
 		return w.err
 	}
 	if escapeErr, ok := asEscapeError(err); ok {
-		return fmt.Errorf("%w: %w", ErrUnsafeTemplate, escapeErr)
+		return escapeFailure(escapeErr)
+	}
+	if re, ok := asResolverError(err); ok {
+		return fmt.Errorf("%w: %s: %w", ErrResolver, re.name, re.err)
 	}
 	if looksLikeMissingKey(err) {
 		return fmt.Errorf("%w: %w", ErrMissingKey, err)
@@ -201,6 +251,17 @@ func asEscapeError(err error) (*template.Error, bool) {
 	var e *template.Error
 	ok := errors.As(err, &e)
 	return e, ok
+}
+
+// escapeFailure maps an error from html/template's escaping pass to its
+// sentinel. The pass is also what resolves {{ template "name" }} calls, so a
+// call to a template that was never defined surfaces here; that is a mistake
+// in the template text rather than an escaping problem.
+func escapeFailure(e *template.Error) error {
+	if e.ErrorCode == template.ErrNoSuchTemplate {
+		return fmt.Errorf("%w: %w", ErrParseTemplate, e)
+	}
+	return fmt.Errorf("%w: %w", ErrUnsafeTemplate, e)
 }
 
 // prepareData decodes JSON input and passes anything else through untouched.
@@ -270,3 +331,11 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 	}
 	return l.w.Write(p)
 }
+
+// refuseWriter fails every write. Validate executes against it to trigger
+// html/template's escaping pass without rendering anything.
+type refuseWriter struct{}
+
+var errRefused = errors.New("htmlgen: validation does not render")
+
+func (refuseWriter) Write([]byte) (int, error) { return 0, errRefused }
