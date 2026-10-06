@@ -209,12 +209,12 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "key is required")
 		return
 	}
-	if !validStorageKey(key) {
+
+	url, err := h.Service.GetDownloadURL(r.Context(), key)
+	if errors.Is(err, ErrInvalidKey) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
 	}
-
-	url, err := h.Service.GetDownloadURL(r.Context(), key)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "Failed to generate download URL", "key", key, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to generate access")
@@ -324,12 +324,13 @@ func (h *HTTPHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "key is required")
 		return
 	}
-	if !validStorageKey(key) {
+
+	err := h.Service.Delete(r.Context(), key)
+	if errors.Is(err, ErrInvalidKey) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
 	}
-
-	if err := h.Service.Delete(r.Context(), key); err != nil {
+	if err != nil {
 		slog.ErrorContext(r.Context(), "Delete failed", "error", err, "key", key)
 		writeJSONError(w, http.StatusInternalServerError, "failed to delete file")
 		return
