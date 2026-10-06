@@ -21,7 +21,15 @@ driver, err := storage.NewStorageFromConfig(ctx, storage.Config{
 svc := storage.NewService(driver)
 ```
 
-Use `storage.TypeLocal` for development — stores files under `Config.Local.BaseDir`, served from `Config.Local.PublicURL`, with uploads signed by `Config.Local.PutSecret`.
+Use `storage.TypeLocal` for development. It stores files under `Config.Local.BaseDir` and stands in for S3's presigned URLs with URLs of its own, signed by `Config.Local.PutSecret`. They point at `{RoutePrefix}/{key}/content` on `Config.Local.PublicURL`; the prefix defaults to `/api/v1/storage`. Serve those routes with `storage.LocalContentHandler` on the server at that origin:
+
+```go
+if local, ok := driver.(*drivers.LocalFSDriver); ok {
+    storage.NewLocalContentHandler(local).RegisterRoutes(mux) // PUT and GET local.ContentPattern()
+}
+```
+
+The routes need no auth middleware. Like an S3 presigned URL, each request has to carry the token the driver signed for that key.
 
 `Config` embeds each driver's own config type (`drivers.LocalConfig`, `drivers.S3Config`) verbatim, rather than flattening every backend's settings into one struct — so each driver keeps ownership of its config shape and validation. All three carry `yaml` struct tags, so `Config` can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`, or [`configyaml.LoadAndExpand`](../configyaml/README.md) for `{{env:}}`/`{{file:}}` secret placeholders):
 
@@ -48,6 +56,21 @@ meta, err := svc.Upload(ctx, "passport.pdf", fileSize, "application/pdf")
 
 The client uploads directly to the storage backend — the file never passes through your application server.
 
+### Save (server-side)
+
+For content your service already holds, such as a document it generated or a file it fetched from another system:
+
+```go
+meta, err := svc.Save(ctx, "certificate.pdf", "application/pdf", bytes.NewReader(pdf), int64(len(pdf)))
+// meta.Key — opaque storage key; persist this to your database. Save stores only the
+//            bytes and content type, so the key is the only way to find the file again.
+```
+
+- There's no upload URL. The bytes go straight to the backend through the driver.
+- The upload limits (`WithAllowedUploadTypes`, `WithMaxUploadSize`) don't apply. They govern what clients may upload, and a service decides for itself what it stores.
+- `size` is recorded in the returned metadata as given; `Save` doesn't count or check it.
+- For S3 over plain HTTP (e.g. a local MinIO), pass a seekable reader such as `*bytes.Reader` or `*os.File`.
+
 ### Download
 
 ```go
@@ -55,8 +78,8 @@ The client uploads directly to the storage backend — the file never passes thr
 content, mimeType, err := svc.Download(ctx, fileKey)
 
 // Or get a presigned download URL for the client
-meta, err := svc.GetDownloadURL(ctx, fileKey)
-// meta.DownloadURL — presigned GET URL valid for a short window
+url, err := svc.GetDownloadURL(ctx, fileKey)
+// url — presigned GET URL, valid for PresignTTLSeconds
 ```
 
 ### Delete
@@ -65,15 +88,33 @@ meta, err := svc.GetDownloadURL(ctx, fileKey)
 err := svc.Delete(ctx, fileKey)
 ```
 
+### Upload limits
+
+By default, `Upload` accepts any MIME type and caps files at 32MB. Pass options to `NewService` to restrict the types or change the cap:
+
+```go
+svc := storage.NewService(driver,
+    storage.WithAllowedUploadTypes("application/pdf", "image/png"), // others: ErrContentTypeNotAllowed
+    storage.WithMaxUploadSize(10<<20),                              // bytes; default 32MB
+)
+```
+
+| Option                             | Default           | Effect                                                                                                        |
+|------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|
+| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload |
+| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                        |
+
+`Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400. The limits apply to `Upload` only, not to `Save`.
+
 ## Implementing a custom driver
 
 ```go
 type StorageDriver interface {
-    Save(ctx context.Context, key string, r io.Reader, size int64, mimeType string) error
+    Save(ctx context.Context, key string, body io.Reader, contentType string) error
     Get(ctx context.Context, key string) (io.ReadCloser, string, error)
     Delete(ctx context.Context, key string) error
     GetDownloadURL(ctx context.Context, key string) (string, error)
-    GetUploadURL(ctx context.Context, key, mimeType string, size int64) (string, error)
+    GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error)
 }
 ```
 
@@ -85,21 +126,22 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 
 ### S3 (`Config.S3`, `drivers.S3Config`, `yaml:"s3"`)
 
-| Field                     | YAML key                  | Description                                                                                                 |
-|---------------------------|---------------------------|-------------------------------------------------------------------------------------------------------------|
-| `Endpoint`                | `endpoint`                | Optional custom endpoint URL for S3-compatible stores (e.g. MinIO or LocalStack). Empty targets AWS S3      |
-| `Bucket`                  | `bucket`                  | S3 bucket name                                                                                              |
-| `Region`                  | `region`                  | AWS region (e.g. `ap-southeast-2`)                                                                          |
-| `AccessKey` / `SecretKey` | `accessKey` / `secretKey` | Static credentials; must be set together. Empty uses the default AWS credential chain                       |
-| `PublicURL`               | `publicURL`               | Optional base URL files are served from (e.g. a CDN in front of the bucket)                                 |
+| Field                     | YAML key                  | Description                                                                                                                                          |
+|---------------------------|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Endpoint`                | `endpoint`                | Optional custom endpoint URL for S3-compatible stores (e.g. MinIO or LocalStack). Empty targets AWS S3                                               |
+| `Bucket`                  | `bucket`                  | S3 bucket name                                                                                                                                       |
+| `Region`                  | `region`                  | AWS region (e.g. `ap-southeast-2`)                                                                                                                   |
+| `AccessKey` / `SecretKey` | `accessKey` / `secretKey` | Static credentials; must be set together. Empty uses the default AWS credential chain                                                                |
+| `PublicURL`               | `publicURL`               | Optional base URL files are served from (e.g. a CDN in front of the bucket). Currently unused: download URLs are always presigned against the bucket |
 
 ### Local filesystem (`Config.Local`, `drivers.LocalConfig`, `yaml:"local"`)
 
-| Field       | YAML key    | Description                                        |
-|-------------|-------------|----------------------------------------------------|
-| `BaseDir`   | `baseDir`   | Directory to store files under (created if absent) |
-| `PublicURL` | `publicURL` | Base URL files are served from                     |
-| `PutSecret` | `putSecret` | Signs presigned upload URLs                        |
+| Field         | YAML key      | Description                                                                                                                         |
+|---------------|---------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `BaseDir`     | `baseDir`     | Directory to store files under (created if absent)                                                                                  |
+| `PublicURL`   | `publicURL`   | Origin of the server that serves `LocalContentHandler` (e.g. `http://localhost:8080`)                                               |
+| `RoutePrefix` | `routePrefix` | Path the content routes sit under, e.g. `/files`. Optional; defaults to `/api/v1/storage`. Routes are `{RoutePrefix}/{key}/content` |
+| `PutSecret`   | `putSecret`   | Signs the driver's upload and download URLs                                                                                         |
 
 ### Upgrading from the flattened `Config`
 
@@ -118,3 +160,34 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 | `S3PublicURL`    | `S3.PublicURL`                       |
 | `S3UseSSL`       | Removed — it was never read anywhere |
 | `PresignTTL` (`time.Duration`) | `PresignTTLSeconds` (`int`, whole seconds) |
+
+### Upgrading: the local content routes have their own handler
+
+`HTTPHandler.UploadContentLocal` and `HTTPHandler.DownloadContent` are gone. `storage.LocalContentHandler` serves them instead, on the path the local driver builds its URLs from:
+
+```go
+// Before
+mux.HandleFunc("PUT /api/v1/storage/{key}/content", handler.UploadContentLocal)
+mux.HandleFunc("GET /api/v1/storage/{key}/content", handler.DownloadContent)
+
+// After
+storage.NewLocalContentHandler(localDriver).RegisterRoutes(mux)
+```
+
+The routes stay at `/api/v1/storage/{key}/content` unless you set `Local.RoutePrefix`. `GetDownloadURL` on the local driver now returns an error when `PublicURL` is empty, as `GetUploadURL` already did. Before, it returned the bare key.
+
+### Upgrading: upload content types are no longer restricted by default
+
+The HTTP handler used to accept only these upload types: PDF, JPEG, PNG, GIF, WebP and XLSX. The limits now belong to the Service, and it accepts any type by default. To keep the old behavior, pass that list to `NewService`:
+
+```go
+svc := storage.NewService(driver, storage.WithAllowedUploadTypes(
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    // .xlsx only: OOXML workbooks cannot carry VBA macros, unlike legacy .xls.
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+))
+```

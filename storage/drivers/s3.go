@@ -14,7 +14,8 @@ import (
 )
 
 // S3Driver implements StorageDriver for S3-compatible storage.
-// Save streams via PutObject (request body is capped at 32MB by the HTTP handler).
+// Save streams via PutObject with no size limit of its own; presigned uploads
+// are limited by the ContentLength signed into the URL.
 type S3Driver struct {
 	Client        *s3.Client
 	PresignClient *s3.PresignClient
@@ -34,6 +35,11 @@ func NewS3Driver(client *s3.Client, bucket string, publicURL string, presignTTL 
 		PublicURL:     publicURL,
 		presignTTL:    presignTTL,
 	}
+}
+
+// PresignTTL reports how long the driver's presigned URLs stay valid.
+func (d *S3Driver) PresignTTL() time.Duration {
+	return d.presignTTL
 }
 
 func (d *S3Driver) Save(ctx context.Context, key string, content io.Reader, contentType string) error {
