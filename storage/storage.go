@@ -10,7 +10,7 @@ import (
 
 // StorageDriver defines how we interact with the binary storage
 type StorageDriver interface {
-	// Save writes the content to the storage and returns a unique identifier (key/path)
+	// Save writes the content to the storage under key
 	Save(ctx context.Context, key string, body io.Reader, contentType string) error
 
 	// Get returns a ReadCloser to stream the file back and its content type
