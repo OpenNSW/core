@@ -5,7 +5,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,12 +12,16 @@ import (
 	notification "github.com/OpenNSW/core/notifications"
 	"github.com/OpenNSW/core/remote"
 	"github.com/OpenNSW/core/remote/auth"
-	"github.com/OpenNSW/core/secret"
 )
 
-type emailConfig struct {
-	BaseURL string           `json:"baseURL"`
-	Token   secret.SecretRef `json:"token"`
+// EmailConfig is the email provider's configuration. It carries yaml tags so
+// an application can embed it in its own config and load it with
+// configyaml.LoadAndExpand. Token is the bearer token itself: a {{env:...}}
+// or {{file:...}} placeholder is resolved by configyaml before the provider
+// sees it, so it is used as written and never resolved a second time.
+type EmailConfig struct {
+	BaseURL string `yaml:"baseURL"`
+	Token   string `yaml:"token"`
 }
 
 type emailRequest struct {
@@ -33,34 +36,21 @@ type EmailProvider struct {
 	client *remote.Client
 }
 
-// NewEmailProvider returns a new EmailProvider ready for Configure.
-func NewEmailProvider() *EmailProvider {
-	return &EmailProvider{}
+// NewEmailProvider validates cfg and returns an EmailProvider ready to send.
+func NewEmailProvider(cfg EmailConfig) (*EmailProvider, error) {
+	if cfg.BaseURL == "" {
+		return nil, errors.New("email: baseURL is required")
+	}
+	if err := validateBaseURL(cfg.BaseURL); err != nil {
+		return nil, fmt.Errorf("email: %w", err)
+	}
+	if cfg.Token == "" {
+		return nil, errors.New("email: token is required")
+	}
+	return &EmailProvider{client: remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(auth.NewBearer(cfg.Token)))}, nil
 }
 
 func (e *EmailProvider) Type() notification.ChannelType { return notification.ChannelEmail }
-
-func (e *EmailProvider) Configure(raw json.RawMessage) error {
-	var cfg emailConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return fmt.Errorf("unmarshal email config: %w", err)
-	}
-	if cfg.BaseURL == "" {
-		return errors.New("baseURL is required")
-	}
-	if err := validateBaseURL(cfg.BaseURL); err != nil {
-		return err
-	}
-	token, err := cfg.Token.Resolve()
-	if err != nil {
-		return fmt.Errorf("resolve email token: %w", err)
-	}
-	if token == "" {
-		return errors.New("token is required")
-	}
-	e.client = remote.NewClient(cfg.BaseURL, remote.WithAuthenticator(auth.NewBearer(token)))
-	return nil
-}
 
 func (e *EmailProvider) Send(ctx context.Context, req notification.Request) error {
 	if e.client == nil {

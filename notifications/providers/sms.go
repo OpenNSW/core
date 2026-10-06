@@ -5,7 +5,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,11 +13,16 @@ import (
 	"github.com/OpenNSW/core/remote"
 )
 
-type smsConfig struct {
-	BaseURL  string `json:"baseURL"`
-	SIDCode  string `json:"sidCode"`
-	UserName string `json:"userName"`
-	Password string `json:"password"`
+// SMSConfig is the SMS provider's configuration. It carries yaml tags so an
+// application can embed it in its own config and load it with
+// configyaml.LoadAndExpand. Every field is a string, so a secret that only
+// looks like a number (a password of 12345678, a SID code of 0123) decodes as
+// written.
+type SMSConfig struct {
+	BaseURL  string `yaml:"baseURL"`
+	SIDCode  string `yaml:"sidCode"`
+	UserName string `yaml:"userName"`
+	Password string `yaml:"password"`
 }
 
 // SMSRequest matches the GovSMS V1 API envelope.
@@ -33,39 +37,31 @@ type SMSRequest struct {
 
 // SMSProvider sends SMS via the GovSMS service.
 type SMSProvider struct {
-	cfg    smsConfig
+	cfg    SMSConfig
 	client *remote.Client
 }
 
-// NewSMSProvider returns an SMSProvider ready for Configure.
-func NewSMSProvider() *SMSProvider {
-	return &SMSProvider{}
+// NewSMSProvider validates cfg and returns an SMSProvider ready to send.
+func NewSMSProvider(cfg SMSConfig) (*SMSProvider, error) {
+	if cfg.BaseURL == "" {
+		return nil, errors.New("sms: baseURL is required")
+	}
+	if err := validateBaseURL(cfg.BaseURL); err != nil {
+		return nil, fmt.Errorf("sms: %w", err)
+	}
+	if cfg.SIDCode == "" {
+		return nil, errors.New("sms: sidCode is required")
+	}
+	if cfg.UserName == "" {
+		return nil, errors.New("sms: userName is required")
+	}
+	if cfg.Password == "" {
+		return nil, errors.New("sms: password is required")
+	}
+	return &SMSProvider{cfg: cfg, client: remote.NewClient(cfg.BaseURL)}, nil
 }
 
 func (s *SMSProvider) Type() notification.ChannelType { return notification.ChannelSMS }
-
-func (s *SMSProvider) Configure(raw json.RawMessage) error {
-	if err := json.Unmarshal(raw, &s.cfg); err != nil {
-		return fmt.Errorf("unmarshal sms config: %w", err)
-	}
-	if s.cfg.BaseURL == "" {
-		return errors.New("baseURL is required")
-	}
-	if err := validateBaseURL(s.cfg.BaseURL); err != nil {
-		return err
-	}
-	if s.cfg.SIDCode == "" {
-		return errors.New("sidCode is required")
-	}
-	if s.cfg.UserName == "" {
-		return errors.New("userName is required")
-	}
-	if s.cfg.Password == "" {
-		return errors.New("password is required")
-	}
-	s.client = remote.NewClient(s.cfg.BaseURL)
-	return nil
-}
 
 func (s *SMSProvider) Send(ctx context.Context, req notification.Request) error {
 	if s.client == nil {

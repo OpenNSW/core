@@ -36,16 +36,16 @@ func TestSMSIntegration(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := notification.Config{Providers: map[notification.ChannelType]map[string]any{
-		notification.ChannelSMS: {
-			"baseURL":  srv.URL,
-			"sidCode":  "TEST_SID",
-			"userName": "test_user",
-			"password": "test_pass",
-		},
-	}}
-
-	manager, err := notification.NewManager(cfg, providers.NewSMSProvider())
+	sms, err := providers.NewSMSProvider(providers.SMSConfig{
+		BaseURL:  srv.URL,
+		SIDCode:  "TEST_SID",
+		UserName: "test_user",
+		Password: "test_pass",
+	})
+	if err != nil {
+		t.Fatalf("NewSMSProvider: %v", err)
+	}
+	manager, err := notification.NewManager(sms)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
