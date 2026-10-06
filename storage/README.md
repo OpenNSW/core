@@ -75,7 +75,7 @@ err := svc.Delete(ctx, fileKey)
 
 ### Upload limits
 
-The Service doesn't apply an upload policy of its own. `Upload` accepts any MIME type and any file up to 32MB unless you pass options to `NewService`:
+By default, `Upload` accepts any MIME type and caps files at 32MB. Pass options to `NewService` to restrict the types or change the cap:
 
 ```go
 svc := storage.NewService(driver,
