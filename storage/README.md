@@ -21,7 +21,15 @@ driver, err := storage.NewStorageFromConfig(ctx, storage.Config{
 svc := storage.NewService(driver)
 ```
 
-Use `storage.TypeLocal` for development — stores files under `Config.Local.BaseDir`, served from `Config.Local.PublicURL`, with uploads signed by `Config.Local.PutSecret`.
+Use `storage.TypeLocal` for development. It stores files under `Config.Local.BaseDir` and stands in for S3's presigned URLs with URLs of its own, signed by `Config.Local.PutSecret`. They point at `{RoutePrefix}/{key}/content` on `Config.Local.PublicURL`; the prefix defaults to `/api/v1/storage`. Serve those routes with `storage.LocalContentHandler` on the server at that origin:
+
+```go
+if local, ok := driver.(*drivers.LocalFSDriver); ok {
+    storage.NewLocalContentHandler(local).RegisterRoutes(mux) // PUT and GET local.ContentPattern()
+}
+```
+
+The routes need no auth middleware. Like an S3 presigned URL, each request has to carry the token the driver signed for that key.
 
 `Config` embeds each driver's own config type (`drivers.LocalConfig`, `drivers.S3Config`) verbatim, rather than flattening every backend's settings into one struct — so each driver keeps ownership of its config shape and validation. All three carry `yaml` struct tags, so `Config` can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`, or [`configyaml.LoadAndExpand`](../configyaml/README.md) for `{{env:}}`/`{{file:}}` secret placeholders):
 
@@ -95,11 +103,12 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 
 ### Local filesystem (`Config.Local`, `drivers.LocalConfig`, `yaml:"local"`)
 
-| Field       | YAML key    | Description                                        |
-|-------------|-------------|----------------------------------------------------|
-| `BaseDir`   | `baseDir`   | Directory to store files under (created if absent) |
-| `PublicURL` | `publicURL` | Base URL files are served from                     |
-| `PutSecret` | `putSecret` | Signs presigned upload URLs                        |
+| Field         | YAML key      | Description                                                                                                                         |
+|---------------|---------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `BaseDir`     | `baseDir`     | Directory to store files under (created if absent)                                                                                  |
+| `PublicURL`   | `publicURL`   | Origin of the server that serves `LocalContentHandler` (e.g. `http://localhost:8080`)                                               |
+| `RoutePrefix` | `routePrefix` | Path the content routes sit under, e.g. `/files`. Optional; defaults to `/api/v1/storage`. Routes are `{RoutePrefix}/{key}/content` |
+| `PutSecret`   | `putSecret`   | Signs the driver's upload and download URLs                                                                                         |
 
 ### Upgrading from the flattened `Config`
 
@@ -118,3 +127,18 @@ Register your driver by passing it directly to `storage.NewService(driver)`.
 | `S3PublicURL`    | `S3.PublicURL`                       |
 | `S3UseSSL`       | Removed — it was never read anywhere |
 | `PresignTTL` (`time.Duration`) | `PresignTTLSeconds` (`int`, whole seconds) |
+
+### Upgrading: the local content routes have their own handler
+
+`HTTPHandler.UploadContentLocal` and `HTTPHandler.DownloadContent` are gone. `storage.LocalContentHandler` serves them instead, on the path the local driver builds its URLs from:
+
+```go
+// Before
+mux.HandleFunc("PUT /api/v1/storage/{key}/content", handler.UploadContentLocal)
+mux.HandleFunc("GET /api/v1/storage/{key}/content", handler.DownloadContent)
+
+// After
+storage.NewLocalContentHandler(localDriver).RegisterRoutes(mux)
+```
+
+The routes stay at `/api/v1/storage/{key}/content` unless you set `Local.RoutePrefix`. `GetDownloadURL` on the local driver now returns an error when `PublicURL` is empty, as `GetUploadURL` already did. Before, it returned the bare key.

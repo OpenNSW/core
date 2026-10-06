@@ -30,7 +30,11 @@ func NewStorageFromConfig(ctx context.Context, cfg Config) (StorageDriver, error
 	switch strings.TrimSpace(cfg.Type) {
 	case TypeLocal:
 		slog.InfoContext(ctx, "initializing local storage", "dir", cfg.Local.BaseDir)
-		return drivers.NewLocalFSDriver(cfg.Local.BaseDir, cfg.Local.PublicURL, cfg.Local.PutSecret, presignTTL)
+		var opts []drivers.LocalOption
+		if cfg.Local.RoutePrefix != "" {
+			opts = append(opts, drivers.WithRoutePrefix(cfg.Local.RoutePrefix))
+		}
+		return drivers.NewLocalFSDriver(cfg.Local.BaseDir, cfg.Local.PublicURL, cfg.Local.PutSecret, presignTTL, opts...)
 	case TypeS3:
 		slog.InfoContext(ctx, "initializing S3 storage", "endpoint", cfg.S3.Endpoint, "bucket", cfg.S3.Bucket)
 
