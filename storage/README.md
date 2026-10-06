@@ -56,6 +56,21 @@ meta, err := svc.Upload(ctx, "passport.pdf", fileSize, "application/pdf")
 
 The client uploads directly to the storage backend — the file never passes through your application server.
 
+### Save (server-side)
+
+For content your service already holds, such as a document it generated or a file it fetched from another system:
+
+```go
+meta, err := svc.Save(ctx, "certificate.pdf", "application/pdf", bytes.NewReader(pdf), int64(len(pdf)))
+// meta.Key — opaque storage key; persist this to your database. Save stores only the
+//            bytes and content type, so the key is the only way to find the file again.
+```
+
+- There's no upload URL. The bytes go straight to the backend through the driver.
+- The upload limits (`WithAllowedUploadTypes`, `WithMaxUploadSize`) don't apply. They govern what clients may upload, and a service decides for itself what it stores.
+- `size` is recorded in the returned metadata as given; `Save` doesn't count or check it.
+- For S3 over plain HTTP (e.g. a local MinIO), pass a seekable reader such as `*bytes.Reader` or `*os.File`.
+
 ### Download
 
 ```go
@@ -89,7 +104,7 @@ svc := storage.NewService(driver,
 | `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload |
 | `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                        |
 
-`Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400.
+`Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400. The limits apply to `Upload` only, not to `Save`.
 
 ## Implementing a custom driver
 
