@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/OpenNSW/core/notification"
-	"github.com/OpenNSW/core/notification/providers"
+	notification "github.com/OpenNSW/core/notifications"
+	"github.com/OpenNSW/core/notifications/providers"
 )
 
 func TestSMSIntegration(t *testing.T) {

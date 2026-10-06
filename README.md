@@ -16,30 +16,30 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 
 ## Packages
 
-| Package                                  | Purpose                                                                                                                                                                                       |
-|------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [`artifact`](artifact/README.md)         | Versioned configuration registry — load workflow definitions, form schemas, and templates by ID (includes [`artifact/adapter`](artifact/adapter/README.md), bridge adapters for domain types) |
-| [`authn`](authn/README.md)               | JWT validation, identity context injection, and HTTP middleware                                                                                                                               |
-| [`authz`](authz/README.md)               | Scope-based authorization middleware and predicates, decoupled from authn                                                                                                                     |
-| [`configyaml`](configyaml/README.md)     | Loads a YAML config file into a Go struct, resolving `{{env:NAME}}` / `{{file:/path}}` placeholders via `secret.SecretRef`                                                                    |
-| [`cors`](cors/README.md)                 | CORS HTTP middleware                                                                                                                                                                          |
-| [`database`](database/README.md)         | `database/sql` connection factory (PostgreSQL, MySQL, SQLite) with pooling and health checks                                                                                                  |
-| [`htmlgen`](htmlgen/README.md)           | Print-ready HTML document generation from a static template and structured data, with contextual escaping                                                                                     |
-| [`httputil`](httputil/README.md)         | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
-| [`json`](json/README.md)                 | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
-| [`notification`](notification/README.md) | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
-| [`pagination`](pagination/README.md)     | Standard pagination envelope and query parameter parsing                                                                                                                                      |
-| [`payment`](payment/README.md)           | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
-| [`remote`](remote/README.md)             | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
-| [`secret`](secret/README.md)             | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources                                                                                                        |
-| [`shared`](shared/README.md)             | Small, dependency-free helpers (deep copy, nested map access, config validation) used across other modules                                                                                    |
-| [`storage`](storage/README.md)           | File storage abstraction (local filesystem and AWS S3) with presigned URLs                                                                                                                    |
-| [`taskflow`](taskflow/README.md)         | Micro-interactive task orchestration — the core engine for human-in-the-loop steps                                                                                                            |
-| [`temporal`](temporal/README.md)         | Temporal client factory                                                                                                                                                                       |
-| [`trace`](trace/README.md)               | HTTP request trace propagation and context-based trace ID correlation                                                                                                                         |
-| [`uiprojector`](uiprojector/README.md)   | Zone-based, metadata-driven UI rendering from workflow state and business data                                                                                                                |
-| [`workflow`](workflow/README.md)         | JSON DSL-driven Temporal workflow graph interpreter                                                                                                                                           |
-| [`xmlgen`](xmlgen/README.md)             | XML document generation from a static template and structured data, with automatic escaping                                                                                                   |
+| Package                                    | Purpose                                                                                                                                                                                       |
+|--------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`artifact`](artifact/README.md)           | Versioned configuration registry — load workflow definitions, form schemas, and templates by ID (includes [`artifact/adapter`](artifact/adapter/README.md), bridge adapters for domain types) |
+| [`authn`](authn/README.md)                 | JWT validation, identity context injection, and HTTP middleware                                                                                                                               |
+| [`authz`](authz/README.md)                 | Scope-based authorization middleware and predicates, decoupled from authn                                                                                                                     |
+| [`configyaml`](configyaml/README.md)       | Loads a YAML config file into a Go struct, resolving `{{env:NAME}}` / `{{file:/path}}` placeholders via `secret.SecretRef`                                                                    |
+| [`cors`](cors/README.md)                   | CORS HTTP middleware                                                                                                                                                                          |
+| [`database`](database/README.md)           | `database/sql` connection factory (PostgreSQL, MySQL, SQLite) with pooling and health checks                                                                                                  |
+| [`htmlgen`](htmlgen/README.md)             | Print-ready HTML document generation from a static template and structured data, with contextual escaping                                                                                     |
+| [`httputil`](httputil/README.md)           | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
+| [`json`](json/README.md)                   | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
+| [`notifications`](notifications/README.md) | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
+| [`pagination`](pagination/README.md)       | Standard pagination envelope and query parameter parsing                                                                                                                                      |
+| [`payment`](payment/README.md)             | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
+| [`remote`](remote/README.md)               | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
+| [`secret`](secret/README.md)               | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources                                                                                                        |
+| [`shared`](shared/README.md)               | Small, dependency-free helpers (deep copy, nested map access, config validation) used across other modules                                                                                    |
+| [`storage`](storage/README.md)             | File storage abstraction (local filesystem and AWS S3) with presigned URLs                                                                                                                    |
+| [`taskflow`](taskflow/README.md)           | Micro-interactive task orchestration — the core engine for human-in-the-loop steps                                                                                                            |
+| [`temporal`](temporal/README.md)           | Temporal client factory                                                                                                                                                                       |
+| [`trace`](trace/README.md)                 | HTTP request trace propagation and context-based trace ID correlation                                                                                                                         |
+| [`uiprojector`](uiprojector/README.md)     | Zone-based, metadata-driven UI rendering from workflow state and business data                                                                                                                |
+| [`workflow`](workflow/README.md)           | JSON DSL-driven Temporal workflow graph interpreter                                                                                                                                           |
+| [`xmlgen`](xmlgen/README.md)               | XML document generation from a static template and structured data, with automatic escaping                                                                                                   |
 
 ## Requirements
 
@@ -76,7 +76,7 @@ flowchart TD
         P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · API_CALL · custom"]
     end
 
-    SS["payment · remote · notification · storage"]
+    SS["payment · remote · notifications · storage"]
     AR[("artifact registry<br>workflow defs · task templates<br>form schemas · render templates")]
 
     Portal -->|HTTP| server
