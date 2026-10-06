@@ -78,3 +78,33 @@ func TestGolden_TemplatesValidate(t *testing.T) {
 		assert.NoError(t, htmlgen.Validate(tmpl), path)
 	}
 }
+
+// TestGolden_InvalidTemplates pins the error each broken template in
+// testdata/invalid/ produces, from both Validate and Generate. Every one is a
+// mistake a template author can actually make.
+func TestGolden_InvalidTemplates(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "permit.json"))
+	require.NoError(t, err)
+
+	cases := map[string]error{
+		"syntax-error.tmpl":       htmlgen.ErrParseTemplate,
+		"unknown-function.tmpl":   htmlgen.ErrParseTemplate,
+		"branch-context.tmpl":     htmlgen.ErrUnsafeTemplate,
+		"unclosed-attribute.tmpl": htmlgen.ErrUnsafeTemplate,
+	}
+
+	matches, err := filepath.Glob(filepath.Join("testdata", "invalid", "*.tmpl"))
+	require.NoError(t, err)
+	require.Len(t, matches, len(cases), "every invalid fixture needs an expected error here")
+
+	for file, want := range cases {
+		t.Run(file, func(t *testing.T) {
+			tmpl, err := os.ReadFile(filepath.Join("testdata", "invalid", file))
+			require.NoError(t, err)
+
+			require.ErrorIs(t, htmlgen.Validate(tmpl), want, "Validate")
+			_, err = htmlgen.Generate(context.Background(), tmpl, data)
+			require.ErrorIs(t, err, want, "Generate")
+		})
+	}
+}
