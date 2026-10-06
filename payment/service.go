@@ -59,10 +59,12 @@ func verifyCaller(ctx context.Context, gateway PaymentGateway, gatewayID string,
 	return nil
 }
 
-// TaskCompleter resumes a suspended workflow step once a payment reaches a
-// terminal outcome. It is satisfied by the taskv2 TaskManager.
+// TaskCompleter resumes the suspended workflow step a payment was created for, once the
+// payment reaches a terminal outcome. token is the CallbackToken the checkout carried: it names
+// that one step, so a settlement that arrives after the task has moved on (a retried or looped
+// payment step) completes nothing. It is satisfied by core taskflow's *orchestrator.TaskManager.
 type TaskCompleter interface {
-	CompleteTaskStep(ctx context.Context, taskID string, payload map[string]any) error
+	CompleteTaskStepByToken(ctx context.Context, token string, payload map[string]any) error
 }
 
 // PaymentService defines the high-level orchestration for payments.
@@ -168,6 +170,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		ID:              uuid.NewString(),
 		ReferenceNumber: generatedRef,
 		TaskID:          taskID,
+		CallbackToken:   req.CallbackToken,
 		GatewayID:       req.GatewayID,
 		Amount:          req.Amount,
 		Currency:        req.Currency,
@@ -308,12 +311,13 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	// concurrent deliveries serialize on the record, so only the first one past
 	// PENDING updates it and earns the right to advance the workflow.
 	var (
-		advance     bool
-		advanceTask string
-		finalStatus PaymentStatus
-		refNum      string
-		amount      string
-		currency    string
+		advance      bool
+		advanceTask  string
+		advanceToken string
+		finalStatus  PaymentStatus
+		refNum       string
+		amount       string
+		currency     string
 	)
 
 	err = s.repo.RunInTransaction(ctx, func(repo PaymentRepository) error {
@@ -356,6 +360,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 		advance = true
 		advanceTask = tx.TaskID
+		advanceToken = tx.CallbackToken
 		finalStatus = tx.Status
 		refNum = tx.ReferenceNumber
 		amount = tx.Amount.String()
@@ -401,7 +406,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	// state UIs can render the reference and amount. These come from the
 	// authoritative DB transaction (captured under lock), not gwPayload, which
 	// may omit amount/currency on a FAILED notification.
-	if err := s.taskCompleter.CompleteTaskStep(ctx, advanceTask, map[string]any{
+	if err := s.taskCompleter.CompleteTaskStepByToken(ctx, advanceToken, map[string]any{
 		"payment_status":   statusStr,
 		"reference_number": refNum,
 		"amount":           amount,
