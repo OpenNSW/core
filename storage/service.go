@@ -8,10 +8,19 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 
 	"github.com/OpenNSW/core/storage/drivers"
 	"github.com/google/uuid"
 )
+
+// storageKeyRx matches a UUID, optionally followed by a dot and an alphanumeric extension.
+var storageKeyRx = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\.[a-zA-Z0-9]+)?$`)
+
+// validStorageKey returns true if key matches UUID or UUID plus extension (e.g. .pdf).
+func validStorageKey(key string) bool {
+	return len(key) >= 36 && storageKeyRx.MatchString(key)
+}
 
 // Service coordinates file storage operations and manages metadata
 type Service struct {
@@ -29,8 +38,13 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 		mime = drivers.DefaultMime
 	}
 	id := uuid.NewString()
-	ext := filepath.Ext(filename)
-	key := fmt.Sprintf("%s%s", id, ext)
+	key := id + filepath.Ext(filename)
+	// Keep the filename's extension only when the result is a key the
+	// download and delete routes accept; otherwise the file could be uploaded
+	// but never fetched or removed again.
+	if !validStorageKey(key) {
+		key = id
+	}
 
 	// Generate a presigned URL for the upload
 	uploadURL, err := s.Driver.GetUploadURL(ctx, key, mime, size)

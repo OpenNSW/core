@@ -80,6 +80,37 @@ func TestUploadService(t *testing.T) {
 	}
 }
 
+func TestUploadService_KeyExtension(t *testing.T) {
+	tests := []struct {
+		filename string
+		wantExt  string
+	}{
+		{filename: "report.pdf", wantExt: ".pdf"},
+		{filename: "archive.tar.gz", wantExt: ".gz"},
+		{filename: "report.final-v2", wantExt: ""},
+		{filename: "x.p df", wantExt: ""},
+		{filename: "README", wantExt: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			service := NewService(&MockDriver{})
+
+			metadata, err := service.Upload(context.Background(), tt.filename, 1024, "application/pdf")
+			if err != nil {
+				t.Fatalf("Upload failed: %v", err)
+			}
+
+			if want := metadata.ID + tt.wantExt; metadata.Key != want {
+				t.Errorf("expected key %s, got %s", want, metadata.Key)
+			}
+			if !validStorageKey(metadata.Key) {
+				t.Errorf("key %s is rejected by validStorageKey", metadata.Key)
+			}
+		})
+	}
+}
+
 func TestUploadService_Download(t *testing.T) {
 	mock := &MockDriver{
 		SavedBody: []byte("test content"),
