@@ -73,6 +73,24 @@ url, err := svc.GetDownloadURL(ctx, fileKey)
 err := svc.Delete(ctx, fileKey)
 ```
 
+### Upload limits
+
+By default, `Upload` accepts any MIME type and caps files at 32MB. Pass options to `NewService` to restrict the types or change the cap:
+
+```go
+svc := storage.NewService(driver,
+    storage.WithAllowedUploadTypes("application/pdf", "image/png"), // others: ErrContentTypeNotAllowed
+    storage.WithMaxUploadSize(10<<20),                              // bytes; default 32MB
+)
+```
+
+| Option                             | Default           | Effect                                                                                                        |
+|------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|
+| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload |
+| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                        |
+
+`Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400.
+
 ## Implementing a custom driver
 
 ```go
@@ -142,3 +160,19 @@ storage.NewLocalContentHandler(localDriver).RegisterRoutes(mux)
 ```
 
 The routes stay at `/api/v1/storage/{key}/content` unless you set `Local.RoutePrefix`. `GetDownloadURL` on the local driver now returns an error when `PublicURL` is empty, as `GetUploadURL` already did. Before, it returned the bare key.
+
+### Upgrading: upload content types are no longer restricted by default
+
+The HTTP handler used to accept only these upload types: PDF, JPEG, PNG, GIF, WebP and XLSX. The limits now belong to the Service, and it accepts any type by default. To keep the old behavior, pass that list to `NewService`:
+
+```go
+svc := storage.NewService(driver, storage.WithAllowedUploadTypes(
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    // .xlsx only: OOXML workbooks cannot carry VBA macros, unlike legacy .xls.
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+))
+```
