@@ -230,7 +230,7 @@ The interface (`Renderer.Render(context.Context, json.RawMessage, Facts) (json.R
 }
 ```
 
-- **`sections`** — what can be shown. `visibleWhen` decides whether a section is visible for the current state, data and claims; `handles` are the buttons it offers. A handle has a `command`, a `label`, an optional `element` owned by the section's renderer, and an optional `messages`: the feedback the consumer shows once the command has been dispatched. `messages` is passed through to the view exactly as written.
+- **`sections`** — what can be shown. `visibleWhen` decides whether a section is visible for the current state, data and claims; `handles` are the buttons it offers. A handle has a `command`, a `label`, an optional `element` owned by the section's renderer, and an optional `messages`: the feedback the consumer shows once the command has been dispatched. `messages` is passed through to the view as the same JSON value, though encoding may compact whitespace and escape `<`, `>` and `&`.
 - **`layouts`** — named orderings. Each is a permutation of **all** section keys and expresses relative order only, never visibility. States that agree on the relative order of the sections they show can share one layout.
 - **`states`** — per state, `actions` lists the commands legal in it (a section's handle is sent only if its command is listed), and `order` references the layout to render in. The reference must have the form `#/layouts/<name>` and name a defined layout, or rendering fails.
 
