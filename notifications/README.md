@@ -10,35 +10,29 @@ A multi-channel notification router with a pluggable provider model. Your applic
 
 ## Usage
 
-```go
-import notification "github.com/OpenNSW/core/notifications"
+Each provider takes its own typed config in its constructor and is handed, ready to send, to `NewManager`:
 
-manager, err := notification.NewManager(
-    notification.Config{
-        Providers: map[notification.ChannelType]map[string]any{
-            notification.ChannelEmail: {
-                "api_key":      "sg-xxxxx",
-                "from_address": "noreply@example.com",
-            },
-            notification.ChannelSMS: {
-                "account_sid": "ACxxxxx",
-                "auth_token":  "xxxxx",
-                "from_number": "+61400000000",
-            },
-        },
-    },
-    myEmailProvider,
-    mySMSProvider,
+```go
+import (
+    notification "github.com/OpenNSW/core/notifications"
+    "github.com/OpenNSW/core/notifications/providers"
 )
 
+sms, err := providers.NewSMSProvider(cfg.Notification.SMS)
+email, err := providers.NewEmailProvider(cfg.Notification.Email)
+
+manager, err := notification.NewManager(sms, email)
+
 err = manager.Send(ctx, notification.Request{
-    Channel: notification.ChannelEmail,
-    To:      "applicant@example.com",
-    Subject: "Application received",
-    Body:    "Your application #12345 has been received and is under review.",
+    Channel:  notification.ChannelEmail,
+    To:       "applicant@example.com",
+    Subject:  "Application received",
+    Body:     "Your application #12345 has been received and is under review.",
     HTMLBody: "<p>Your application <strong>#12345</strong> has been received.</p>",
 })
 ```
+
+`NewManager` returns an error when it gets no providers, a nil one, or two for the same channel.
 
 ## Channels
 
@@ -53,48 +47,52 @@ Implement `notification.Provider`:
 
 ```go
 type Provider interface {
-    Type()                          ChannelType
-    Configure(cfg json.RawMessage)  error
+    Type() ChannelType
     Send(ctx context.Context, req Request) error
 }
 ```
 
 - `Type()` declares which channel this provider handles.
-- `Configure` is called at startup with the provider's block from `Config.Providers`, re-marshaled to JSON (so existing `Provider` implementations are unaffected by how the block was sourced).
 - `Send` delivers the message.
 
+Give the provider its own exported config type, with `yaml` tags, and a constructor that validates it and returns a ready provider, as `providers.NewSMSProvider` and `providers.NewEmailProvider` do:
+
 ```go
-type MyEmailProvider struct {
-    apiKey string
+type MyEmailConfig struct {
+    APIKey string `yaml:"apiKey"`
 }
 
-func (p *MyEmailProvider) Type() notification.ChannelType { return notification.ChannelEmail }
-
-func (p *MyEmailProvider) Configure(cfg json.RawMessage) error {
-    var c struct{ APIKey string `json:"api_key"` }
-    if err := json.Unmarshal(cfg, &c); err != nil { return err }
-    p.apiKey = c.APIKey
-    return nil
-}
-
-func (p *MyEmailProvider) Send(ctx context.Context, req notification.Request) error {
-    // send via your email API
-    return nil
+func NewMyEmailProvider(cfg MyEmailConfig) (*MyEmailProvider, error) {
+    if cfg.APIKey == "" {
+        return nil, errors.New("apiKey is required")
+    }
+    return &MyEmailProvider{apiKey: cfg.APIKey}, nil
 }
 ```
 
 ## Provider configuration
 
-`Config.Providers` holds provider-specific configuration keyed by channel type — no standalone config file is needed. It carries a `yaml` struct tag (`providers`), so it can be embedded in a larger application config struct and populated generically, e.g. via [`configyaml.LoadAndExpand`](../configyaml/README.md) so a provider's API key can be sourced from an env var or a mounted file instead of living in the checked-in config:
+An application embeds the provider configs in its own config struct and loads it with [`configyaml.LoadAndExpand`](../configyaml/README.md), so a provider's credentials can come from an env var or a mounted file instead of the checked-in config:
+
+```go
+type AppConfig struct {
+    Notification struct {
+        SMS   providers.SMSConfig   `yaml:"sms"`
+        Email providers.EmailConfig `yaml:"email"`
+    } `yaml:"notification"`
+}
+```
 
 ```yaml
 notification:
-  providers:
-    email:
-      api_key: "{{env:SENDGRID_API_KEY}}"
-      from_address: noreply@example.com
-    sms:
-      account_sid: ACxxxxx
-      auth_token: "{{env:SMS_AUTH_TOKEN}}"
-      from_number: "+61400000000"
+  sms:
+    baseURL: https://sms.example.com
+    userName: nsw
+    password: "{{env:SMS_PASSWORD}}"
+    sidCode: NSW
+  email:
+    baseURL: https://email.example.com
+    token: "{{env:EMAIL_TOKEN}}"
 ```
+
+The config fields are typed, so a value decodes into its field's type: a secret that only looks like a number (a password of `12345678`, a SID code of `0123`) stays the string it was. The email `token` is the bearer token itself; configyaml resolves the placeholder, and the provider uses it as written.

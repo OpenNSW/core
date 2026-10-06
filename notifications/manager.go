@@ -5,7 +5,6 @@ package notification
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,13 +16,16 @@ type Manager struct {
 	providers map[ChannelType]Provider
 }
 
-// NewManager configures each provider from its block in cfg.Providers and
-// returns a ready Manager. Returns an error if cfg is invalid, a provider's
-// channel is missing from cfg.Providers, or any provider's Configure call
-// fails.
-func NewManager(cfg Config, providers ...Provider) (*Manager, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid notification config: %w", err)
+// ErrNoProviders is returned by NewManager when it is given no providers.
+var ErrNoProviders = errors.New("notification: at least one provider is required")
+
+// NewManager returns a Manager that routes each request to the provider for
+// its channel. The providers are already configured by their constructors.
+// Returns an error if none is given, one is nil, or two handle the same
+// channel.
+func NewManager(providers ...Provider) (*Manager, error) {
+	if len(providers) == 0 {
+		return nil, ErrNoProviders
 	}
 
 	m := &Manager{
@@ -33,20 +35,6 @@ func NewManager(cfg Config, providers ...Provider) (*Manager, error) {
 	for _, p := range providers {
 		if p == nil {
 			return nil, errors.New("nil provider passed to NewManager")
-		}
-		block, ok := cfg.Providers[p.Type()]
-		if !ok {
-			return nil, fmt.Errorf("no config for %q provider", p.Type())
-		}
-		// Providers still configure from json.RawMessage (unchanged interface,
-		// so every existing Provider keeps working); the block just arrives
-		// from cfg.Providers now instead of a standalone JSON file.
-		raw, err := json.Marshal(block)
-		if err != nil {
-			return nil, fmt.Errorf("marshal %q provider config: %w", p.Type(), err)
-		}
-		if err := p.Configure(raw); err != nil {
-			return nil, fmt.Errorf("configure %q provider: %w", p.Type(), err)
 		}
 		if _, dup := m.providers[p.Type()]; dup {
 			return nil, fmt.Errorf("duplicate notification provider for channel %q", p.Type())
