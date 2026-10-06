@@ -23,7 +23,8 @@ type LocalConfig struct {
 	PublicURL string `yaml:"publicURL"`
 	// RoutePrefix is the path the content routes sit under on that server,
 	// e.g. "/files" for routes at /files/{key}/content. Empty means
-	// DefaultLocalRoutePrefix ("/api/v1/storage").
+	// DefaultLocalRoutePrefix ("/api/v1/storage"). Otherwise it follows the
+	// rules of WithRoutePrefix.
 	RoutePrefix string `yaml:"routePrefix"`
 	// PutSecret signs presigned upload URLs for the local driver.
 	PutSecret string `yaml:"putSecret"`

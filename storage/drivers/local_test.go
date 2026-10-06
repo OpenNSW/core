@@ -344,10 +344,32 @@ func TestLocalFSDriver_RoutePrefix(t *testing.T) {
 }
 
 func TestLocalFSDriver_RejectsInvalidRoutePrefix(t *testing.T) {
-	for _, prefix := range []string{"", "files", "/", "/files/", "/a//b", "/a/../b", "/{key}", "/a b", "/a?b", "/a#b"} {
-		t.Run(prefix, func(t *testing.T) {
-			if _, err := NewLocalFSDriver(t.TempDir(), "http://localhost:8080", "secret", 15*time.Minute, WithRoutePrefix(prefix)); err == nil {
-				t.Errorf("NewLocalFSDriver accepted route prefix %q", prefix)
+	tests := []struct {
+		prefix string
+		reason string
+	}{
+		{prefix: "", reason: `must start with "/"`},
+		{prefix: "files", reason: `must start with "/"`},
+		{prefix: "/", reason: `must not end with "/"`},
+		{prefix: "/files/", reason: `must not end with "/"`},
+		{prefix: "/{key}", reason: "must not contain {, }, ? or #"},
+		{prefix: "/a?b", reason: "must not contain {, }, ? or #"},
+		{prefix: "/a#b", reason: "must not contain {, }, ? or #"},
+		{prefix: "/a b", reason: "must not contain whitespace"},
+		{prefix: "/a\rb", reason: "must not contain whitespace"},
+		{prefix: "/a\u00a0b", reason: "must not contain whitespace"},
+		{prefix: "/a//b", reason: `must not contain empty, "." or ".." segments`},
+		{prefix: "/a/./b", reason: `must not contain empty, "." or ".." segments`},
+		{prefix: "/a/../b", reason: `must not contain empty, "." or ".." segments`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.prefix, func(t *testing.T) {
+			_, err := NewLocalFSDriver(t.TempDir(), "http://localhost:8080", "secret", 15*time.Minute, WithRoutePrefix(tt.prefix))
+			if err == nil {
+				t.Fatalf("NewLocalFSDriver accepted route prefix %q", tt.prefix)
+			}
+			if !strings.Contains(err.Error(), tt.reason) {
+				t.Errorf("error %q does not name the rule %q", err, tt.reason)
 			}
 		})
 	}

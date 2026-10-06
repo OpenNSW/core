@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ErrInvalidPath is returned when a key or resolved path is invalid (e.g. path traversal).
@@ -43,8 +44,10 @@ type LocalFSDriver struct {
 type LocalOption func(*LocalFSDriver)
 
 // WithRoutePrefix sets the path the driver's content routes sit under, e.g.
-// "/files" for routes at /files/{key}/content. It must start with "/" and
-// not end with one. Without it the prefix is DefaultLocalRoutePrefix.
+// "/files" for routes at /files/{key}/content. It must start with "/", must
+// not end with one, and must not contain {, }, ?, #, whitespace, or empty,
+// "." or ".." segments; NewLocalFSDriver returns an error naming the rule a
+// bad prefix breaks. Without it the prefix is DefaultLocalRoutePrefix.
 func WithRoutePrefix(prefix string) LocalOption {
 	return func(d *LocalFSDriver) {
 		d.routePrefix = prefix
@@ -75,12 +78,24 @@ func NewLocalFSDriver(baseDir, publicURL, secretKey string, presignTTL time.Dura
 }
 
 // validateRoutePrefix rejects a prefix that would not make a clean ServeMux
-// pattern once "/{key}/content" is appended.
+// pattern once "/{key}/content" is appended, naming the rule it breaks.
 func validateRoutePrefix(prefix string) error {
-	if !strings.HasPrefix(prefix, "/") || prefix == "/" || path.Clean(prefix) != prefix || strings.ContainsAny(prefix, "{}?# \t\n") {
-		return fmt.Errorf("invalid route prefix %q: it must start with \"/\", not end with one, and contain no {, }, ?, # or whitespace", prefix)
+	var reason string
+	switch {
+	case !strings.HasPrefix(prefix, "/"):
+		reason = `must start with "/"`
+	case strings.HasSuffix(prefix, "/"):
+		reason = `must not end with "/"`
+	case strings.ContainsAny(prefix, "{}?#"):
+		reason = "must not contain {, }, ? or #"
+	case strings.IndexFunc(prefix, unicode.IsSpace) >= 0:
+		reason = "must not contain whitespace"
+	case path.Clean(prefix) != prefix:
+		reason = `must not contain empty, "." or ".." segments`
+	default:
+		return nil
 	}
-	return nil
+	return fmt.Errorf("invalid route prefix %q: %s", prefix, reason)
 }
 
 // ContentPattern is the ServeMux path pattern of the driver's content routes,
