@@ -35,7 +35,6 @@ func TestRepository_Create(t *testing.T) {
 	tx := &PaymentTransaction{
 		ID:              "uuid-1",
 		ReferenceNumber: "TNSW1",
-		TaskID:          "task-1",
 		GatewayID:       "govpay",
 		Amount:          decimal.NewFromInt(1500),
 		Currency:        "LKR",
@@ -111,34 +110,6 @@ func TestRepository_GetByReferenceNumberForUpdate(t *testing.T) {
 			WillReturnError(gorm.ErrRecordNotFound)
 
 		res, err := repo.GetByReferenceNumberForUpdate(context.Background(), "UNKNOWN")
-		require.NoError(t, err)
-		assert.Nil(t, res)
-	})
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestRepository_GetByTaskID(t *testing.T) {
-	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
-
-	t.Run("found", func(t *testing.T) {
-		rows := sqlmock.NewRows([]string{"id", "task_id", "status"}).
-			AddRow("uuid-1", "task-1", PaymentStatusPending)
-		mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE task_id = \$1`).
-			WillReturnRows(rows)
-
-		res, err := repo.GetByTaskID(context.Background(), "task-1")
-		require.NoError(t, err)
-		require.NotNil(t, res)
-		assert.Equal(t, "task-1", res.TaskID)
-	})
-
-	t.Run("not found returns nil,nil", func(t *testing.T) {
-		mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE task_id = \$1`).
-			WillReturnError(gorm.ErrRecordNotFound)
-
-		res, err := repo.GetByTaskID(context.Background(), "UNKNOWN")
 		require.NoError(t, err)
 		assert.Nil(t, res)
 	})
@@ -222,18 +193,6 @@ func TestRepository_GetByReferenceNumberForUpdate_DBError(t *testing.T) {
 		WillReturnError(errors.New("connection reset"))
 
 	_, err := repo.GetByReferenceNumberForUpdate(context.Background(), "TNSW1")
-	require.Error(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestRepository_GetByTaskID_DBError(t *testing.T) {
-	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
-
-	mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE task_id = \$1`).
-		WillReturnError(errors.New("connection reset"))
-
-	_, err := repo.GetByTaskID(context.Background(), "task-1")
 	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

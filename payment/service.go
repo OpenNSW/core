@@ -143,8 +143,6 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		return nil, fmt.Errorf("gateway %s rejected checkout metadata: %w", req.GatewayID, err)
 	}
 
-	taskID := req.Metadata["task_id"] // presence validated above
-
 	// 1. Generate a unique NSW ReferenceNumber, retrying on the rare collision.
 	var generatedRef string
 	const maxRetries = 10
@@ -169,7 +167,6 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 	tx := &PaymentTransaction{
 		ID:              uuid.NewString(),
 		ReferenceNumber: generatedRef,
-		TaskID:          taskID,
 		CallbackToken:   req.CallbackToken,
 		GatewayID:       req.GatewayID,
 		Amount:          req.Amount,
@@ -312,7 +309,6 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	// PENDING updates it and earns the right to advance the workflow.
 	var (
 		advance      bool
-		advanceTask  string
 		advanceToken string
 		finalStatus  PaymentStatus
 		refNum       string
@@ -359,7 +355,6 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		}
 
 		advance = true
-		advanceTask = tx.TaskID
 		advanceToken = tx.CallbackToken
 		finalStatus = tx.Status
 		refNum = tx.ReferenceNumber
@@ -398,7 +393,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}
 	if statusStr == "" {
 		slog.WarnContext(ctx, "payment: non-terminal webhook status, not advancing task",
-			"reference", gwPayload.ReferenceNumber, "task_id", advanceTask, "status", finalStatus)
+			"reference", gwPayload.ReferenceNumber, "status", finalStatus)
 		return webhookResp, nil
 	}
 
@@ -414,8 +409,8 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}); err != nil {
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
-		slog.ErrorContext(ctx, "payment: failed to advance task step", "task_id", advanceTask, "error", err)
-		return nil, fmt.Errorf("failed to advance task step for %s: %w", advanceTask, err)
+		slog.ErrorContext(ctx, "payment: failed to advance task step", "reference", refNum, "error", err)
+		return nil, fmt.Errorf("failed to advance task step for payment %s: %w", refNum, err)
 	}
 
 	return webhookResp, nil

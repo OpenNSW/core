@@ -65,15 +65,6 @@ func (m *mockRepo) GetByReferenceNumberForUpdate(ctx context.Context, ref string
 	return m.GetByReferenceNumber(ctx, ref)
 }
 
-func (m *mockRepo) GetByTaskID(_ context.Context, taskID string) (*PaymentTransaction, error) {
-	for _, tx := range m.txs {
-		if tx.TaskID == taskID {
-			return tx, nil
-		}
-	}
-	return nil, nil
-}
-
 func (m *mockRepo) Update(_ context.Context, tx *PaymentTransaction) error {
 	m.updateCount++
 	if m.updateErr != nil {
@@ -133,7 +124,7 @@ func validCheckoutReq() CreateCheckoutRequest {
 		Amount:    decimal.RequireFromString("1500.00"),
 		Currency:  "LKR",
 		ExpiresAt: time.Now().Add(time.Hour),
-		Metadata:  map[string]string{"task_id": "task-1"},
+		Metadata:  map[string]string{},
 		// Opaque to the payment service; any non-empty string will do.
 		CallbackToken: "token-1",
 	}
@@ -172,14 +163,12 @@ func TestCreateCheckoutSession_Success(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, PaymentStatusPending, stored.Status)
 	assert.Equal(t, "sess-1", stored.SessionID)
-	assert.Equal(t, "task-1", stored.TaskID)
 	assert.Equal(t, "token-1", stored.CallbackToken)
 	gw.AssertExpectations(t)
 }
 
 func TestCreateCheckoutSession_ValidationErrors(t *testing.T) {
 	cases := map[string]func(*CreateCheckoutRequest){
-		"missing task_id":        func(r *CreateCheckoutRequest) { r.Metadata = nil },
 		"missing callback_token": func(r *CreateCheckoutRequest) { r.CallbackToken = "" },
 		"zero amount":            func(r *CreateCheckoutRequest) { r.Amount = decimal.Zero },
 		"negative amount":        func(r *CreateCheckoutRequest) { r.Amount = decimal.RequireFromString("-5") },
@@ -401,7 +390,6 @@ func TestValidateReference_VerificationOperationalError_NotClassifiedAsAuthFailu
 func pendingTx() *PaymentTransaction {
 	return &PaymentTransaction{
 		ReferenceNumber: "TNSW1",
-		TaskID:          "task-9",
 		CallbackToken:   "token-9",
 		GatewayID:       "govpay",
 		Amount:          decimal.RequireFromString("1500.00"),
