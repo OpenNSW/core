@@ -22,16 +22,16 @@ type Config struct {
 
 func (c Config) Validate() error {
 	if len(c.AllowedOrigins) == 0 {
-		return fmt.Errorf("CORS_ALLOWED_ORIGINS is required")
+		return fmt.Errorf("allowedOrigins is required")
 	}
 	for _, origin := range c.AllowedOrigins {
 		if origin == "*" {
 			if c.AllowCredentials {
-				return fmt.Errorf("wildcard origin '*' is not allowed when AllowCredentials is true")
+				return fmt.Errorf("allowedOrigins cannot contain the wildcard '*' when allowCredentials is true")
 			}
 			continue
 		}
-		if err := validation.HTTPURL("CORS_ALLOWED_ORIGINS", origin); err != nil {
+		if err := validation.HTTPURL("allowedOrigins", origin); err != nil {
 			return err
 		}
 	}

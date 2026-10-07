@@ -65,15 +65,6 @@ func (m *mockRepo) GetByReferenceNumberForUpdate(ctx context.Context, ref string
 	return m.GetByReferenceNumber(ctx, ref)
 }
 
-func (m *mockRepo) GetByTaskID(_ context.Context, taskID string) (*PaymentTransaction, error) {
-	for _, tx := range m.txs {
-		if tx.TaskID == taskID {
-			return tx, nil
-		}
-	}
-	return nil, nil
-}
-
 func (m *mockRepo) Update(_ context.Context, tx *PaymentTransaction) error {
 	m.updateCount++
 	if m.updateErr != nil {
@@ -113,7 +104,7 @@ func (m *mockRegistry) Get(string) (PaymentGateway, error) {
 func (m *mockRegistry) ListInfo() []GatewayInfo { return m.infos }
 
 type completeCall struct {
-	taskID  string
+	token   string
 	payload map[string]any
 }
 
@@ -122,8 +113,8 @@ type mockTaskCompleter struct {
 	err   error
 }
 
-func (m *mockTaskCompleter) CompleteTaskStep(_ context.Context, taskID string, payload map[string]any) error {
-	m.calls = append(m.calls, completeCall{taskID: taskID, payload: payload})
+func (m *mockTaskCompleter) CompleteTaskStepByToken(_ context.Context, token string, payload map[string]any) error {
+	m.calls = append(m.calls, completeCall{token: token, payload: payload})
 	return m.err
 }
 
@@ -133,7 +124,9 @@ func validCheckoutReq() CreateCheckoutRequest {
 		Amount:    decimal.RequireFromString("1500.00"),
 		Currency:  "LKR",
 		ExpiresAt: time.Now().Add(time.Hour),
-		Metadata:  map[string]string{"task_id": "task-1"},
+		Metadata:  map[string]string{},
+		// Opaque to the payment service; any non-empty string will do.
+		CallbackToken: "token-1",
 	}
 }
 
@@ -170,18 +163,18 @@ func TestCreateCheckoutSession_Success(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, PaymentStatusPending, stored.Status)
 	assert.Equal(t, "sess-1", stored.SessionID)
-	assert.Equal(t, "task-1", stored.TaskID)
+	assert.Equal(t, "token-1", stored.CallbackToken)
 	gw.AssertExpectations(t)
 }
 
 func TestCreateCheckoutSession_ValidationErrors(t *testing.T) {
 	cases := map[string]func(*CreateCheckoutRequest){
-		"missing task_id": func(r *CreateCheckoutRequest) { r.Metadata = nil },
-		"zero amount":     func(r *CreateCheckoutRequest) { r.Amount = decimal.Zero },
-		"negative amount": func(r *CreateCheckoutRequest) { r.Amount = decimal.RequireFromString("-5") },
-		"empty currency":  func(r *CreateCheckoutRequest) { r.Currency = "" },
-		"past expiry":     func(r *CreateCheckoutRequest) { r.ExpiresAt = time.Now().Add(-time.Hour) },
-		"empty gateway":   func(r *CreateCheckoutRequest) { r.GatewayID = "" },
+		"missing callback_token": func(r *CreateCheckoutRequest) { r.CallbackToken = "" },
+		"zero amount":            func(r *CreateCheckoutRequest) { r.Amount = decimal.Zero },
+		"negative amount":        func(r *CreateCheckoutRequest) { r.Amount = decimal.RequireFromString("-5") },
+		"empty currency":         func(r *CreateCheckoutRequest) { r.Currency = "" },
+		"past expiry":            func(r *CreateCheckoutRequest) { r.ExpiresAt = time.Now().Add(-time.Hour) },
+		"empty gateway":          func(r *CreateCheckoutRequest) { r.GatewayID = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -215,6 +208,10 @@ func TestCreateCheckoutSession_MetadataForwardedToGateway(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "SCHEME-7", seen["fee_scheme_id"],
 		"the gateway must see the checkout metadata, not an empty map")
+	// The callback token addresses a workflow step for us; it is not the gateway's to see.
+	for k, v := range seen {
+		assert.NotEqual(t, req.CallbackToken, v, "callback token leaked to the gateway under %q", k)
+	}
 }
 
 func TestCreateCheckoutSession_MetadataRejected_NothingPersisted(t *testing.T) {
@@ -393,7 +390,7 @@ func TestValidateReference_VerificationOperationalError_NotClassifiedAsAuthFailu
 func pendingTx() *PaymentTransaction {
 	return &PaymentTransaction{
 		ReferenceNumber: "TNSW1",
-		TaskID:          "task-9",
+		CallbackToken:   "token-9",
 		GatewayID:       "govpay",
 		Amount:          decimal.RequireFromString("1500.00"),
 		Currency:        "LKR",
@@ -429,7 +426,7 @@ func TestProcessWebhook_SuccessAdvancesTask(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PaymentStatusSuccess, repo.txs["TNSW1"].Status)
 	require.Len(t, tc.calls, 1)
-	assert.Equal(t, "task-9", tc.calls[0].taskID)
+	assert.Equal(t, "token-9", tc.calls[0].token, "the settlement must complete the step the checkout was for")
 	assert.Equal(t, "success", tc.calls[0].payload["payment_status"])
 	// Completion carries the settled transaction's facts for completion-state UIs.
 	assert.Equal(t, "TNSW1", tc.calls[0].payload["reference_number"])

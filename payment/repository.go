@@ -18,7 +18,6 @@ type PaymentRepository interface {
 	// GetByReferenceNumberForUpdate reads a transaction while holding a row-level
 	// write lock (SELECT ... FOR UPDATE). Must be called inside RunInTransaction.
 	GetByReferenceNumberForUpdate(ctx context.Context, referenceNumber string) (*PaymentTransaction, error)
-	GetByTaskID(ctx context.Context, taskID string) (*PaymentTransaction, error)
 	Update(ctx context.Context, tx *PaymentTransaction) error
 	UpdateStatus(ctx context.Context, referenceNumber string, status PaymentStatus) error
 	// RunInTransaction runs fn inside a DB transaction, passing a repository bound
@@ -77,18 +76,6 @@ func (r *paymentRepository) GetByReferenceNumber(ctx context.Context, referenceN
 	if err := r.db.WithContext(ctx).Where("reference_number = ?", referenceNumber).First(&ptx).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil // Return nil, nil when not found to easily check existence
-		}
-		return nil, err
-	}
-	return &ptx, nil
-}
-
-// GetByTaskID retrieves a PaymentTransaction by its associated TaskID.
-func (r *paymentRepository) GetByTaskID(ctx context.Context, taskID string) (*PaymentTransaction, error) {
-	var ptx PaymentTransaction
-	if err := r.db.WithContext(ctx).Where("task_id = ?", taskID).First(&ptx).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
 		}
 		return nil, err
 	}

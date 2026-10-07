@@ -3,14 +3,12 @@
 
 package notification
 
-import (
-	"context"
-	"encoding/json"
-)
+import "context"
 
 // Provider is implemented by each notification channel (email, SMS, etc.).
+// A provider is built ready to send, from its own config type, by its
+// constructor (e.g. providers.NewSMSProvider), and handed to NewManager.
 type Provider interface {
 	Type() ChannelType
-	Configure(cfg json.RawMessage) error
 	Send(ctx context.Context, req Request) error
 }
