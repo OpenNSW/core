@@ -163,6 +163,8 @@ When a user enters a reference in a bank app, the gateway calls NSW.
 ### Webhook Processing
 Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing, and then performs domain actions: updating status, persisting metadata, and firing internal events.
 
+Once a payment reaches SUCCESS or FAILED, the Service resumes the workflow step it was created for through its **TaskCompleter**, calling `CompleteTaskStepByToken` with the `CallbackToken` the checkout carried (`CreateCheckoutRequest.CallbackToken`, required). The token is opaque to this package and names one step, so a settlement that arrives after the task has moved on completes nothing. Core taskflow's `*orchestrator.TaskManager` satisfies `TaskCompleter`; build the token with `plugins.CallbackToken` when creating the checkout.
+
 ## Verification error classification
 
 `VerifyWebhook` implementations must distinguish two different kinds of failure:
