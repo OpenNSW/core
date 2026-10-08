@@ -43,6 +43,14 @@ type mockTemporalManager struct {
 	taskDoneFunc      func(ctx context.Context, workflowID string, runID string, activityID string, result map[string]any) error
 	startWorkerFunc   func() error
 	stopWorkerFunc    func()
+	terminateFunc     func(ctx context.Context, workflowID, runID, reason string) error
+}
+
+func (m *mockTemporalManager) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error {
+	if m.terminateFunc != nil {
+		return m.terminateFunc(ctx, workflowID, runID, reason)
+	}
+	return nil
 }
 
 func (m *mockTemporalManager) StartWorkflow(ctx context.Context, workflowID string, def engine.WorkflowDefinition, initialVars map[string]any) error {
@@ -192,6 +200,18 @@ func (s *safeMockTaskStore) CompleteTask(_ context.Context, taskID string, seq i
 		return 0, nil
 	}
 	t.State, t.Seq = store.StateCompleted, seq
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) CancelTask(_ context.Context, taskID string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.State == store.StateCompleted {
+		return 0, nil
+	}
+	t.State, t.Seq = store.StateCancelled, t.Seq+1
 	s.tasks[taskID] = t
 	return 1, nil
 }
