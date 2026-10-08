@@ -93,6 +93,9 @@ const (
 	// StateAdvancing means the active step's submission was accepted by the workflow, which is now
 	// moving to the next node. Clients keep the view until the state moves on.
 	StateAdvancing = "ADVANCING"
+	// StateCancelled means the task was closed from outside its workflow (see
+	// TaskManager.CancelTask). Its workflow has been terminated, so nothing can be submitted to it.
+	StateCancelled = "CANCELLED"
 )
 
 // StepClaim is the row change that makes a step the task's active step.
@@ -111,7 +114,7 @@ type StepClaim struct {
 
 // TaskStore is an interface that any persistent or in-memory database used by the TaskManager should implement.
 //
-// The five step methods below are conditional writes. Each is one atomic statement whose guard is
+// The step methods below are conditional writes. Each is one atomic statement whose guard is
 // part of the write, so a write from a step that is no longer current changes nothing. Each returns
 // the number of rows changed: 0 means the write was stale and was dropped, which is not an error.
 // InitTask must not write ActiveStepID or Seq.
@@ -134,9 +137,10 @@ type TaskStore interface {
 	// empty.
 	GetAllTasks(context context.Context, caseID string) []TaskRecord
 
-	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq, so a
-	// retry of the same step matches again and an older step's late attempt does not.
-	ClaimStep(context context.Context, taskID string, claim StepClaim) (int64, error)
+	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq and the
+	// state is not StateCancelled, so a retry of the same step matches again, an older step's late
+	// attempt does not, and an in-flight claim cannot resurrect a cancelled task.
+	ClaimStep(context.Context, string, StepClaim) (int64, error)
 	// WriteRenderState sets the state and data the step shows once its plugin has run. Guard: the
 	// active step is stepID and the stored seq equals seq.
 	WriteRenderState(context context.Context, taskID, stepID string, seq int64, state string, data map[string]any) (int64, error)
@@ -145,15 +149,20 @@ type TaskStore interface {
 	PersistSubmission(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
 	// WriteDraft stores the data of a draft saved for the active step, leaving state and seq as
 	// they are. Guard: the active step is stepID, the stored seq equals seq, and the state is none
-	// of StateStartingStep, StateAdvancing and StateCompleted, so a draft never lands on a step
-	// that is not yet showing, has been submitted, or has ended.
+	// of StateStartingStep, StateAdvancing, StateCompleted and StateCancelled, so a draft never
+	// lands on a step that is not yet showing, has been submitted, or has ended.
 	WriteDraft(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
-	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq.
+	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq and the state is not
+	// StateCancelled.
 	CompleteTask(context context.Context, taskID string, seq int64) (int64, error)
+	// CancelTask sets StateCancelled and advances seq by one, so a write still in flight for the
+	// task's active step is dropped as stale. Guard: the state is not StateCompleted. Cancelling a
+	// cancelled task matches again.
+	CancelTask(context context.Context, taskID string) (int64, error)
 
 	// ClaimTask sets the claim to holder. Guard: the task is unclaimed or already claimed by
-	// holder, and its state is not StateCompleted. A repeat claim by the holder keeps the
-	// original ClaimedAt; otherwise ClaimedAt is set to at.
+	// holder, and its state is neither StateCompleted nor StateCancelled. A repeat claim by the
+	// holder keeps the original ClaimedAt; otherwise ClaimedAt is set to at.
 	ClaimTask(context context.Context, taskID, holder string, at time.Time) (int64, error)
 	// ReleaseTask clears the claim. Guard: the task is claimed by holder.
 	ReleaseTask(context context.Context, taskID, holder string) (int64, error)

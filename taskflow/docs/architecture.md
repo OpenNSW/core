@@ -138,15 +138,16 @@ type TaskRecord struct {
 
 ### Guarded writes
 
-`ActiveStepID` and `Seq` are written only by four conditional statements on `TaskStore`; a fifth, `WriteDraft`, writes only the data of the active step and moves neither. Each is one atomic write whose guard is part of the statement, and each returns the rows it changed; **0 rows means the write was stale and was dropped, which is not an error.**
+`ActiveStepID` and `Seq` are written only by five conditional statements on `TaskStore`; a sixth, `WriteDraft`, writes only the data of the active step and moves neither. Each is one atomic write whose guard is part of the statement, and each returns the rows it changed; **0 rows means the write was stale and was dropped, which is not an error.**
 
 | Method               | Called by             | Guard                                   | Sets                                               |
 |----------------------|-----------------------|-----------------------------------------|----------------------------------------------------|
 | `ClaimStep`          | `StartTaskStep`        | stored `seq <= n`                       | active step, `seq = n`, template, `STARTING_STEP`, data from inputs |
 | `WriteRenderState`   | `StartTaskStep`        | active step is `A` and `seq = n`        | state and data the plugin produced                 |
 | `PersistSubmission`  | `CompleteTaskStep`    | active step is `A` and `seq = n`        | data, `ADVANCING`, `seq = n+1`                     |
-| `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING` or `COMPLETED`) | data only |
+| `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING`, `COMPLETED` or `CANCELLED`) | data only |
 | `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m`                       | `COMPLETED`, `seq = m`                             |
+| `CancelTask`         | `CancelTask`          | state is not `COMPLETED`                | `CANCELLED`, `seq = seq+1`                         |
 
 `InitTask` still exists for creating the row and for coarse fields, but it never writes `ActiveStepID` or `Seq`, so a stale full-record save cannot move them.
 
@@ -180,6 +181,7 @@ These are not the same as a step's claim (`ClaimStep`, above, which makes a step
 - `STARTING_STEP` — set by the claim, while a step's plugin has not yet reported the state to render.
 - `ADVANCING` — set when a submission was accepted by the workflow and it is moving to the next node. It offers no actions, since a second submission could only be rejected as stale.
 - `COMPLETED` — set by `HandleTaskCompletion` when the task workflow ends.
+- `CANCELLED` — set by `TaskManager.CancelTask`, which closes a task from outside its workflow and terminates that workflow. Advancing `seq` drops any step write still in flight, and a submission is rejected as stale. The parent's TASK node is left waiting; the caller decides what happens to it, typically parking it with `ForceParkActivation` so an admin can resolve it.
 
 Everything else is a plugin's responsibility:
 
@@ -202,6 +204,8 @@ stateDiagram-v2
     ADVANCING --> STARTING_STEP : next step claims the row
     ADVANCING --> COMPLETED : task workflow ends
     DISPATCHED --> COMPLETED : task workflow ends
+    PENDING_USER --> CANCELLED : CancelTask
+    QUEUED_EXTERNALLY --> CANCELLED : CancelTask
 ```
 
 The state diagram above is illustrative — your plugins decide the transitions. The renderer keys its output on this value, so use stable, well-known strings. A render config that has no entry for `ADVANCING` or `STARTING_STEP` simply shows nothing interactive in those states.

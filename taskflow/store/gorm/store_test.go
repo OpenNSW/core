@@ -215,7 +215,7 @@ func TestWriteDraft(t *testing.T) {
 
 // The state guard alone turns a draft away: same step and seq, but the step is not showing.
 func TestWriteDraft_StateGuard(t *testing.T) {
-	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted} {
+	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled} {
 		t.Run(state, func(t *testing.T) {
 			s, ctx := newTestStore(t)
 			_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
@@ -243,6 +243,43 @@ func TestCompleteTask(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
 }
 
+func TestCancelTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+
+	n, err := s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 1)
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateCancelled)
+
+	// A's render write, still in flight when the task was cancelled, is dropped.
+	n, err = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", map[string]any{})
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateCancelled)
+
+	// A next-step claim or completion with a higher seq cannot resurrect a cancelled task.
+	n, err = s.ClaimStep(ctx, task1, claim(stepB, 9, nil))
+	wantRows(t, n, err, 0)
+	n, err = s.CompleteTask(ctx, task1, 10)
+	wantRows(t, n, err, 0)
+	n, err = s.ClaimTask(ctx, task1, userA, t1)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateCancelled)
+
+	// Cancelling again matches.
+	n, err = s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 1)
+}
+
+func TestCancelTask_CompletedTaskIsNotCancelled(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	_, _ = s.CompleteTask(ctx, task1, 6)
+
+	n, err := s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
+}
+
 func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	s, ctx := newTestStore(t)
 
@@ -255,6 +292,8 @@ func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	n, err = s.WriteDraft(ctx, "nope", stepA, 1, nil)
 	wantRows(t, n, err, 0)
 	n, err = s.CompleteTask(ctx, "nope", 1)
+	wantRows(t, n, err, 0)
+	n, err = s.CancelTask(ctx, "nope")
 	wantRows(t, n, err, 0)
 	n, err = s.ClaimTask(ctx, "nope", userA, t1)
 	wantRows(t, n, err, 0)

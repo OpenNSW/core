@@ -520,9 +520,16 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
 		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq, ManifestVersion: g.manifestVersion()}).Get(ctx, &taskResult)
 	result := taskResult.Output
-	if err == nil && taskResult.Suspended {
-		// Wait, outside any Activity, for CompleteActivation to deliver the step's output.
-		err = completion.Get(ctx, &result)
+	if err == nil {
+		switch {
+		case taskResult.Suspended:
+			// Wait, outside any Activity, for CompleteActivation to deliver the step's output.
+			err = completion.Get(ctx, &result)
+		case completion.IsReady():
+			// A ForceParkActivation arrived while the Activity was still running; read its error so
+			// the node parks instead of ignoring an accepted force-park.
+			err = completion.Get(ctx, nil)
+		}
 	}
 	// The step now takes no completion: it completed, failed or was cancelled. This must happen
 	// here, not on return, since the node returns only after the rest of the graph has run.

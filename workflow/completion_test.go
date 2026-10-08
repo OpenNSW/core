@@ -82,6 +82,17 @@ func complete(env *testsuite.TestWorkflowEnvironment, updateID, activationID str
 	return outcome
 }
 
+// forcePark sends the ForceParkActivation Update.
+func forcePark(env *testsuite.TestWorkflowEnvironment, updateID, activationID, reason string) *updateOutcome {
+	outcome := &updateOutcome{}
+	env.UpdateWorkflow(forceParkActivationUpdate, updateID, &testsuite.TestUpdateCallback{
+		OnAccept:   func() { outcome.accepted = true },
+		OnReject:   func(err error) { outcome.rejected = err },
+		OnComplete: func(any, error) {},
+	}, activationID, reason)
+	return outcome
+}
+
 func requireAccepted(t *testing.T, o *updateOutcome) {
 	t.Helper()
 	require.NoError(t, o.rejected)
@@ -220,5 +231,113 @@ func TestCompletionForASynchronousStepIsRejected(t *testing.T) {
 
 	requireRejected(t, stale)
 	requireAccepted(t, current)
+	require.Equal(t, "approved", finalVariables(t, env)["decision"])
+}
+
+// Force-parking a waiting step parks its node in NodeStatusAwaitingAdmin with ParkCategoryAdminForced
+// and ForcedParkErrorType in LastError, and the node can then be resolved like any parked node.
+func TestForceParkSuspendedStepParksTheNode(t *testing.T) {
+	env, def, runs := newSuspendingEnv(t)
+
+	var parkedOutcome, duplicatePark, lateComplete *updateOutcome
+	var firstStep string
+	var parkedNode NodeInfo
+
+	env.RegisterDelayedCallback(func() {
+		firstStep = activationOf(t, env, "form")
+		parkedOutcome = forcePark(env, "u1", firstStep, "warranted offline")
+		duplicatePark = forcePark(env, "u2", firstStep, "again")
+		lateComplete = complete(env, "u3", firstStep, map[string]any{"decision": "too-late"})
+	}, time.Hour)
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		parkedNode = *instance.NodeInfo["form"]
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:                 "form",
+			ActivationID:           parkedNode.ActivationID,
+			Action:                 AdminActionComplete,
+			WorkflowVariablesPatch: map[string]any{"decision": "overridden"},
+			Reason:                 "completed offline",
+		})
+	}, 2*time.Hour)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	requireAccepted(t, parkedOutcome)
+	requireRejected(t, duplicatePark)
+	requireRejected(t, lateComplete)
+
+	require.Equal(t, NodeStatusAwaitingAdmin, parkedNode.Status)
+	require.Equal(t, ParkCategoryAdminForced, parkedNode.ParkCategory)
+	require.Equal(t, firstStep, parkedNode.ActivationID)
+	require.Equal(t, "AdminForcedPark: forced park by admin: warranted offline", parkedNode.LastError)
+
+	require.Equal(t, "overridden", finalVariables(t, env)["decision"])
+	require.Equal(t, 1, *runs)
+}
+
+// A ForceParkActivation accepted while the step's Activity is still running must still park the
+// node even if the Activity then returns synchronously.
+func TestForceParkBeforeSynchronousActivityReturnsParksTheNode(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(suspendingWorkflowJSON), &def))
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FORM", mock.Anything, mock.Anything, mock.Anything).
+		After(time.Minute).Return(TaskResult{Output: map[string]any{"decision": "sync"}}, nil)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	var parkedOutcome *updateOutcome
+	var parkedNode NodeInfo
+
+	env.RegisterDelayedCallback(func() {
+		parkedOutcome = forcePark(env, "u1", activationOf(t, env, "form"), "park while running")
+	}, time.Second)
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		parkedNode = *instance.NodeInfo["form"]
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:                 "form",
+			ActivationID:           parkedNode.ActivationID,
+			Action:                 AdminActionComplete,
+			WorkflowVariablesPatch: map[string]any{"decision": "overridden"},
+			Reason:                 "resolved",
+		})
+	}, 2*time.Minute)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	requireAccepted(t, parkedOutcome)
+	require.Equal(t, NodeStatusAwaitingAdmin, parkedNode.Status)
+	require.Equal(t, ParkCategoryAdminForced, parkedNode.ParkCategory)
+	require.Equal(t, "overridden", finalVariables(t, env)["decision"])
+}
+
+func TestForceParkForAStepNotWaitingIsRejected(t *testing.T) {
+	env, def, _ := newSuspendingEnv(t)
+
+	var unknown, done *updateOutcome
+	env.RegisterDelayedCallback(func() {
+		unknown = forcePark(env, "u1", "no-such-step", "reason")
+		done = complete(env, "u2", activationOf(t, env, "form"), map[string]any{"decision": "approved"})
+	}, time.Hour)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	requireRejected(t, unknown)
+	requireAccepted(t, done)
 	require.Equal(t, "approved", finalVariables(t, env)["decision"])
 }

@@ -302,6 +302,35 @@ type AdminInterventionResolver interface {
 	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
 }
 
+// ForcedParkErrorType is the error type of the failure ForceParkActivation completes a step with.
+// It shows in the parked node's LastError.
+const ForcedParkErrorType = "AdminForcedPark"
+
+// ActivationParker is implemented by managers that can park a node that is waiting on its step, for
+// a node that is healthy but must be overridden by an admin. Like AdminInterventionResolver it is
+// kept separate from Manager; callers type-assert for it.
+type ActivationParker interface {
+	// ForceParkActivation fails the waiting step activationID of workflowID with an error of type
+	// ForcedParkErrorType, so the TASK node waiting on it parks in NodeStatusAwaitingAdmin with
+	// ParkCategoryAdminForced and can be resolved like any parked node. runID may be empty to
+	// address the workflow's current run. It returns an error wrapping ErrActivationNotPending if
+	// that step is not waiting.
+	//
+	// It only fails the step: whatever the step was waiting on, such as a task workflow, is still
+	// running and is the caller's to stop.
+	ForceParkActivation(ctx context.Context, workflowID, runID, activationID, reason string) error
+}
+
+// WorkflowTerminator is implemented by managers that can stop a running workflow outright. Like
+// AdminInterventionResolver it is kept separate from Manager; callers type-assert for it.
+type WorkflowTerminator interface {
+	// TerminateWorkflow stops workflowID immediately and runs nothing further of it: no node
+	// completes, and a workflow that is a task's never reports its completion. runID may be empty to
+	// address the current run. It returns an error wrapping ErrWorkflowNotFound if there is no
+	// running execution to stop, including one that has already closed.
+	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error
+}
+
 // TemporalManager extends the Manager interface with worker control methods.
 type TemporalManager interface {
 	Manager
@@ -407,11 +436,23 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 // The Update gets no ID of its own: Temporal would answer a second Update with the same ID with the
 // first one's result, so a duplicate completion would succeed instead of being rejected.
 func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error {
+	return m.updatePendingActivation(ctx, workflowID, runID, completeActivationUpdate, activationID, output)
+}
+
+// ForceParkActivation fails a suspended step through the workflow's ForceParkActivation Update (see
+// registerCompletionHandler), so the node waiting on it parks in NodeStatusAwaitingAdmin with
+// ParkCategoryAdminForced. A step that isn't waiting, or a workflow that has ended or doesn't
+// exist, is ErrActivationNotPending.
+func (m *temporalManagerImpl) ForceParkActivation(ctx context.Context, workflowID, runID, activationID, reason string) error {
+	return m.updatePendingActivation(ctx, workflowID, runID, forceParkActivationUpdate, activationID, reason)
+}
+
+func (m *temporalManagerImpl) updatePendingActivation(ctx context.Context, workflowID, runID, updateName string, args ...any) error {
 	handle, err := m.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 		WorkflowID:   workflowID,
 		RunID:        runID,
-		UpdateName:   completeActivationUpdate,
-		Args:         []any{activationID, output},
+		UpdateName:   updateName,
+		Args:         args,
 		WaitForStage: client.WorkflowUpdateStageCompleted,
 	})
 	if err == nil {
@@ -423,8 +464,17 @@ func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID
 	return err
 }
 
-// isActivationNotPending reports whether err is the workflow rejecting a completion for a step that
-// isn't waiting, or the workflow having ended or never existed.
+func (m *temporalManagerImpl) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error {
+	err := m.temporalClient.TerminateWorkflow(ctx, workflowID, runID, reason)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return fmt.Errorf("%w: %w", ErrWorkflowNotFound, err)
+	}
+	return err
+}
+
+// isActivationNotPending reports whether err is the workflow rejecting a completion or force-park
+// for a step that isn't waiting, or the workflow having ended or never existed.
 func isActivationNotPending(err error) bool {
 	var appErr *temporal.ApplicationError
 	if errors.As(err, &appErr) && appErr.Type() == activationNotPendingErrorType {
