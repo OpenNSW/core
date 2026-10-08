@@ -8,7 +8,7 @@
 ## Features
 
 - **Config-Driven**: Define ID structures for multiple Issuers and ID Types purely via YAML.
-- **Typed Segments**: Concatenate `literal`, `list`, `date`, `sequence`, and `random` segments into custom ID formats.
+- **Typed Segments**: Concatenate `literal`, `list`, `param`, `date`, `sequence`, and `random` segments into custom ID formats.
 - **Durable Counters, Pluggable Backend**: Atomic sequence increment via raw SQL (no ORM) against either the bundled PostgreSQL (`refid/store/postgres`) or SQLite (`refid/store/sqlite`) backend, or bring your own `refid.SequenceStore` implementation.
 - **Random Segments, Collision-Checked**: Fixed-length random values (numeric/alpha/alphanumeric) reserved via a pluggable `refid.RandomStore`, retrying on collision.
 - **Flexible Resets**: Scope key templates allow counters (and random value uniqueness sets) to reset daily (`{yyyyMMdd}`), monthly (`{yyyyMM}`), yearly (`{yyyy}`), or never.
@@ -85,6 +85,7 @@ func main() {
 |---|---|---|---|
 | `literal` | Fixed text string | `value: "FCAU-"` | `FCAU-` |
 | `list` | Parameter value validated against a controlled list | `list: office_location`, `param: officeCode` | `COL` |
+| `param` | Parameter value from an open set, checked against a pattern | `param: exporterId`, `pattern: "[0-9]{4}"` | `0001` |
 | `date` | Current UTC date/time using Go reference layout | `layout: "20060102"` | `20260818` |
 | `sequence` | Zero-padded durable counter | `sequence: {scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", padding: 6}` | `000042` |
 | `random` | Fixed-length random value, collision-checked via `RandomStore` | `random: {scopeKey: "{issuer}:{idType}", charset: alphanumeric, length: 8}` | `7K2QQXAB` |
@@ -99,6 +100,15 @@ func main() {
 | `charset` | One of `numeric`, `alpha`, `alphanumeric`. |
 | `length` | Number of characters to generate (must be ≥ 1). |
 | `maxAttempts` | Collision retries before `Generate` returns `ErrRandomExhausted`. Optional; defaults to 10, must be between 0 and 100. |
+
+### `param` fields
+
+Use `param` for a caller-supplied value that a controlled `list` cannot enumerate, such as a registration number, or an ID generated earlier and embedded in another. A format may hold several `param` segments, each reading its own key.
+
+| Field | Description |
+|---|---|
+| `param` | The key the caller must supply in `params`. A missing or empty value returns `ErrInvalidParam`. |
+| `pattern` | Required. An [RE2](https://github.com/google/re2/wiki/Syntax) expression the value must match in full (it is anchored at both ends). A value that doesn't match returns `ErrInvalidParam`. The value lands in the ID unchanged, so the pattern is what keeps out characters, lengths and formats the ID's consumers can't handle; `.+` accepts any non-empty value. |
 
 ---
 
@@ -121,9 +131,9 @@ Reserved placeholders:
 
 ## Stateful Segment Limit
 
-`sequence` and `random` are the only segment types with a side effect that persists to a store (a counter increment, a random value reservation) — `literal`/`list`/`date` are pure functions of the caller's params and the current time. `Generate` validates every segment first, then renders them in order with no rollback: if a format had two or more stateful segments and a later one failed during render (a sequence overflowing, a random segment exhausting its retries), an earlier one's already-committed side effect would be permanently orphaned — for a random segment, that permanently wastes one value from its bounded charset/length space with no ID ever returned.
+`sequence` and `random` are the only segment types with a side effect that persists to a store (a counter increment, a random value reservation) — `literal`/`list`/`param`/`date` are pure functions of the caller's params and the current time. `Generate` validates every segment first, then renders them in order with no rollback: if a format had two or more stateful segments and a later one failed during render (a sequence overflowing, a random segment exhausting its retries), an earlier one's already-committed side effect would be permanently orphaned — for a random segment, that permanently wastes one value from its bounded charset/length space with no ID ever returned.
 
-To rule this out, `NewRegistry` rejects any format with more than one `sequence`/`random` segment combined. A format can still mix any number of `literal`/`list`/`date` segments with at most one of `sequence` or `random`.
+To rule this out, `NewRegistry` rejects any format with more than one `sequence`/`random` segment combined. A format can still mix any number of `literal`/`list`/`param`/`date` segments with at most one of `sequence` or `random`.
 
 See [docs/PATTERNS.md](docs/PATTERNS.md) for a catalog of the ID shapes these segments can produce — sequence-based, random-based, and stateless — each with a runnable example config.
 
@@ -205,7 +215,7 @@ Check sentinel errors using `errors.Is(err, refid.Err...)`:
 
 - `refid.ErrUnknownIssuer` — Issuer not configured in registry.
 - `refid.ErrUnknownIDType` — ID Type not found under specified issuer.
-- `refid.ErrInvalidParam` — Required param missing, not in allowed list, or scopeKey placeholder un-substituted.
+- `refid.ErrInvalidParam` — Required param missing, not in allowed list, not matching a `param` segment's pattern, or scopeKey placeholder un-substituted.
 - `refid.ErrCounterOverflow` — Sequence counter value exceeds configured `padding` width.
 - `refid.ErrRandomExhausted` — Random segment found no unreserved value within `maxAttempts`; widen the charset/length or narrow the scope key.
 - `refid.ErrRandomCollision` — Returned by a `RandomStore.Reserve` implementation when a value is already reserved under a scope key; `Generate` retries internally on this, so callers of `Generate` don't normally see it directly.

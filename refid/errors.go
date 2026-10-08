@@ -16,8 +16,9 @@ var (
 	// that was not declared under the given issuer.
 	ErrUnknownIDType = errors.New("refid: unknown id type")
 
-	// ErrInvalidParam is returned when a list segment's required caller-supplied
-	// param is missing or its value is not in the allowed list.
+	// ErrInvalidParam is returned when a list or param segment's required
+	// caller-supplied param is missing, or its value is not in the allowed list
+	// (list) or does not match the configured pattern (param).
 	ErrInvalidParam = errors.New("refid: invalid or missing param")
 
 	// ErrCounterOverflow is returned when the sequence counter value for a scope
