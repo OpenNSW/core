@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -106,6 +107,58 @@ func newListSegment(cfg SegmentConfig, values []string) (*listSegment, error) {
 		allowed[v] = struct{}{}
 	}
 	return &listSegment{paramKey: cfg.Param, allowed: allowed}, nil
+}
+
+// -----------------------------------------------------------------------
+// paramSegment
+// -----------------------------------------------------------------------
+
+// paramSegment emits a caller-supplied param value as is, for values drawn
+// from an open set (e.g. an exporter number) that a controlled list cannot
+// enumerate. Its pattern decides which values are accepted, since the value
+// lands in the ID unchanged.
+type paramSegment struct {
+	paramKey string
+	pattern  *regexp.Regexp
+	source   string // the pattern as configured, for error messages
+}
+
+func (s *paramSegment) validate(params map[string]string, _ time.Time) error {
+	val, ok := params[s.paramKey]
+	if !ok || val == "" {
+		return fmt.Errorf("%w: param %q is required", ErrInvalidParam, s.paramKey)
+	}
+	// The value is left out of the error: a param may carry a value that
+	// shouldn't reach the logs, and the key and pattern identify the failure.
+	if !s.pattern.MatchString(val) {
+		return fmt.Errorf("%w: value for param %q does not match pattern %q", ErrInvalidParam, s.paramKey, s.source)
+	}
+	return nil
+}
+
+func (s *paramSegment) render(_ context.Context, params map[string]string, now time.Time) (string, error) {
+	if err := s.validate(params, now); err != nil {
+		return "", err
+	}
+	return params[s.paramKey], nil
+}
+
+func (s *paramSegment) isStateful() bool { return false }
+
+// newParamSegment constructs a param segment. Its pattern is required and is
+// compiled to match the whole value; ".+" accepts any non-empty value.
+func newParamSegment(cfg SegmentConfig) (*paramSegment, error) {
+	if cfg.Param == "" {
+		return nil, fmt.Errorf("refid: param segment requires a non-empty param")
+	}
+	if cfg.Pattern == "" {
+		return nil, fmt.Errorf("refid: param segment %q requires a pattern", cfg.Param)
+	}
+	re, err := regexp.Compile(`\A(?:` + cfg.Pattern + `)\z`)
+	if err != nil {
+		return nil, fmt.Errorf("refid: param segment has an invalid pattern %q: %w", cfg.Pattern, err)
+	}
+	return &paramSegment{paramKey: cfg.Param, pattern: re, source: cfg.Pattern}, nil
 }
 
 // -----------------------------------------------------------------------

@@ -11,6 +11,8 @@
 # Segment types:
 #   literal   — fixed text, always emitted as-is.
 #   list      — emits a caller-supplied value after validating it is in the named list.
+#   param     — emits a caller-supplied value as is, for values from an open set. Its
+#               required `pattern` (RE2, matched against the whole value) constrains it.
 #   date      — formats the current UTC time using a Go reference-date layout string.
 #   sequence  — increments a durable counter scoped by a key template and zero-pads the result.
 #               Settings go under a nested `sequence:` block (scopeKey, padding).
@@ -87,6 +89,16 @@ issuers:
               charset: alphanumeric    # numeric | alpha | alphanumeric
               length: 8
               maxAttempts: 10          # optional; 10 is also the default
+
+      # receipt_id — the payer's registration number followed by a fixed fee code
+      # Produces: 00420100002
+      - idType: receipt_id
+        segments:
+          - type: param
+            param: payerNo             # caller must pass payerNo: four digits
+            pattern: "[0-9]{4}"        # required; anchored, so "042" or "00042" is rejected
+          - type: literal
+            value: "0100002"
 
   # A second issuer sharing the same list — counters are always isolated by
   # {issuer} and {idType} in the scope key, so no collision is possible.

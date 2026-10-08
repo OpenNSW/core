@@ -6,6 +6,7 @@ package refid_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1043,5 +1044,190 @@ func TestSegment_Random_MaxAttemptsTooLargeRejected(t *testing.T) {
 	_, err := refid.NewRegistry(randomConfig(refid.CharsetNumeric, 6, 101), refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
 	if err == nil {
 		t.Fatal("expected error for maxAttempts exceeding the cap, got nil")
+	}
+}
+
+// -----------------------------------------------------------------------
+// paramSegment
+// -----------------------------------------------------------------------
+
+func paramConfig(pattern string) refid.Config {
+	return refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "CDA",
+			Formats: []refid.FormatConfig{{
+				IDType: "fee_ref",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeParam, Param: "exporterId", Pattern: pattern},
+					{Type: refid.SegmentTypeLiteral, Value: "0100002"},
+				},
+			}},
+		}},
+	}
+}
+
+func TestGenerate_Param_InsertsValueAsIs(t *testing.T) {
+	reg, err := refid.NewRegistry(paramConfig(".+"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, val := range []string{"0001", "CDA-EXP-000001"} {
+		id, err := reg.Generate(context.Background(), "CDA", "fee_ref", map[string]string{"exporterId": val})
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", val, err)
+		}
+		if want := val + "0100002"; id != want {
+			t.Errorf("got %q, want %q", id, want)
+		}
+	}
+}
+
+func TestGenerate_Param_MissingOrEmpty(t *testing.T) {
+	reg, err := refid.NewRegistry(paramConfig(".+"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, params := range []map[string]string{nil, {"exporterId": ""}} {
+		_, err := reg.Generate(context.Background(), "CDA", "fee_ref", params)
+		if !errors.Is(err, refid.ErrInvalidParam) {
+			t.Errorf("params %v: expected ErrInvalidParam, got %v", params, err)
+		}
+	}
+}
+
+func TestGenerate_Param_PatternMatchesWholeValue(t *testing.T) {
+	reg, err := refid.NewRegistry(paramConfig("[0-9]{4}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := reg.Generate(context.Background(), "CDA", "fee_ref", map[string]string{"exporterId": "0001"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "00010100002" {
+		t.Errorf("got %q, want %q", id, "00010100002")
+	}
+	// The pattern is anchored, so a value it only partly matches is rejected.
+	// The error names the param, not the value it was given.
+	for _, val := range []string{"123", "12345", "00a1", "x1234", "1234\n"} {
+		_, err := reg.Generate(context.Background(), "CDA", "fee_ref", map[string]string{"exporterId": val})
+		if !errors.Is(err, refid.ErrInvalidParam) {
+			t.Errorf("value %q: expected ErrInvalidParam, got %v", val, err)
+			continue
+		}
+		if strings.Contains(err.Error(), val) {
+			t.Errorf("value %q: error %q echoes the value", val, err)
+		}
+	}
+}
+
+// A format may hold several param segments, each reading its own key, and may
+// read the same key more than once.
+func TestGenerate_Param_SeveralParams(t *testing.T) {
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "CDA",
+			Formats: []refid.FormatConfig{{
+				IDType: "fee_ref",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeParam, Param: "exporterId", Pattern: "[0-9]{4}"},
+					{Type: refid.SegmentTypeParam, Param: "mainCategory", Pattern: "[0-9]{2}"},
+					{Type: refid.SegmentTypeParam, Param: "subCategory", Pattern: "[0-9]{5}"},
+					{Type: refid.SegmentTypeLiteral, Value: "-"},
+					{Type: refid.SegmentTypeParam, Param: "mainCategory", Pattern: "[0-9]{2}"},
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]string{"exporterId": "0002", "mainCategory": "01", "subCategory": "00002"}
+	id, err := reg.Generate(context.Background(), "CDA", "fee_ref", params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "00020100002-01"; id != want {
+		t.Errorf("got %q, want %q", id, want)
+	}
+
+	// Each param is required and checked on its own.
+	for _, missing := range []string{"exporterId", "mainCategory", "subCategory"} {
+		partial := map[string]string{}
+		for k, v := range params {
+			if k != missing {
+				partial[k] = v
+			}
+		}
+		if _, err := reg.Generate(context.Background(), "CDA", "fee_ref", partial); !errors.Is(err, refid.ErrInvalidParam) {
+			t.Errorf("without %s: expected ErrInvalidParam, got %v", missing, err)
+		}
+	}
+	bad := map[string]string{"exporterId": "0002", "mainCategory": "1", "subCategory": "00002"}
+	if _, err := reg.Generate(context.Background(), "CDA", "fee_ref", bad); !errors.Is(err, refid.ErrInvalidParam) {
+		t.Errorf("mainCategory %q: expected ErrInvalidParam, got %v", bad["mainCategory"], err)
+	}
+}
+
+func TestGenerate_Param_ValidationPreventsSideEffects(t *testing.T) {
+	store := newMemStore()
+	cfg := refid.Config{
+		Issuers: []refid.IssuerConfig{{
+			Issuer: "CDA",
+			Formats: []refid.FormatConfig{{
+				IDType: "cert",
+				Segments: []refid.SegmentConfig{
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}", Padding: 4}},
+					{Type: refid.SegmentTypeParam, Param: "serial", Pattern: "[0-9]{4}/[0-9]{2}"},
+				},
+			}},
+		}},
+	}
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = reg.Generate(context.Background(), "CDA", "cert", map[string]string{"serial": "bad"})
+	if !errors.Is(err, refid.ErrInvalidParam) {
+		t.Fatalf("expected ErrInvalidParam, got %v", err)
+	}
+	if len(store.counters) != 0 {
+		t.Errorf("expected 0 counters in store after validation failure, got %d", len(store.counters))
+	}
+}
+
+func TestSegment_Param_EmptyParamRejected(t *testing.T) {
+	cfg := paramConfig(".+")
+	cfg.Issuers[0].Formats[0].Segments[0].Param = ""
+	if _, err := refid.NewRegistry(cfg); err == nil {
+		t.Fatal("expected error for param segment without a param, got nil")
+	}
+}
+
+func TestSegment_Param_EmptyPatternRejected(t *testing.T) {
+	if _, err := refid.NewRegistry(paramConfig("")); err == nil {
+		t.Fatal("expected error for param segment without a pattern, got nil")
+	}
+}
+
+func TestSegment_Param_InvalidPatternRejected(t *testing.T) {
+	if _, err := refid.NewRegistry(paramConfig("([0-9]")); err == nil {
+		t.Fatal("expected error for an invalid param pattern, got nil")
+	}
+}
+
+// -----------------------------------------------------------------------
+// example_config.yaml
+// -----------------------------------------------------------------------
+
+// The annotated example config compiles, so it stays a working reference.
+func TestExampleConfig_Compiles(t *testing.T) {
+	cfg, err := refid.LoadConfig("example_config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore())); err != nil {
+		t.Fatalf("example_config.yaml does not compile: %v", err)
 	}
 }
