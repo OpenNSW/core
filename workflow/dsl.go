@@ -211,6 +211,21 @@ type BatchGatewayConfig struct {
 	IDField string `json:"id_field,omitempty"`
 }
 
+// A BATCH_SPLIT node's own input_mapping and output_mapping control what its partitions see
+// and what they hand back, besides the items:
+//
+//   - input_mapping (parent path -> child path): each partition starts with only the mapped
+//     variables, plus the engine's context variables (names starting with "_"). A missing
+//     required source parks the split, as it does for a TASK. A split without an input_mapping
+//     gives its partitions no workflow variables besides their items.
+//   - output_mapping (child path -> parent path): the parent path receives a flat list of the
+//     unique values the partitions hold at the child path, in partition order. A partition
+//     without the value contributes nothing; a list value contributes its elements. The parent
+//     path is replaced, and is an empty list when no partition contributes. A trailing "?" is
+//     accepted and changes nothing.
+//
+// The items variable is always merged back by ID and cannot appear in either mapping.
+
 // BatchJoinConfig configures how a BATCH_JOIN gateway merges child partition results.
 type BatchJoinConfig struct {
 	// GatewayNodeID is the node ID of the paired BATCH_SPLIT gateway.

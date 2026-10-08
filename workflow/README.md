@@ -77,6 +77,32 @@ type BatchJoinConfig struct {
 }
 ```
 
+#### What partitions see and hand back
+
+Each partition runs as a child workflow, and the join merges its items back by ID. The
+`BATCH_SPLIT` node's own `input_mapping` and `output_mapping` control everything else:
+
+```json
+{ "id": "treatment_split", "type": "GATEWAY", "gateway_type": "BATCH_SPLIT",
+  "batch_gateway": { "items_variable": "commodities" },
+  "input_mapping":  { "npqs.reference_number": "npqs.reference_number" },
+  "output_mapping": { "treatment.certificate": "treatment.certificates" } }
+```
+
+* **`input_mapping`** (parent path → child path): each partition starts with only the mapped
+  variables, plus the engine's context variables (names starting with `_`, such as
+  `_root_workflow_id`). A missing source parks the split unless its key ends in `?`. A split
+  without an `input_mapping` gives its partitions no workflow variables besides their items.
+* **`output_mapping`** (child path → parent path): the parent path is replaced with a flat
+  list of the unique values the partitions hold at the child path, in partition order. A
+  partition without the value contributes nothing, and a list value contributes its elements,
+  so an outer split can gather what an inner split gathered. The list is empty when no
+  partition contributes, including when no items reach the split. A trailing `?` is accepted
+  and changes nothing.
+* Neither mapping can name the items variable, an `input_mapping` cannot write a name starting
+  with `_`, each `output_mapping` destination has one source, and mappings on a `BATCH_JOIN`
+  are rejected.
+
 ### Dynamic Fan-out Configuration (`SplitTaskConfig`)
 ```go
 type SplitTaskConfig struct {

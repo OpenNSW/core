@@ -4,7 +4,10 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -61,6 +64,9 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	}
 
 	if len(items) == 0 {
+		if err := g.setBatchOutputs(node, nil); err != nil {
+			return err
+		}
 		nodeInfo.Status = NodeStatusCompleted
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		return g.skipToJoinOutEdge(ctx, joinNodeID)
@@ -96,8 +102,12 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 		return err
 	}
 
-	// 6. Spawn child workflows per partition.
-	children := g.spawnBatchChildren(ctx, partitions, partitionOrder, node.ID, joinNodeID, scopePath, itemsVar)
+	// 6. Spawn child workflows per partition, each starting from the split's input variables.
+	baseVars, err := g.batchChildVariables(node)
+	if err != nil {
+		return err
+	}
+	children := g.spawnBatchChildren(ctx, partitions, partitionOrder, node.ID, joinNodeID, scopePath, itemsVar, baseVars)
 
 	// Record spawned child IDs on the node now, before awaiting completion below, so
 	// admin/ops tooling can find them regardless of whether (or how) the children finish.
@@ -109,11 +119,16 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	nodeInfo.ChildWorkflowIDs = childIDs
 
 	// 7. Wait for all child workflows and merge results by item ID.
-	mergedItems, err := collectAndMergeBatchResults(ctx, children, items, itemsVar, idField, node.ID)
+	mergedItems, childVars, err := collectAndMergeBatchResults(ctx, children, items, itemsVar, idField, node.ID)
 	if err != nil {
 		return err
 	}
 	maputil.SetNestedKey(g.instance.WorkflowVariables, itemsVar, mergedItems)
+
+	// 8. Bring the split's output_mapping variables up from the children.
+	if err := g.setBatchOutputs(node, childVars); err != nil {
+		return err
+	}
 
 	g.instance.AuditTrail = append(g.instance.AuditTrail,
 		fmt.Sprintf("BATCH_SPLIT %s partitioned %d items into %d partitions", node.ID, len(items), len(partitions)))
@@ -205,6 +220,7 @@ func (g *graphInterpreter) spawnBatchChildren(
 	partitions map[string]*batchPartition,
 	partitionOrder []string,
 	nodeID, joinNodeID, scopePath, itemsVar string,
+	baseVars map[string]any,
 ) []batchChild {
 	parentInfo := workflow.GetInfo(ctx)
 	var children []batchChild
@@ -219,8 +235,8 @@ func (g *graphInterpreter) spawnBatchChildren(
 		subDef := extractSubGraph(g.def, p.Edge.TargetID, joinNodeID)
 		childScopePath := scopePath + "/" + nodeID + "/" + edgeID
 
-		childVars := make(map[string]any, len(g.instance.WorkflowVariables)+2)
-		for k, v := range g.instance.WorkflowVariables {
+		childVars := make(map[string]any, len(baseVars)+2)
+		for k, v := range baseVars {
 			childVars[k] = v
 		}
 		maputil.SetNestedKey(childVars, itemsVar, toAnySlice(p.Items))
@@ -239,44 +255,48 @@ func (g *graphInterpreter) spawnBatchChildren(
 }
 
 // collectAndMergeBatchResults awaits all child workflows and merges their item mutations back by ID.
+// It also returns each child's final workflow variables, in the order of children.
 func collectAndMergeBatchResults(
 	ctx workflow.Context,
 	children []batchChild,
 	originalItems []map[string]any,
 	itemsVar, idField, nodeID string,
-) ([]any, error) {
+) ([]any, []map[string]any, error) {
 	mergedItems := make(map[string]map[string]any)
+	childVars := make([]map[string]any, 0, len(children))
 
 	for _, child := range children {
 		var childOutput *WorkflowInstance
 		if err := child.Future.Get(ctx, &childOutput); err != nil {
-			return nil, withCategory(ParkCategoryChildFailure, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q failed: %w",
+			return nil, nil, withCategory(ParkCategoryChildFailure, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q failed: %w",
 				nodeID, child.EdgeID, err))
 		}
 		if childOutput == nil {
-			return nil, withCategory(ParkCategoryChildFailure, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned nil output",
+			return nil, nil, withCategory(ParkCategoryChildFailure, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned nil output",
 				nodeID, child.EdgeID))
 		}
 
+		childVars = append(childVars, childOutput.WorkflowVariables)
+
 		childItemsRaw, exists := maputil.GetNestedKey(childOutput.WorkflowVariables, itemsVar)
 		if !exists {
-			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q missing items variable %q in output",
+			return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q missing items variable %q in output",
 				nodeID, child.EdgeID, itemsVar))
 		}
 		childSlice, err := toItemSlice(childItemsRaw)
 		if err != nil {
-			return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned invalid items: %w",
+			return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned invalid items: %w",
 				nodeID, child.EdgeID, err))
 		}
 		for _, item := range childSlice {
 			idVal := getItemID(item, idField)
 			idStr := fmt.Sprintf("%v", idVal)
 			if idVal == nil || idVal == "" || idStr == "" {
-				return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
+				return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
 					nodeID, child.EdgeID, idField))
 			}
 			if _, alreadySeen := mergedItems[idStr]; alreadySeen {
-				return nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q returned across child partitions (from edge %q)",
+				return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q returned across child partitions (from edge %q)",
 					nodeID, idStr, child.EdgeID))
 			}
 			mergedItems[idStr] = item
@@ -293,7 +313,7 @@ func collectAndMergeBatchResults(
 		}
 	}
 
-	return result, nil
+	return result, childVars, nil
 }
 
 // handleBatchJoinGateway is a structural passthrough. The paired BATCH_SPLIT gateway already
@@ -334,6 +354,62 @@ func (g *graphInterpreter) skipToJoinOutEdge(ctx workflow.Context, joinNodeID st
 }
 
 // --- Helpers ---
+
+// batchChildVariables returns the variables each partition starts with, before its items are
+// set: the split's input_mapping variables plus the engine's own context variables (names
+// starting with "_"), so root, parent and scope tracking still reach the child.
+func (g *graphInterpreter) batchChildVariables(node *Node) (map[string]any, error) {
+	base := make(map[string]any)
+	for k, v := range g.instance.WorkflowVariables {
+		if strings.HasPrefix(k, "_") {
+			base[k] = v
+		}
+	}
+	if err := g.applyInputMapping(base, node.InputMapping); err != nil {
+		return nil, err
+	}
+	return base, nil
+}
+
+// setBatchOutputs sets each output_mapping destination on the split to a flat list of the
+// unique values the children hold at its source path, in partition order. A child without the
+// source contributes nothing, and a list value contributes its elements. Values are compared as
+// JSON. Destinations are written in sorted order so replays produce the same variables.
+func (g *graphInterpreter) setBatchOutputs(node *Node, childVars []map[string]any) error {
+	for _, rawSource := range slices.Sorted(maps.Keys(node.OutputMapping)) {
+		source, _ := parseMappingKey(rawSource)
+		values := make([]any, 0, len(childVars))
+		seen := make(map[string]bool)
+		add := func(value any) error {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return withCategory(ParkCategoryOutputMapping, fmt.Errorf("BATCH_SPLIT node %s: output mapping source %q: %w", node.ID, source, err))
+			}
+			if !seen[string(encoded)] {
+				seen[string(encoded)] = true
+				values = append(values, value)
+			}
+			return nil
+		}
+		for _, vars := range childVars {
+			value, exists := maputil.GetNestedKey(vars, source)
+			if !exists {
+				continue
+			}
+			list, isList := value.([]any)
+			if !isList {
+				list = []any{value}
+			}
+			for _, v := range list {
+				if err := add(v); err != nil {
+					return err
+				}
+			}
+		}
+		maputil.SetNestedKey(g.instance.WorkflowVariables, node.OutputMapping[rawSource], values)
+	}
+	return nil
+}
 
 // toItemSlice converts a raw interface value to a slice of map[string]any items.
 func toItemSlice(raw any) ([]map[string]any, error) {
