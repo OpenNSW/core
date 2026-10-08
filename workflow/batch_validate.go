@@ -50,6 +50,14 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 		}
 	}
 
+	// 1b. Collect entries name both paths, leave the items variable to the item merge, and
+	// write each destination once.
+	for joinID, join := range batchJoins {
+		if err := validateBatchCollect(joinID, join.BatchJoin); err != nil {
+			return err
+		}
+	}
+
 	// 2. Build forward and reverse edge mappings.
 	forwardEdges := make(map[string][]Edge)
 	reverseEdges := make(map[string][]string)
@@ -177,5 +185,27 @@ func validateGatewayRegion(
 		}
 	}
 
+	return nil
+}
+
+// validateBatchCollect checks a BATCH_JOIN's collect entries.
+func validateBatchCollect(joinID string, config *BatchJoinConfig) error {
+	itemsVar := config.ItemsVariable
+	if itemsVar == "" {
+		itemsVar = DefaultItemsVariable
+	}
+	destinations := make(map[string]string, len(config.Collect))
+	for source, destination := range config.Collect {
+		if source == "" || destination == "" {
+			return fmt.Errorf("BATCH_JOIN node %q: batch_join.collect entries need both a source and a destination path", joinID)
+		}
+		if source == itemsVar || destination == itemsVar {
+			return fmt.Errorf("BATCH_JOIN node %q: batch_join.collect cannot read or write the items variable %q", joinID, itemsVar)
+		}
+		if other, exists := destinations[destination]; exists {
+			return fmt.Errorf("BATCH_JOIN node %q: batch_join.collect writes %q from both %q and %q", joinID, destination, other, source)
+		}
+		destinations[destination] = source
+	}
 	return nil
 }

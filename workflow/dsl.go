@@ -223,6 +223,17 @@ type BatchJoinConfig struct {
 	// IDField is the field name within each item used as the unique identifier.
 	// Must match the paired BATCH_SPLIT's id_field. Defaults to "id" if empty.
 	IDField string `json:"id_field,omitempty"`
+
+	// Collect brings named variables out of the child partitions, which otherwise hand back
+	// only their items. Each key is a variable dot-path inside the children; its value is the
+	// parent dot-path that receives a list of the children's values, in partition order.
+	//
+	// A child's value is collected only when the child set or changed it, so a value every
+	// child inherited from the parent is not collected once per child. A list value
+	// contributes its elements rather than itself, so a join can collect a path that a nested
+	// join already collected and still produce one flat list. The parent path is set to an
+	// empty list when no child contributes.
+	Collect map[string]string `json:"collect,omitempty"`
 }
 
 // ParallelJoinConfig configures how a PARALLEL_JOIN gateway isolates its branches and

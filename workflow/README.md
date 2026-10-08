@@ -71,11 +71,30 @@ type BatchGatewayConfig struct {
 }
 
 type BatchJoinConfig struct {
-	GatewayNodeID string `json:"gateway_node_id"`          // Node ID of paired BATCH_SPLIT
-	ItemsVariable string `json:"items_variable,omitempty"` // Dot-path to []Item (defaults to "_items")
-	IDField       string `json:"id_field,omitempty"`       // Unique item identifier field (defaults to "id")
+	GatewayNodeID string            `json:"gateway_node_id"`          // Node ID of paired BATCH_SPLIT
+	ItemsVariable string            `json:"items_variable,omitempty"` // Dot-path to []Item (defaults to "_items")
+	IDField       string            `json:"id_field,omitempty"`       // Unique item identifier field (defaults to "id")
+	Collect       map[string]string `json:"collect,omitempty"`        // Child variable path -> parent path receiving a list
 }
 ```
+
+Each partition runs as a child workflow on its own copy of the parent's variables, and the
+join merges back only the items. To bring anything else out of the partitions, name it in
+`collect`: the parent path receives a list of the children's values, in partition order.
+
+```json
+{ "id": "treatment_join", "type": "GATEWAY", "gateway_type": "BATCH_JOIN",
+  "batch_join": { "gateway_node_id": "treatment_split", "items_variable": "commodities",
+                  "collect": { "treatment.certificate": "treatment.certificates" } } }
+```
+
+* A child's value is collected only when the child set or changed it; a value it merely
+  inherited from the parent is skipped.
+* A list value contributes its elements, so an outer join can collect the path an inner join
+  collected into and still get one flat list.
+* The parent path is set to an empty list when no child contributes, including when no items
+  reach the split.
+* `collect` cannot read or write the items variable, and each destination has one source.
 
 ### Dynamic Fan-out Configuration (`SplitTaskConfig`)
 ```go
