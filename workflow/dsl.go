@@ -216,8 +216,8 @@ type BatchGatewayConfig struct {
 //
 //   - input_mapping (parent path -> child path): each partition starts with only the mapped
 //     variables, plus the engine's context variables (names starting with "_"). A missing
-//     required source parks the split, as it does for a TASK. Without an input_mapping, each
-//     partition starts with a copy of all of the parent's variables.
+//     required source parks the split, as it does for a TASK. A split without an input_mapping
+//     gives its partitions no workflow variables besides their items.
 //   - output_mapping (child path -> parent path): the parent path receives a flat list of the
 //     unique values the partitions hold at the child path, in partition order. A partition
 //     without the value contributes nothing; a list value contributes its elements. The parent

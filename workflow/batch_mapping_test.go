@@ -261,7 +261,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplitInputMapping_PartitionsSeeOnlyMapp
 	}
 }
 
-func (s *BatchGatewayTestSuite) TestBatchSplitInputMapping_WithoutOnePartitionsSeeEverything() {
+func (s *BatchGatewayTestSuite) TestBatchSplitInputMapping_WithoutOnePartitionsSeeOnlyTheirItems() {
 	env := s.newBatchMappingTestEnv()
 	inputs := s.recordTaskInputs(env)
 
@@ -269,8 +269,10 @@ func (s *BatchGatewayTestSuite) TestBatchSplitInputMapping_WithoutOnePartitionsS
 
 	s.Len(inputs(), 2)
 	for _, in := range inputs() {
-		s.Equal("NPQS-1", in["parent_ref"])
-		s.Equal("not-for-partitions", in["secret"])
+		s.NotContains(in, "parent_ref")
+		s.NotContains(in, "secret")
+		s.NotEmpty(in["items"])
+		s.Equal("input-unmapped", in["root"], "engine context variables pass through")
 	}
 }
 

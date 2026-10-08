@@ -356,13 +356,9 @@ func (g *graphInterpreter) skipToJoinOutEdge(ctx workflow.Context, joinNodeID st
 // --- Helpers ---
 
 // batchChildVariables returns the variables each partition starts with, before its items are
-// set. Without an input_mapping on the split, that is the parent's variables. With one, it is
-// the mapped variables plus the engine's own context variables (names starting with "_"), so
-// root, parent and scope tracking still reach the child.
+// set: the split's input_mapping variables plus the engine's own context variables (names
+// starting with "_"), so root, parent and scope tracking still reach the child.
 func (g *graphInterpreter) batchChildVariables(node *Node) (map[string]any, error) {
-	if len(node.InputMapping) == 0 {
-		return g.instance.WorkflowVariables, nil
-	}
 	base := make(map[string]any)
 	for k, v := range g.instance.WorkflowVariables {
 		if strings.HasPrefix(k, "_") {
