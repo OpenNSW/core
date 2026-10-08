@@ -71,15 +71,23 @@ func (r *paymentRepository) GetByReferenceNumberForUpdate(ctx context.Context, r
 // Create inserts a new PaymentTransaction into the database.
 func (r *paymentRepository) Create(ctx context.Context, ptx *PaymentTransaction) error {
 	err := r.db.WithContext(ctx).Create(ptx).Error
-	if isDuplicateKey(r.db, err) {
+	if isDuplicateKey(r.db, err) && r.referenceHeldByAnother(ctx, ptx) {
 		return fmt.Errorf("%w: %s", ErrDuplicateReference, ptx.ReferenceNumber)
 	}
 	return err
 }
 
+// referenceHeldByAnother reports whether a transaction other than ptx holds
+// ptx's reference. It tells a duplicate reference apart from the other unique
+// violations an insert can hit, such as an existing ID, which drivers report
+// with the same error code.
+func (r *paymentRepository) referenceHeldByAnother(ctx context.Context, ptx *PaymentTransaction) bool {
+	holder, err := r.GetByReferenceNumber(ctx, ptx.ReferenceNumber)
+	return err == nil && holder != nil && holder.ID != ptx.ID
+}
+
 // isDuplicateKey reports whether err is a unique-constraint violation, as
 // gorm.ErrDuplicatedKey or as the dialector translates the driver's error.
-// reference_number is the transactions' unique column besides the generated ID.
 func isDuplicateKey(db *gorm.DB, err error) bool {
 	if err == nil {
 		return false
