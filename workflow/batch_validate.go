@@ -208,8 +208,8 @@ func validateBatchSplitMappings(splitID string, split *Node) error {
 		if source == "" || destination == "" {
 			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping entries need both a source and a destination path", splitID)
 		}
-		if destination == itemsVar {
-			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping cannot write the items variable %q", splitID, itemsVar)
+		if source == itemsVar || destination == itemsVar {
+			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping cannot read or write the items variable %q", splitID, itemsVar)
 		}
 		if strings.HasPrefix(destination, "_") {
 			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping cannot write %q; names starting with \"_\" are reserved for the engine", splitID, destination)

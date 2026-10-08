@@ -313,7 +313,9 @@ func (s *BatchGatewayTestSuite) TestBatchValidation_SplitMappings() {
 		{"output: reads the items variable", nil, map[string]string{"commodities": "treatment.items"}, "cannot read or write the items variable"},
 		{"output: two sources, one destination", nil, map[string]string{"a.doc": "treatment.docs", "b.doc": "treatment.docs"}, `writes "treatment.docs" from both`},
 		{"input: empty destination", map[string]string{"npqs.reference_number": ""}, nil, "need both a source and a destination"},
-		{"input: writes the items variable", map[string]string{"npqs.items": "commodities"}, nil, "cannot write the items variable"},
+		{"input: writes the items variable", map[string]string{"npqs.items": "commodities"}, nil, "cannot read or write the items variable"},
+		{"input: reads the items variable", map[string]string{"commodities": "all_items"}, nil, "cannot read or write the items variable"},
+		{"input: reads the items variable, optional", map[string]string{"commodities?": "all_items"}, nil, "cannot read or write the items variable"},
 		{"input: writes an engine variable", map[string]string{"npqs.root": "_root_workflow_id"}, nil, "reserved for the engine"},
 	}
 	for _, tc := range cases {
