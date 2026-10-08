@@ -137,13 +137,25 @@ factories := map[string]payment.Factory{
 registry, err := payment.NewRegistry("configs/payment_methods.json", factories)
 ```
 
-### 4. Setup the Orchestrator
+### 4. Supply a ReferenceGenerator
+
+A `ReferenceGenerator` issues the reference a payer pays against, in your format. It receives the checkout request, so the format can depend on the checkout, e.g. on its metadata. Each reference it issues is unique: a reference a transaction already holds fails the checkout with `ErrDuplicateReference`.
+
+```go
+type references struct{ /* your ID source */ }
+
+func (r references) GenerateReference(ctx context.Context, req payment.CreateCheckoutRequest) (string, error) {
+    return r.next(ctx, req) // e.g. "ACME" + 8 random characters
+}
+```
+
+### 5. Setup the Orchestrator
 
 The `PaymentService` acts as the orchestrator using the Registry as a lookup.
 
 ```go
 repo := payment.NewPaymentRepository(db)
-service := payment.NewPaymentService(repo, registry)
+service := payment.NewPaymentService(repo, registry, references{})
 
 handler := payment.NewHTTPHandler(service)
 ```
@@ -151,7 +163,7 @@ handler := payment.NewHTTPHandler(service)
 ## Key Flows
 
 ### Checkout Initialization
-The frontend calls `CreateCheckoutSession`. The Service generates an NSW reference, looks up the gateway implementation via the Registry, and delegates the session creation to that gateway.
+The frontend calls `CreateCheckoutSession`. The Service takes a reference from its `ReferenceGenerator`, looks up the gateway implementation via the Registry, and delegates the session creation to that gateway.
 
 ### Real-Time Validation
 When a user enters a reference in a bank app, the gateway calls NSW.
@@ -235,7 +247,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 ### Constructor Functions
 
 - `NewRegistry(configPath string, factories map[string]Factory)`: Create a gateway registry
-- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry)`: Create payment service
+- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry, references ReferenceGenerator)`: Create payment service
 - `NewPaymentRepository(db *gorm.DB)`: Create payment repository
 - `NewHTTPHandler(service PaymentService)`: Create HTTP handler
 
@@ -249,6 +261,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrUnsupportedWebhookStatus`: Gateway status cannot be normalized
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
+- `ErrDuplicateReference`: A transaction already holds the reference the `ReferenceGenerator` issued
 - `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
 - `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
 
@@ -275,9 +288,9 @@ func setupPayments(db *gorm.DB) *payment.HTTPHandler {
         panic(err)
     }
     
-    // Setup service
+    // Setup service, with your ReferenceGenerator
     repo := payment.NewPaymentRepository(db)
-    service := payment.NewPaymentService(repo, registry)
+    service := payment.NewPaymentService(repo, registry, yourReferences)
     
     // Return handler for HTTP endpoints
     return payment.NewHTTPHandler(service)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,32 @@ func TestRepository_Create(t *testing.T) {
 
 	require.NoError(t, repo.Create(context.Background(), tx))
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A unique violation on insert comes back as ErrDuplicateReference, translated
+// by the dialector even with TranslateError unset; other errors pass through.
+func TestRepository_Create_DuplicateReference(t *testing.T) {
+	for name, tc := range map[string]struct {
+		dbErr     error
+		duplicate bool
+	}{
+		"unique violation": {dbErr: &pgconn.PgError{Code: "23505"}, duplicate: true},
+		"other error":      {dbErr: errors.New("connection reset"), duplicate: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, mock := setupTestDB(t)
+			repo := NewPaymentRepository(db)
+
+			mock.ExpectBegin()
+			mock.ExpectExec(`INSERT INTO "payment_transactions"`).WillReturnError(tc.dbErr)
+			mock.ExpectRollback()
+
+			err := repo.Create(context.Background(), &PaymentTransaction{ID: "uuid-1", ReferenceNumber: "REF-1"})
+			require.Error(t, err)
+			assert.Equal(t, tc.duplicate, errors.Is(err, ErrDuplicateReference), "err = %v", err)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestRepository_GetByReferenceNumber(t *testing.T) {
