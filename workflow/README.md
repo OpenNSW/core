@@ -71,30 +71,37 @@ type BatchGatewayConfig struct {
 }
 
 type BatchJoinConfig struct {
-	GatewayNodeID string            `json:"gateway_node_id"`          // Node ID of paired BATCH_SPLIT
-	ItemsVariable string            `json:"items_variable,omitempty"` // Dot-path to []Item (defaults to "_items")
-	IDField       string            `json:"id_field,omitempty"`       // Unique item identifier field (defaults to "id")
-	Collect       map[string]string `json:"collect,omitempty"`        // Child variable path -> parent path receiving a list
+	GatewayNodeID string `json:"gateway_node_id"`          // Node ID of paired BATCH_SPLIT
+	ItemsVariable string `json:"items_variable,omitempty"` // Dot-path to []Item (defaults to "_items")
+	IDField       string `json:"id_field,omitempty"`       // Unique item identifier field (defaults to "id")
 }
 ```
 
-Each partition runs as a child workflow on its own copy of the parent's variables, and the
-join merges back only the items. To bring anything else out of the partitions, name it in
-`collect`: the parent path receives a list of the children's values, in partition order.
+#### What partitions see and hand back
+
+Each partition runs as a child workflow, and the join merges its items back by ID. The
+`BATCH_SPLIT` node's own `input_mapping` and `output_mapping` control everything else:
 
 ```json
-{ "id": "treatment_join", "type": "GATEWAY", "gateway_type": "BATCH_JOIN",
-  "batch_join": { "gateway_node_id": "treatment_split", "items_variable": "commodities",
-                  "collect": { "treatment.certificate": "treatment.certificates" } } }
+{ "id": "treatment_split", "type": "GATEWAY", "gateway_type": "BATCH_SPLIT",
+  "batch_gateway": { "items_variable": "commodities" },
+  "input_mapping":  { "npqs.reference_number": "npqs.reference_number" },
+  "output_mapping": { "treatment.certificate": "treatment.certificates" } }
 ```
 
-* Children start with a copy of the parent's variables, and a value a child inherited is
-  collected like one it set. Name a source the parent does not hold before the split.
-* A list value contributes its elements, so an outer join can collect the path an inner join
-  collected into and still get one flat list.
-* The destination is replaced with the collected list, which is empty when no child holds the
-  source, including when no items reach the split.
-* `collect` cannot read or write the items variable, and each destination has one source.
+* **`input_mapping`** (parent path → child path): each partition starts with only the mapped
+  variables, plus the engine's context variables (names starting with `_`, such as
+  `_root_workflow_id`). A missing source parks the split unless its key ends in `?`. Without
+  an `input_mapping`, each partition starts with a copy of all of the parent's variables.
+* **`output_mapping`** (child path → parent path): the parent path is replaced with a flat
+  list of the unique values the partitions hold at the child path, in partition order. A
+  partition without the value contributes nothing, and a list value contributes its elements,
+  so an outer split can gather what an inner split gathered. The list is empty when no
+  partition contributes, including when no items reach the split. A trailing `?` is accepted
+  and changes nothing.
+* Neither mapping can name the items variable, an `input_mapping` cannot write a name starting
+  with `_`, each `output_mapping` destination has one source, and mappings on a `BATCH_JOIN`
+  are rejected.
 
 ### Dynamic Fan-out Configuration (`SplitTaskConfig`)
 ```go

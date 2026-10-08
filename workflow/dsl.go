@@ -211,6 +211,21 @@ type BatchGatewayConfig struct {
 	IDField string `json:"id_field,omitempty"`
 }
 
+// A BATCH_SPLIT node's own input_mapping and output_mapping control what its partitions see
+// and what they hand back, besides the items:
+//
+//   - input_mapping (parent path -> child path): each partition starts with only the mapped
+//     variables, plus the engine's context variables (names starting with "_"). A missing
+//     required source parks the split, as it does for a TASK. Without an input_mapping, each
+//     partition starts with a copy of all of the parent's variables.
+//   - output_mapping (child path -> parent path): the parent path receives a flat list of the
+//     unique values the partitions hold at the child path, in partition order. A partition
+//     without the value contributes nothing; a list value contributes its elements. The parent
+//     path is replaced, and is an empty list when no partition contributes. A trailing "?" is
+//     accepted and changes nothing.
+//
+// The items variable is always merged back by ID and cannot appear in either mapping.
+
 // BatchJoinConfig configures how a BATCH_JOIN gateway merges child partition results.
 type BatchJoinConfig struct {
 	// GatewayNodeID is the node ID of the paired BATCH_SPLIT gateway.
@@ -223,17 +238,6 @@ type BatchJoinConfig struct {
 	// IDField is the field name within each item used as the unique identifier.
 	// Must match the paired BATCH_SPLIT's id_field. Defaults to "id" if empty.
 	IDField string `json:"id_field,omitempty"`
-
-	// Collect brings named variables out of the child partitions, which otherwise hand back
-	// only their items. Each key is a variable dot-path inside the children; its value is the
-	// parent dot-path that receives a list of the children's values, in partition order.
-	//
-	// Children start with a copy of the parent's variables, so name a source the parent does
-	// not hold before the split: a value a child inherited is collected like one it set. A
-	// list value contributes its elements rather than itself, so a join can collect a path
-	// that a nested join collected into and still produce one flat list. The destination is
-	// replaced with the collected list, which is empty when no child holds the source.
-	Collect map[string]string `json:"collect,omitempty"`
 }
 
 // ParallelJoinConfig configures how a PARALLEL_JOIN gateway isolates its branches and
