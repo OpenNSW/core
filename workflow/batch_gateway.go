@@ -4,8 +4,6 @@
 package engine
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -66,17 +64,9 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	if join := g.nodes[joinNodeID]; join != nil && join.BatchJoin != nil {
 		collect = join.BatchJoin.Collect
 	}
-	// What the children inherit at each collected path, so only values they set or changed
-	// are collected.
-	inherited, err := snapshotCollectSources(collect, g.instance.WorkflowVariables)
-	if err != nil {
-		return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: %w", node.ID, err))
-	}
 
 	if len(items) == 0 {
-		if err := g.setCollectedVariables(collect, inherited, nil); err != nil {
-			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: %w", node.ID, err))
-		}
+		g.setCollectedVariables(collect, nil)
 		nodeInfo.Status = NodeStatusCompleted
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
 		return g.skipToJoinOutEdge(ctx, joinNodeID)
@@ -132,9 +122,7 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 	maputil.SetNestedKey(g.instance.WorkflowVariables, itemsVar, mergedItems)
 
 	// 8. Bring the join's collected variables up from the children.
-	if err := g.setCollectedVariables(collect, inherited, childVars); err != nil {
-		return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: %w", node.ID, err))
-	}
+	g.setCollectedVariables(collect, childVars)
 
 	g.instance.AuditTrail = append(g.instance.AuditTrail,
 		fmt.Sprintf("BATCH_SPLIT %s partitioned %d items into %d partitions", node.ID, len(items), len(partitions)))
@@ -360,29 +348,10 @@ func (g *graphInterpreter) skipToJoinOutEdge(ctx workflow.Context, joinNodeID st
 
 // --- Helpers ---
 
-// snapshotCollectSources records, as JSON, the value at each collected source path in the
-// parent's variables. A path the parent does not hold is absent from the result.
-func snapshotCollectSources(collect map[string]string, vars map[string]any) (map[string][]byte, error) {
-	inherited := make(map[string][]byte, len(collect))
-	for source := range collect {
-		value, exists := maputil.GetNestedKey(vars, source)
-		if !exists {
-			continue
-		}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("collect source %q: %w", source, err)
-		}
-		inherited[source] = encoded
-	}
-	return inherited, nil
-}
-
 // setCollectedVariables sets each collect destination to the list of values the children
-// hold at its source path, skipping a child whose value is the one it inherited and
-// spreading a list value into its elements. Destinations are written in sorted order so
-// replays produce the same variables.
-func (g *graphInterpreter) setCollectedVariables(collect map[string]string, inherited map[string][]byte, childVars []map[string]any) error {
+// hold at its source path, spreading a list value into its elements. Destinations are
+// written in sorted order so replays produce the same variables.
+func (g *graphInterpreter) setCollectedVariables(collect map[string]string, childVars []map[string]any) {
 	sources := make([]string, 0, len(collect))
 	for source := range collect {
 		sources = append(sources, source)
@@ -396,15 +365,6 @@ func (g *graphInterpreter) setCollectedVariables(collect map[string]string, inhe
 			if !exists {
 				continue
 			}
-			if before, wasInherited := inherited[source]; wasInherited {
-				encoded, err := json.Marshal(value)
-				if err != nil {
-					return fmt.Errorf("collect source %q: %w", source, err)
-				}
-				if bytes.Equal(encoded, before) {
-					continue
-				}
-			}
 			if list, ok := value.([]any); ok {
 				values = append(values, list...)
 			} else {
@@ -413,7 +373,6 @@ func (g *graphInterpreter) setCollectedVariables(collect map[string]string, inhe
 		}
 		maputil.SetNestedKey(g.instance.WorkflowVariables, collect[source], values)
 	}
-	return nil
 }
 
 // toItemSlice converts a raw interface value to a slice of map[string]any items.

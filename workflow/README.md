@@ -88,12 +88,12 @@ join merges back only the items. To bring anything else out of the partitions, n
                   "collect": { "treatment.certificate": "treatment.certificates" } } }
 ```
 
-* A child's value is collected only when the child set or changed it; a value it merely
-  inherited from the parent is skipped.
+* Children start with a copy of the parent's variables, and a value a child inherited is
+  collected like one it set. Name a source the parent does not hold before the split.
 * A list value contributes its elements, so an outer join can collect the path an inner join
   collected into and still get one flat list.
-* The parent path is set to an empty list when no child contributes, including when no items
-  reach the split.
+* The destination is replaced with the collected list, which is empty when no child holds the
+  source, including when no items reach the split.
 * `collect` cannot read or write the items variable, and each destination has one source.
 
 ### Dynamic Fan-out Configuration (`SplitTaskConfig`)

@@ -228,11 +228,11 @@ type BatchJoinConfig struct {
 	// only their items. Each key is a variable dot-path inside the children; its value is the
 	// parent dot-path that receives a list of the children's values, in partition order.
 	//
-	// A child's value is collected only when the child set or changed it, so a value every
-	// child inherited from the parent is not collected once per child. A list value
-	// contributes its elements rather than itself, so a join can collect a path that a nested
-	// join already collected and still produce one flat list. The parent path is set to an
-	// empty list when no child contributes.
+	// Children start with a copy of the parent's variables, so name a source the parent does
+	// not hold before the split: a value a child inherited is collected like one it set. A
+	// list value contributes its elements rather than itself, so a join can collect a path
+	// that a nested join collected into and still produce one flat list. The destination is
+	// replaced with the collected list, which is empty when no child holds the source.
 	Collect map[string]string `json:"collect,omitempty"`
 }
 

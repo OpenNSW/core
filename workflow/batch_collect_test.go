@@ -110,18 +110,19 @@ func (s *BatchGatewayTestSuite) TestBatchJoinCollect_GathersEachPartitionsValue(
 	s.Len(vars["commodities"], 3, "items still merge back alongside the collected variable")
 }
 
-func (s *BatchGatewayTestSuite) TestBatchJoinCollect_SkipsValueTheChildOnlyInherited() {
+func (s *BatchGatewayTestSuite) TestBatchJoinCollect_CollectsAnInheritedValueToo() {
 	env := s.newCollectTestEnv()
 	s.onTask(env, "FOOD_TASK", map[string]any{"doc": "food-cert"})
 	s.onTask(env, "GOODS_TASK", map[string]any{})
 
-	vars := s.runCollectWorkflow(env, twoPartitionCollectDef("collect-skips-inherited"), map[string]any{
+	vars := s.runCollectWorkflow(env, twoPartitionCollectDef("collect-inherited"), map[string]any{
 		"commodities": collectTestItems,
 		"treatment":   map[string]any{"doc": "set-before-the-split"},
 	})
 
-	// The goods child never set treatment.doc, so its inherited copy is not collected.
-	s.Equal([]any{"food-cert"}, s.collected(vars, "treatment.docs"))
+	// The goods child never set treatment.doc but holds the copy it inherited, which is
+	// collected too: collect gathers whatever each child holds at the source.
+	s.Equal([]any{"food-cert", "set-before-the-split"}, s.collected(vars, "treatment.docs"))
 }
 
 func (s *BatchGatewayTestSuite) TestBatchJoinCollect_FlattensWhatANestedJoinCollected() {
