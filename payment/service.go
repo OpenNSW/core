@@ -5,11 +5,11 @@ package payment
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -25,6 +25,20 @@ var ErrTransactionNotFound = errors.New("payment transaction not found")
 // currency that doesn't match the recorded transaction. Permanent and
 // suspicious, so it is never marked paid and the gateway should not retry.
 var ErrAmountMismatch = errors.New("webhook amount/currency mismatch")
+
+// ErrDuplicateReference is returned, wrapped, when a transaction already holds
+// the reference the ReferenceGenerator issued. The host can generate another
+// and retry the checkout.
+var ErrDuplicateReference = errors.New("payment reference already in use")
+
+// ReferenceGenerator issues the reference a payer pays against for a checkout,
+// in the host's format. It receives the checkout request with a copy of its
+// metadata. Each reference it issues is unique; CreateCheckoutSession returns
+// ErrDuplicateReference for one a transaction already holds. It is safe for
+// concurrent use.
+type ReferenceGenerator interface {
+	GenerateReference(ctx context.Context, req CreateCheckoutRequest) (string, error)
+}
 
 // toDomainStatus maps a canonical gateway WebhookStatus onto the internal
 // PaymentStatus. It is total over the known statuses and rejects anything else
@@ -72,7 +86,8 @@ type PaymentService interface {
 	// ListAvailableMethods returns the rendering information for all active payment gateways.
 	ListAvailableMethods(ctx context.Context) ([]GatewayInfo, error)
 
-	// CreateCheckoutSession initializes a payment session and generates a ReferenceNumber.
+	// CreateCheckoutSession initializes a payment session under a ReferenceNumber
+	// from the service's ReferenceGenerator.
 	CreateCheckoutSession(ctx context.Context, req CreateCheckoutRequest) (*CreateCheckoutResponse, error)
 
 	// ValidateReference is used for real-time validation requests from gateways.
@@ -90,14 +105,20 @@ type PaymentService interface {
 type paymentService struct {
 	repo          PaymentRepository
 	registry      GatewayRegistry
+	refGen        ReferenceGenerator
 	taskCompleter TaskCompleter
 }
 
-// NewPaymentService initializes a new payment service.
-func NewPaymentService(repo PaymentRepository, registry GatewayRegistry) PaymentService {
+// NewPaymentService initializes a payment service that takes each checkout's
+// reference from refGen, which must be non-nil.
+func NewPaymentService(repo PaymentRepository, registry GatewayRegistry, refGen ReferenceGenerator) PaymentService {
+	if refGen == nil {
+		panic("payment: refGen is nil")
+	}
 	return &paymentService{
 		repo:     repo,
 		registry: registry,
+		refGen:   refGen,
 	}
 }
 
@@ -107,22 +128,6 @@ func (s *paymentService) SetTaskCompleter(completer TaskCompleter) {
 
 func (s *paymentService) ListAvailableMethods(ctx context.Context) ([]GatewayInfo, error) {
 	return s.registry.ListInfo(), nil
-}
-
-const referenceCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-// generatePaymentReference returns a non-guessable NSW reference of the form
-// TNSWXXXXXXXX using crypto-grade randomness. Mirrors the generator in
-// internal/payments.
-func generatePaymentReference() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("failed to generate random bytes: %v", err))
-	}
-	for i := range b {
-		b[i] = referenceCharset[int(b[i])%len(referenceCharset)]
-	}
-	return fmt.Sprintf("TNSW%s", string(b))
 }
 
 func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCheckoutRequest) (*CreateCheckoutResponse, error) {
@@ -143,22 +148,18 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		return nil, fmt.Errorf("gateway %s rejected checkout metadata: %w", req.GatewayID, err)
 	}
 
-	// 1. Generate a unique NSW ReferenceNumber, retrying on the rare collision.
-	var generatedRef string
-	const maxRetries = 10
-	for i := 0; i < maxRetries; i++ {
-		candidate := generatePaymentReference()
-		existing, err := s.repo.GetByReferenceNumber(ctx, candidate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check existing reference number: %w", err)
-		}
-		if existing == nil {
-			generatedRef = candidate
-			break
-		}
+	// 1. Take the ReferenceNumber from the host's generator, which gets the
+	// request with a copy of its metadata: the checkout persists and sends the
+	// metadata it was given. The store's unique index on reference_number guards
+	// against a duplicate.
+	refReq := req
+	refReq.Metadata = maps.Clone(req.Metadata)
+	generatedRef, err := s.refGen.GenerateReference(ctx, refReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate payment reference: %w", err)
 	}
 	if generatedRef == "" {
-		return nil, fmt.Errorf("failed to generate a unique payment reference after %d attempts", maxRetries)
+		return nil, errors.New("failed to generate payment reference: the generator returned an empty reference")
 	}
 
 	// 2. Write-ahead: persist a PENDING transaction BEFORE contacting the gateway.
