@@ -56,6 +56,8 @@ func (t *testStore) PersistSubmission(context.Context, string, string, int64, ma
 
 func (t *testStore) CompleteTask(context.Context, string, int64) (int64, error) { return 0, nil }
 
+func (t *testStore) CancelTask(context.Context, string) (int64, error) { return 0, nil }
+
 func TestTaskStoreInterface(t *testing.T) {
 	var store TaskStore = &testStore{tasks: make(map[string]TaskRecord)}
 
