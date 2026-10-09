@@ -58,7 +58,7 @@ func newTokenExtractorWithOptions(t *testing.T, opts ...Option) (*TokenExtractor
 		})
 	}))
 
-	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID}, opts...)
+	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, opts...)
 	if err != nil {
 		jwksServer.Close()
 		t.Fatalf("failed to create token extractor: %v", err)

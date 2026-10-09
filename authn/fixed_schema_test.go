@@ -195,7 +195,7 @@ func TestRolesClaim(t *testing.T) {
 
 func TestRolesClaim_NameValidation(t *testing.T) {
 	construct := func(opts ...Option) error {
-		_, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID}, opts...)
+		_, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, opts...)
 		return err
 	}
 

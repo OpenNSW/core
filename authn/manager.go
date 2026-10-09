@@ -55,7 +55,7 @@ func NewManager(userProfileService UserProfileService, authConfig Config) (*Mana
 	}
 
 	tokenExtractor, err := NewTokenExtractorWithClient(
-		authConfig.JWKSURL, authConfig.Issuer, authConfig.Audience, authConfig.ClientIDs, httpClient,
+		authConfig.JWKSURL, authConfig.Issuer, authConfig.Audience, httpClient,
 		buildClaimOptions(authConfig)...,
 	)
 	if err != nil {
