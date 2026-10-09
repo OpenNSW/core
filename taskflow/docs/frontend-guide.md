@@ -128,6 +128,7 @@ The `zoneview` renderer (see [template reference](template-reference.md#the-zone
 - `id` is the section's key in the render config. It is unique within the view.
 - `title` is omitted when the section has none.
 - `handles` lists the buttons legal in the current state; it is omitted when there are none, which means the entry is read-only.
+- A handle's `messages` is present only when the render config declares one, and its JSON value arrives unchanged, though encoding may compact whitespace and escape `<`, `>` and `&`. Its shape is defined by your frontend, not by the renderer: it's the place to say what to tell the user once the command has been dispatched.
 - An empty view is `[]`.
 
 The frontend renders the entries top to bottom, picking a widget by `type`.
