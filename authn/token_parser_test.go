@@ -114,13 +114,6 @@ func TestTokenExtractor_ExtractPrincipalFromHeader_MissingClaims(t *testing.T) {
 			errSubstr: "jwt missing client_id claim",
 		},
 		{
-			name: "unexpected client_id",
-			mutate: func(claims jwt.MapClaims) {
-				claims["client_id"] = "OTHER"
-			},
-			errSubstr: "unexpected client_id claim",
-		},
-		{
 			name: "unsupported grant_type",
 			mutate: func(claims jwt.MapClaims) {
 				claims["grant_type"] = "password"
@@ -207,6 +200,26 @@ func TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU(t *testing.T) {
 	}
 }
 
+// TestTokenExtractor_AcceptsAnyClientIDForAudience documents that there is no
+// client allowlist: aud binds a token to this service, and which clients may
+// obtain such a token is the IdP's decision. Restricting callers by client_id
+// is authorization policy, not authentication.
+func TestTokenExtractor_AcceptsAnyClientIDForAudience(t *testing.T) {
+	extractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
+
+	claims := newBaseClaims(ClientCredentialsGrant)
+	claims["client_id"] = "SOME_OTHER_CLIENT"
+
+	principal, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+	if err != nil {
+		t.Fatalf("expected success for a token issued for this audience, got %v", err)
+	}
+	if principal.ClientPrincipal == nil || principal.ClientPrincipal.ClientID != "SOME_OTHER_CLIENT" {
+		t.Fatalf("unexpected principal: %#v", principal)
+	}
+}
+
 func TestTokenExtractor_JWKSIsCached(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -245,7 +258,7 @@ func TestTokenExtractor_JWKSIsCached(t *testing.T) {
 		t.Fatalf("failed to sign token: %v", err)
 	}
 
-	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID})
+	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID)
 	if err != nil {
 		t.Fatalf("failed to create token extractor: %v", err)
 	}
@@ -328,7 +341,7 @@ func TestTokenExtractor_RefreshesJWKSOnUnknownKid(t *testing.T) {
 		t.Fatalf("failed to sign new token: %v", err)
 	}
 
-	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID})
+	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID)
 	if err != nil {
 		t.Fatalf("failed to create token extractor: %v", err)
 	}
@@ -382,7 +395,7 @@ func TestTokenExtractor_UnknownKidAfterRefresh(t *testing.T) {
 		t.Fatalf("failed to sign token: %v", err)
 	}
 
-	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID})
+	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID)
 	if err != nil {
 		t.Fatalf("failed to create token extractor: %v", err)
 	}
@@ -418,7 +431,7 @@ func TestTokenExtractor_JWKSFetchError(t *testing.T) {
 		t.Fatalf("failed to sign token: %v", err)
 	}
 
-	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID, []string{testClientID})
+	extractor, err := NewTokenExtractor(jwksServer.URL, testIssuer, testClientID)
 	if err != nil {
 		t.Fatalf("failed to create token extractor: %v", err)
 	}
@@ -430,11 +443,10 @@ func TestTokenExtractor_JWKSFetchError(t *testing.T) {
 
 func TestTokenExtractor_ValidateConfig_MissingHTTPClient(t *testing.T) {
 	extractor := &TokenExtractor{
-		jwksURL:      "https://localhost/jwks",
-		expIssuer:    testIssuer,
-		expAudience:  testClientID,
-		expClientIDs: []string{testClientID},
-		httpClient:   nil,
+		jwksURL:     "https://localhost/jwks",
+		expIssuer:   testIssuer,
+		expAudience: testClientID,
+		httpClient:  nil,
 	}
 
 	if err := extractor.validateConfig(); err == nil {

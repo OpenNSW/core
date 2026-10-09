@@ -12,9 +12,6 @@ func TestConfigValidate(t *testing.T) {
 		JWKSURL:  "https://localhost/jwks",
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
-		ClientIDs: []string{
-			"TRADER_PORTAL_APP",
-		},
 	}
 
 	// Each error names the setting by its yaml key, so a config file author
@@ -25,12 +22,11 @@ func TestConfigValidate(t *testing.T) {
 		wantErr string
 	}{
 		{name: "valid config", config: valid},
-		{name: "missing jwks url", config: Config{Issuer: valid.Issuer, Audience: valid.Audience, ClientIDs: valid.ClientIDs}, wantErr: "jwksURL is required"},
-		{name: "invalid jwks url", config: Config{JWKSURL: "jwks", Issuer: valid.Issuer, Audience: valid.Audience, ClientIDs: valid.ClientIDs}, wantErr: "jwksURL must be a valid absolute URL"},
-		{name: "missing issuer", config: Config{JWKSURL: valid.JWKSURL, Audience: valid.Audience, ClientIDs: valid.ClientIDs}, wantErr: "issuer is required"},
-		{name: "invalid issuer", config: Config{JWKSURL: valid.JWKSURL, Issuer: "ftp://localhost", Audience: valid.Audience, ClientIDs: valid.ClientIDs}, wantErr: "issuer must use http or https"},
-		{name: "missing audience", config: Config{JWKSURL: valid.JWKSURL, Issuer: valid.Issuer, ClientIDs: valid.ClientIDs}, wantErr: "audience is required"},
-		{name: "missing client ids", config: Config{JWKSURL: valid.JWKSURL, Issuer: valid.Issuer, Audience: valid.Audience}, wantErr: "clientIDs is required"},
+		{name: "missing jwks url", config: Config{Issuer: valid.Issuer, Audience: valid.Audience}, wantErr: "jwksURL is required"},
+		{name: "invalid jwks url", config: Config{JWKSURL: "jwks", Issuer: valid.Issuer, Audience: valid.Audience}, wantErr: "jwksURL must be a valid absolute URL"},
+		{name: "missing issuer", config: Config{JWKSURL: valid.JWKSURL, Audience: valid.Audience}, wantErr: "issuer is required"},
+		{name: "invalid issuer", config: Config{JWKSURL: valid.JWKSURL, Issuer: "ftp://localhost", Audience: valid.Audience}, wantErr: "issuer must use http or https"},
+		{name: "missing audience", config: Config{JWKSURL: valid.JWKSURL, Issuer: valid.Issuer}, wantErr: "audience is required"},
 	}
 
 	for _, tt := range tests {
@@ -51,10 +47,9 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidate_RejectsFixedSchemaExtraClaim(t *testing.T) {
 	valid := Config{
-		JWKSURL:   "https://localhost/jwks",
-		Issuer:    "https://localhost/token",
-		Audience:  "TRADER_PORTAL_APP",
-		ClientIDs: []string{"TRADER_PORTAL_APP"},
+		JWKSURL:  "https://localhost/jwks",
+		Issuer:   "https://localhost/token",
+		Audience: "TRADER_PORTAL_APP",
 	}
 
 	tests := []struct {
@@ -97,7 +92,6 @@ func TestConfigValidate_AllowsFormerlyFixedClaims(t *testing.T) {
 		JWKSURL:    "https://localhost/jwks",
 		Issuer:     "https://localhost/token",
 		Audience:   "TRADER_PORTAL_APP",
-		ClientIDs:  []string{"TRADER_PORTAL_APP"},
 		UserClaims: ClaimSpec{Optional: []string{"email", "phone_number", "ouId", "ouHandle", "given_name"}},
 	}
 	if err := cfg.Validate(); err != nil {
@@ -113,7 +107,6 @@ func TestConfigValidate_AllowsNamespacedClaimNames(t *testing.T) {
 		JWKSURL:    "https://localhost/jwks",
 		Issuer:     "https://localhost/token",
 		Audience:   "TRADER_PORTAL_APP",
-		ClientIDs:  []string{"TRADER_PORTAL_APP"},
 		RolesClaim: "https://app.example.com/roles",
 		UserClaims: ClaimSpec{Optional: []string{"https://app.example.com/department"}},
 	}
