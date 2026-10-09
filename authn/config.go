@@ -13,11 +13,10 @@ import (
 // application config struct and populated generically (e.g. via
 // yaml.Unmarshal).
 type Config struct {
-	JWKSURL               string   `yaml:"jwksURL"`
-	Issuer                string   `yaml:"issuer"`
-	Audience              string   `yaml:"audience"`
-	ClientIDs             []string `yaml:"clientIDs"`
-	InsecureSkipTLSVerify bool     `yaml:"insecureSkipTLSVerify"`
+	JWKSURL               string `yaml:"jwksURL"`
+	Issuer                string `yaml:"issuer"`
+	Audience              string `yaml:"audience"`
+	InsecureSkipTLSVerify bool   `yaml:"insecureSkipTLSVerify"`
 
 	// UserClaims declares extra JWT claims (beyond authn's fixed schema, e.g.
 	// "email", "phone_number", "ouId", "ouHandle", "given_name") to extract
@@ -48,10 +47,6 @@ func (c Config) Validate() error {
 	}
 	if c.Audience == "" {
 		return fmt.Errorf("audience is required")
-	}
-
-	if len(c.ClientIDs) == 0 {
-		return fmt.Errorf("clientIDs is required")
 	}
 
 	if err := validateRolesClaimName(c.rolesClaim()); err != nil {

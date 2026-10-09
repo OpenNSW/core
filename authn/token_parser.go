@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -112,11 +111,10 @@ const defaultJWKSCacheTTL = 5 * time.Minute
 // It validates JWT signatures using JWKS and resolves a user principal
 // or client principal based on grant type.
 type TokenExtractor struct {
-	jwksURL      string
-	expIssuer    string
-	expAudience  string
-	expClientIDs []string
-	httpClient   *http.Client
+	jwksURL     string
+	expIssuer   string
+	expAudience string
+	httpClient  *http.Client
 
 	// userClaims / clientClaims are the raw declarations accumulated from
 	// WithUserClaims / WithClientClaims. They are validated and flattened into
@@ -137,25 +135,24 @@ type TokenExtractor struct {
 	jwksCacheTTL  time.Duration
 }
 
-func NewTokenExtractor(jwksURL, issuer, audience string, expectedClientIDs []string, opts ...Option) (*TokenExtractor, error) {
-	return newExtractor(jwksURL, issuer, audience, expectedClientIDs, &http.Client{Timeout: 10 * time.Second}, opts...)
+func NewTokenExtractor(jwksURL, issuer, audience string, opts ...Option) (*TokenExtractor, error) {
+	return newExtractor(jwksURL, issuer, audience, &http.Client{Timeout: 10 * time.Second}, opts...)
 }
 
-func NewTokenExtractorWithClient(jwksURL, issuer, audience string, expectedClientIDs []string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
+func NewTokenExtractorWithClient(jwksURL, issuer, audience string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
 	if httpClient == nil {
-		return NewTokenExtractor(jwksURL, issuer, audience, expectedClientIDs, opts...)
+		return NewTokenExtractor(jwksURL, issuer, audience, opts...)
 	}
-	return newExtractor(jwksURL, issuer, audience, expectedClientIDs, httpClient, opts...)
+	return newExtractor(jwksURL, issuer, audience, httpClient, opts...)
 }
 
 // newExtractor is the single construction path, so a defaulted field
 // (rolesClaim) can only be forgotten in one place.
-func newExtractor(jwksURL, issuer, audience string, expectedClientIDs []string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
+func newExtractor(jwksURL, issuer, audience string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
 	extractor := &TokenExtractor{
 		jwksURL:      strings.TrimSpace(jwksURL),
 		expIssuer:    strings.TrimSpace(issuer),
 		expAudience:  strings.TrimSpace(audience),
-		expClientIDs: expectedClientIDs,
 		jwksCacheTTL: defaultJWKSCacheTTL,
 		httpClient:   httpClient,
 		rolesClaim:   defaultRolesClaim,
@@ -181,9 +178,6 @@ func (te *TokenExtractor) validateConfig() error {
 	}
 	if te.expAudience == "" {
 		return fmt.Errorf("audience is not configured")
-	}
-	if len(te.expClientIDs) == 0 {
-		return fmt.Errorf("client ids are not configured")
 	}
 	if te.httpClient == nil {
 		return fmt.Errorf("http client is not configured")
@@ -254,9 +248,6 @@ func (te *TokenExtractor) ExtractPrincipalFromHeader(authHeader string) (*Princi
 
 	if claims.ClientID == "" {
 		return nil, fmt.Errorf("jwt missing client_id claim")
-	}
-	if !slices.Contains(te.expClientIDs, claims.ClientID) {
-		return nil, fmt.Errorf("unexpected client_id claim: %q", claims.ClientID)
 	}
 
 	switch claims.GrantType {

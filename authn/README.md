@@ -8,10 +8,9 @@ JWT-based authentication. Validates tokens against a JWKS endpoint, extracts ide
 import "github.com/OpenNSW/core/authn"
 
 manager, err := authn.NewManager(userProfileSvc, authn.Config{
-    JWKSURL:   "https://idp.example.com/.well-known/jwks.json",
-    Issuer:    "https://idp.example.com",
-    Audience:  "my-api",
-    ClientIDs: []string{"my-m2m-client"},
+    JWKSURL:  "https://idp.example.com/.well-known/jwks.json",
+    Issuer:   "https://idp.example.com",
+    Audience: "my-api",
 
     // Optional: declare any claims beyond the fixed schema you need. See
     // "Extra claims" below.
@@ -28,13 +27,13 @@ authn:
   jwksURL: https://idp.example.com/.well-known/jwks.json
   issuer: https://idp.example.com
   audience: my-api
-  clientIDs:
-    - my-m2m-client
   userClaims:
     optional: [email, ouId, ouHandle]
 ```
 
 > **Note:** every token must carry a `grant_type` claim — it decides user vs. client principal, and a token without it is rejected with `unsupported grant type`. This is not a standard access-token claim (RFC 9068 does not define it), so an IdP that omits it will not work with this package as-is.
+
+> **Note:** `audience` is what binds a token to this service: any client the IdP issues a token for this audience is accepted. Which clients may call the service is authorization policy — restrict it in authz or the application using the principal's `ClientID`, not here. If your IdP sets `aud` to the requesting client rather than the API, configure an audience / API resource for the service in the IdP.
 
 ## Middleware
 
@@ -82,10 +81,9 @@ email := authn.GetAuthContext(r.Context()).ExtraClaims().String("email")
 
 ```go
 manager, err := authn.NewManager(userProfileSvc, authn.Config{
-    JWKSURL:   "...",
-    Issuer:    "...",
-    Audience:  "...",
-    ClientIDs: []string{"my-m2m-client"},
+    JWKSURL:  "...",
+    Issuer:   "...",
+    Audience: "...",
 
     UserClaims: authn.ClaimSpec{
         Optional: []string{"email", "ouId", "ouHandle", "given_name"},
@@ -100,7 +98,7 @@ manager, err := authn.NewManager(userProfileSvc, authn.Config{
 Or, constructing a `TokenExtractor` directly:
 
 ```go
-extractor, err := authn.NewTokenExtractor(jwksURL, issuer, audience, clientIDs,
+extractor, err := authn.NewTokenExtractor(jwksURL, issuer, audience,
     authn.WithUserClaims(authn.ClaimSpec{
         Optional: []string{"email", "ouId", "ouHandle"},
         Required: []string{"phone_number"},
