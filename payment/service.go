@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -31,9 +32,10 @@ var ErrAmountMismatch = errors.New("webhook amount/currency mismatch")
 var ErrDuplicateReference = errors.New("payment reference already in use")
 
 // ReferenceGenerator issues the reference a payer pays against for a checkout,
-// in the host's format. Each reference it issues is unique;
-// CreateCheckoutSession returns ErrDuplicateReference for one a transaction
-// already holds. It is safe for concurrent use.
+// in the host's format. It receives the checkout request with a copy of its
+// metadata. Each reference it issues is unique; CreateCheckoutSession returns
+// ErrDuplicateReference for one a transaction already holds. It is safe for
+// concurrent use.
 type ReferenceGenerator interface {
 	GenerateReference(ctx context.Context, req CreateCheckoutRequest) (string, error)
 }
@@ -103,20 +105,20 @@ type PaymentService interface {
 type paymentService struct {
 	repo          PaymentRepository
 	registry      GatewayRegistry
-	references    ReferenceGenerator
+	refGen        ReferenceGenerator
 	taskCompleter TaskCompleter
 }
 
 // NewPaymentService initializes a payment service that takes each checkout's
-// reference from references, which must be non-nil.
-func NewPaymentService(repo PaymentRepository, registry GatewayRegistry, references ReferenceGenerator) PaymentService {
-	if references == nil {
-		panic("payment: references is nil")
+// reference from refGen, which must be non-nil.
+func NewPaymentService(repo PaymentRepository, registry GatewayRegistry, refGen ReferenceGenerator) PaymentService {
+	if refGen == nil {
+		panic("payment: refGen is nil")
 	}
 	return &paymentService{
-		repo:       repo,
-		registry:   registry,
-		references: references,
+		repo:     repo,
+		registry: registry,
+		refGen:   refGen,
 	}
 }
 
@@ -146,9 +148,13 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		return nil, fmt.Errorf("gateway %s rejected checkout metadata: %w", req.GatewayID, err)
 	}
 
-	// 1. Take the ReferenceNumber from the host's generator. The store's unique
-	// index on reference_number guards against a duplicate.
-	generatedRef, err := s.references.GenerateReference(ctx, req)
+	// 1. Take the ReferenceNumber from the host's generator, which gets the
+	// request with a copy of its metadata: the checkout persists and sends the
+	// metadata it was given. The store's unique index on reference_number guards
+	// against a duplicate.
+	refReq := req
+	refReq.Metadata = maps.Clone(req.Metadata)
+	generatedRef, err := s.refGen.GenerateReference(ctx, refReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate payment reference: %w", err)
 	}

@@ -280,6 +280,34 @@ func TestCreateCheckoutSession_ReferenceFromGenerator(t *testing.T) {
 	assert.Zero(t, repo.getCount, "the reference is stored as issued")
 }
 
+// The generator gets its own copy of the metadata: the transaction stores, the
+// gateway receives and the caller keeps the metadata the checkout was given.
+func TestCreateCheckoutSession_GeneratorGetsACopyOfTheMetadata(t *testing.T) {
+	repo := newMockRepo()
+	gw := new(MockGateway)
+	var gatewaySaw map[string]string
+	gw.On("CreateSession", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { gatewaySaw = args.Get(1).(SessionRequest).Metadata }).
+		Return(&SessionResponse{}, nil)
+	refs := &fakeReferences{issue: func(req CreateCheckoutRequest) (string, error) {
+		req.Metadata["fee"] = "rewritten"
+		req.Metadata["added"] = "by the generator"
+		return "REF-1", nil
+	}}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, refs)
+
+	req := validCheckoutReq()
+	req.Metadata["fee"] = "export-licence"
+	_, err := svc.CreateCheckoutSession(context.Background(), req)
+	require.NoError(t, err)
+
+	want := map[string]string{"fee": "export-licence"}
+	require.Contains(t, repo.txs, "REF-1")
+	assert.Equal(t, want, repo.txs["REF-1"].GatewayMetadata, "stored metadata")
+	assert.Equal(t, want, gatewaySaw, "gateway metadata")
+	assert.Equal(t, want, req.Metadata, "caller's metadata")
+}
+
 func TestCreateCheckoutSession_GeneratorError(t *testing.T) {
 	repo := newMockRepo()
 	gw := new(MockGateway) // CreateSession must not be reached

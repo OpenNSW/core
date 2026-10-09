@@ -139,13 +139,13 @@ registry, err := payment.NewRegistry("configs/payment_methods.json", factories)
 
 ### 4. Supply a ReferenceGenerator
 
-A `ReferenceGenerator` issues the reference a payer pays against, in your format. It receives the checkout request, so the format can depend on the checkout, e.g. on its metadata. Each reference it issues is unique: a reference a transaction already holds fails the checkout with `ErrDuplicateReference`.
+A `ReferenceGenerator` issues the reference a payer pays against, in your format. It receives the checkout request with a copy of its metadata, so the format can depend on the checkout, e.g. on its metadata. Each reference it issues is unique: a reference a transaction already holds fails the checkout with `ErrDuplicateReference`.
 
 ```go
-type references struct{ /* your ID source */ }
+type refGenerator struct{ /* your ID source */ }
 
-func (r references) GenerateReference(ctx context.Context, req payment.CreateCheckoutRequest) (string, error) {
-    return r.next(ctx, req) // e.g. "ACME" + 8 random characters
+func (g refGenerator) GenerateReference(ctx context.Context, req payment.CreateCheckoutRequest) (string, error) {
+    return g.next(ctx, req) // e.g. "ACME" + 8 random characters
 }
 ```
 
@@ -155,7 +155,7 @@ The `PaymentService` acts as the orchestrator using the Registry as a lookup.
 
 ```go
 repo := payment.NewPaymentRepository(db)
-service := payment.NewPaymentService(repo, registry, references{})
+service := payment.NewPaymentService(repo, registry, refGenerator{})
 
 handler := payment.NewHTTPHandler(service)
 ```
@@ -247,7 +247,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 ### Constructor Functions
 
 - `NewRegistry(configPath string, factories map[string]Factory)`: Create a gateway registry
-- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry, references ReferenceGenerator)`: Create payment service
+- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry, refGen ReferenceGenerator)`: Create payment service
 - `NewPaymentRepository(db *gorm.DB)`: Create payment repository
 - `NewHTTPHandler(service PaymentService)`: Create HTTP handler
 
@@ -290,7 +290,7 @@ func setupPayments(db *gorm.DB) *payment.HTTPHandler {
     
     // Setup service, with your ReferenceGenerator
     repo := payment.NewPaymentRepository(db)
-    service := payment.NewPaymentService(repo, registry, yourReferences)
+    service := payment.NewPaymentService(repo, registry, yourRefGen)
     
     // Return handler for HTTP endpoints
     return payment.NewHTTPHandler(service)
