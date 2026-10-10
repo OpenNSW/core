@@ -126,6 +126,10 @@ type TaskRecord struct {
     // 4. Render data — the active step's inputs plus what it and the caller added
     Data map[string]any
 
+    // 5. Claim — who is working the task; "" / nil when unclaimed
+    ClaimedBy string
+    ClaimedAt *time.Time
+
     CreatedAt, UpdatedAt time.Time
 }
 ```
@@ -151,6 +155,21 @@ Two sets of coordinates, never both active at once:
 
 - **Parent coordinates** are written once at `StartTask` and consumed once at `HandleTaskCompletion`.
 - **The active step** is overwritten every time a new step claims the row, and is what `CompleteTaskStep` checks against.
+
+### Claims
+
+A claim records who is working a task. `ClaimedBy` and `ClaimedAt` are written only by two more conditional statements, `ClaimTask` and `ReleaseTask`, called by the `TaskManager` methods of the same name:
+
+| Method        | Guard                                                   | Sets                                          |
+|---------------|---------------------------------------------------------|-----------------------------------------------|
+| `ClaimTask`   | unclaimed or claimed by the holder, and not `COMPLETED` | holder; claim time unless the holder already had it |
+| `ReleaseTask` | claimed by the holder                                   | clears both                                   |
+
+The claim columns and the step columns are independent: a claim never changes `Seq`, so it does not make an open view stale, and no step write touches the claim. The claim therefore lasts for the whole task, across every step and every loop inside the task workflow, and is kept after the task completes. A loop in the parent workflow starts a new task, which starts unclaimed.
+
+taskflow only stores claims. The holder is an opaque value chosen by the host, and the host decides who may claim and what a claim is required for (see the [integration guide](integration-guide.md#7-task-claims)).
+
+These are not the same as a step's claim (`ClaimStep`, above, which makes a step active), or the claims passed to the renderer (`renderer.Facts.Claims`, authorization facts such as `role:officer`).
 
 ## Lifecycle and states
 
