@@ -5,8 +5,12 @@ package gorm
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -44,6 +48,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 		task_workflow_id TEXT,
 		active_task_template_id TEXT, root_workflow_id TEXT NOT NULL DEFAULT '',
 		active_step_id TEXT NULL, seq INTEGER NOT NULL DEFAULT 0, data TEXT,
+		claimed_by TEXT NULL, claimed_at TIMESTAMP NULL,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`).Error; err != nil {
 		t.Fatalf("create table: %v", err)
 	}
@@ -202,6 +207,158 @@ func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	wantRows(t, n, err, 0)
 	n, err = s.CompleteTask(ctx, "nope", 1)
 	wantRows(t, n, err, 0)
+	n, err = s.ClaimTask(ctx, "nope", userA, t1)
+	wantRows(t, n, err, 0)
+	n, err = s.ReleaseTask(ctx, "nope", userA)
+	wantRows(t, n, err, 0)
+}
+
+var (
+	t1 = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	t2 = t1.Add(time.Hour)
+)
+
+const (
+	userA = "user-a"
+	userB = "user-b"
+)
+
+func wantClaim(t *testing.T, got store.TaskRecord, holder string, at *time.Time) {
+	t.Helper()
+	if got.ClaimedBy != holder {
+		t.Fatalf("ClaimedBy = %q, want %q", got.ClaimedBy, holder)
+	}
+	switch {
+	case at == nil && got.ClaimedAt != nil:
+		t.Fatalf("ClaimedAt = %v, want nil", got.ClaimedAt)
+	case at != nil && (got.ClaimedAt == nil || !got.ClaimedAt.Equal(*at)):
+		t.Fatalf("ClaimedAt = %v, want %v", got.ClaimedAt, *at)
+	}
+}
+
+func TestClaimTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	wantClaim(t, mustGet(t, s, ctx), "", nil) // a new task is unclaimed
+
+	n, err := s.ClaimTask(ctx, task1, userA, t1)
+	wantRows(t, n, err, 1)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+
+	// A repeat claim by the holder succeeds and keeps the original claimed_at.
+	n, err = s.ClaimTask(ctx, task1, userA, t2)
+	wantRows(t, n, err, 1)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+
+	// Another user cannot take a held claim.
+	n, err = s.ClaimTask(ctx, task1, userB, t2)
+	wantRows(t, n, err, 0)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+}
+
+func TestReleaseTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimTask(ctx, task1, userA, t1)
+
+	// Only the holder can release.
+	n, err := s.ReleaseTask(ctx, task1, userB)
+	wantRows(t, n, err, 0)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+
+	n, err = s.ReleaseTask(ctx, task1, userA)
+	wantRows(t, n, err, 1)
+	wantClaim(t, mustGet(t, s, ctx), "", nil)
+
+	// Releasing an unclaimed task changes nothing; the store leaves it to the caller to decide
+	// whether that is an error.
+	n, err = s.ReleaseTask(ctx, task1, userA)
+	wantRows(t, n, err, 0)
+
+	// Once released, anyone can claim, and claimed_at is the new claim's time.
+	n, err = s.ClaimTask(ctx, task1, userB, t2)
+	wantRows(t, n, err, 1)
+	wantClaim(t, mustGet(t, s, ctx), userB, &t2)
+}
+
+// A completed task cannot be claimed, but a claim held when it completed is kept as a record of
+// who worked it, and the holder can still release it.
+func TestClaimTask_CompletedTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimTask(ctx, task1, userA, t1)
+	_, _ = s.CompleteTask(ctx, task1, 1)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+
+	n, err := s.ClaimTask(ctx, task1, userA, t2)
+	wantRows(t, n, err, 0)
+	n, err = s.ClaimTask(ctx, task1, userB, t2)
+	wantRows(t, n, err, 0)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+
+	n, err = s.ReleaseTask(ctx, task1, userA)
+	wantRows(t, n, err, 1)
+	n, err = s.ClaimTask(ctx, task1, userB, t2)
+	wantRows(t, n, err, 0) // still completed
+}
+
+// Claims and step writes own separate columns: a claim must not make an open step stale, and the
+// step writes must not drop the claim.
+func TestClaimAndStepWrites_DoNotTouchEachOther(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+	_, _ = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", map[string]any{"form": "v1"})
+
+	n, err := s.ClaimTask(ctx, task1, userA, t1)
+	wantRows(t, n, err, 1)
+	got := mustGet(t, s, ctx)
+	wantRow(t, got, stepA, 4, "PENDING_USER")
+	if want := map[string]any{"form": "v1"}; !reflect.DeepEqual(got.Data, want) {
+		t.Errorf("Data = %v, want %v", got.Data, want)
+	}
+
+	// The step is submitted, the next step starts and the task completes, all under the claim.
+	_, _ = s.PersistSubmission(ctx, task1, stepA, 4, map[string]any{"a": "submitted"})
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	_, _ = s.WriteRenderState(ctx, task1, stepB, 5, "PENDING_USER", nil)
+	_, _ = s.CompleteTask(ctx, task1, 6)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+
+	// InitTask (a StartTask retry) does not reset the claim either.
+	s.InitTask(ctx, store.TaskRecord{TaskID: task1, TaskType: "TEST", State: "OLD", Data: map[string]any{}})
+	wantClaim(t, mustGet(t, s, ctx), userA, &t1)
+}
+
+// Many users claim at once and exactly one wins. The test database has one connection, so the
+// claims are serialised; this checks that the guard admits a single holder, while Postgres's
+// row lock does the same for truly concurrent updates.
+func TestClaimTask_ConcurrentClaimsHaveOneWinner(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	const n = 20
+	var (
+		wg   sync.WaitGroup
+		wins atomic.Int32
+	)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rows, err := s.ClaimTask(ctx, task1, fmt.Sprintf("user-%d", i), t1)
+			if err != nil {
+				t.Errorf("claim %d: %v", i, err)
+			}
+			if rows == 1 {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("%d claims won, want exactly 1", got)
+	}
+	if mustGet(t, s, ctx).ClaimedBy == "" {
+		t.Fatal("task is unclaimed after the race")
+	}
 }
 
 // The end-to-end example from the design doc: A runs at seq 4 and B is the final step. It
