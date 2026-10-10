@@ -47,6 +47,14 @@ type TaskRecord struct {
 	// Data holds generic, dynamic task execution state variables.
 	Data map[string]any `json:"data"`
 
+	// ClaimedBy is who holds the task's claim, or "" when it is unclaimed. It is an opaque value
+	// chosen by the host (for example an internal user ID); taskflow never interprets it or decides
+	// who may claim. It is written only by ClaimTask and ReleaseTask, never by InitTask or the step
+	// writes, and it is kept after the task completes.
+	ClaimedBy string `json:"claimed_by,omitempty"`
+	// ClaimedAt is when ClaimedBy first claimed the task; nil when unclaimed.
+	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -59,6 +67,10 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	cp := r // value copy duplicates all scalar fields
 	cp.RenderConfig = copyBytes(r.RenderConfig)
 	cp.Data = deepcopy.Map(r.Data)
+	if r.ClaimedAt != nil {
+		at := *r.ClaimedAt
+		cp.ClaimedAt = &at
+	}
 	return cp
 }
 
@@ -102,6 +114,11 @@ type StepClaim struct {
 // part of the write, so a write from a step that is no longer current changes nothing. Each returns
 // the number of rows changed: 0 means the write was stale and was dropped, which is not an error.
 // InitTask must not write ActiveStepID or Seq.
+//
+// ClaimTask and ReleaseTask are conditional writes of the same kind on the claim columns
+// (ClaimedBy, ClaimedAt). They are independent of the step columns: they never change Seq, so a
+// claim does not make an open step stale, and the step writes never change the claim. InitTask
+// must not write the claim columns either.
 type TaskStore interface {
 	// InitTask creates the row for a new task (state, parent coordinates, render config snapshot).
 	// It is called once, by StartTask, but must be idempotent: StartTask is a Temporal Activity and
@@ -125,4 +142,11 @@ type TaskStore interface {
 	PersistSubmission(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
 	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq.
 	CompleteTask(context context.Context, taskID string, seq int64) (int64, error)
+
+	// ClaimTask sets the claim to holder. Guard: the task is unclaimed or already claimed by
+	// holder, and its state is not StateCompleted. A repeat claim by the holder keeps the
+	// original ClaimedAt; otherwise ClaimedAt is set to at.
+	ClaimTask(context context.Context, taskID, holder string, at time.Time) (int64, error)
+	// ReleaseTask clears the claim. Guard: the task is claimed by holder.
+	ReleaseTask(context context.Context, taskID, holder string) (int64, error)
 }
