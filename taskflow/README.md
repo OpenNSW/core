@@ -103,6 +103,8 @@ if err := workflowRunner.StartWorker(); err != nil {
 | `CompleteTaskStep(ctx, taskID, stepID, payload)` | Portal HTTP handler | Submit form/interaction, resume that step |
 | `CompleteTaskStepByToken(ctx, token, payload)` | External callback handler | Same, addressed by the dispatch's callback token |
 | `GetAllTasks(ctx, parentWorkflowID)` | Portal HTTP handler | List tasks for a workflow instance |
+| `ClaimTask(ctx, taskID, holder)` | Portal HTTP handler | Claim the task for holder (unclaimed, or already theirs) |
+| `ReleaseTask(ctx, taskID, holder)` | Portal HTTP handler | Release holder's claim |
 
 ## Writing a plugin
 
@@ -132,6 +134,7 @@ Register it: `pluginRegistry.Register("MY_PLUGIN", &MyPlugin{remoteManager: rm})
 
 - **`TaskID` is the parent's step ID.** A step is one run of a TASK node, so a node revisited by a loop starts a new task. A step is addressed by its step ID (`CompleteTaskStep(ctx, taskID, stepID, payload)`), and a call for a step that is no longer active is rejected with `ErrStaleStep`.
 - **The task row is written through guarded statements.** `ActiveStepID` and `Seq` change only via `ClaimStep`, `WriteRenderState`, `PersistSubmission` and `CompleteTask`, each one atomic conditional write whose 0-rows result means "stale, dropped".
+- **taskflow stores claims; the host enforces them.** `ClaimedBy` and `ClaimedAt` change only via `ClaimTask` and `ReleaseTask`, never via the step writes, so a claim lasts for the whole task. Who may claim, and what a claim is required for, is the host's decision (see [`docs/integration-guide.md`](docs/integration-guide.md#7-task-claims)).
 - **Plugins suspend with `plugins.ErrSuspended`.** Synchronous plugins return `nil`; the workflow advances without waiting.
 - **`StartTask` returns `activity.ErrResultPending`** on the happy path. The parent activity suspends until `onTaskCompleted` fires.
 - **Submission payloads are scoped** to the active step's `OutputNamespace` in `TaskRecord.Data`. Callers send a raw object; the server stamps the correct key.

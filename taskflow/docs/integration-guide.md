@@ -43,6 +43,10 @@ type TaskStore interface {
     WriteRenderState(ctx context.Context, taskID, stepID string, seq int64, state string, data map[string]any) (int64, error)
     PersistSubmission(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
     CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error)
+
+    // Guarded claim writes: the same kind of statement, on the claim columns only.
+    ClaimTask(ctx context.Context, taskID, holder string, at time.Time) (int64, error)
+    ReleaseTask(ctx context.Context, taskID, holder string) (int64, error)
 }
 ```
 
@@ -62,13 +66,25 @@ type TaskStore interface {
   | `CompleteTask`      | stored `seq <= seq`                  | `state = COMPLETED`, `seq`                                                  |
 
   Return the number of rows changed. **0 rows means the write was stale and was dropped; it is not an error.** Return an error only when the store failed.
+- **The two claim methods** are conditional writes of the same kind, on `claimed_by` and `claimed_at` only. They must not change `seq` or the step columns, and the step methods and `InitTask` must not change the claim columns:
+
+  | Method        | Guard                                                              | Sets                                                                         |
+  |---------------|--------------------------------------------------------------------|------------------------------------------------------------------------------|
+  | `ClaimTask`   | (`claimed_by` is NULL or `holder`) and `state` is not `COMPLETED` | `claimed_by = holder`; `claimed_at = at`, unless `holder` already had the claim |
+  | `ReleaseTask` | `claimed_by = holder`                                              | `claimed_by` and `claimed_at` to NULL                                        |
+
+  Store an unclaimed task as NULL, not `""`, so the guard's `IS NULL` matches it. See [Task claims](#7-task-claims) for what the manager builds on these.
 
 A GORM implementation is in `store/gorm`. Its table needs, beyond the original columns:
 
 ```sql
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS active_step_id UUID NULL;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_by TEXT NULL;
+ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NULL;
 ```
+
+`InitTask` leaves the claim columns out of its insert, so tasks can still be created before they exist. Add them before anything calls `ClaimTask` or `ReleaseTask`.
 
 ### Concurrency
 
@@ -229,9 +245,43 @@ The render config is snapshotted into the `TaskRecord` at `StartTask` time. Once
 
 ---
 
+## 7. Task claims
+
+A claim records who is working a task, so two people don't act on it at once and everyone can see who has it. The split of work is:
+
+- **taskflow stores claims.** `TaskManager.ClaimTask(ctx, taskID, holder)` and `ReleaseTask(ctx, taskID, holder)` are atomic, and task views carry `claimed_by` and `claimed_at`. taskflow never decides who may claim a task or what a claim is required for.
+- **Your host enforces them.** It exposes claim and release endpoints, chooses the holder value, and decides which actions need the claim.
+
+The rules taskflow applies:
+
+- A claim succeeds when the task is unclaimed or already claimed by `holder`. A repeat claim keeps the original `claimed_at`.
+- A completed task cannot be claimed. A claim held when it completed is kept, as a record of who worked it, and can still be released.
+- Only the holder can release. Releasing an unclaimed task succeeds, so a repeated release is harmless.
+- A claim never changes the task's step or version, so it does not make an open view stale.
+- The claim is on the task row, so it lasts for the whole task, across every step inside it. A loop **inside** the task workflow (for example, sending a form back for more information) keeps the claim. A loop in the **parent** workflow starts a new task, which starts unclaimed.
+
+What your host needs to do:
+
+1. **Choose the holder value.** Use a stable, internal user ID, not an email or a display name. taskflow treats it as opaque. Resolve it to a name when you build responses.
+2. **Expose claim and release** for callers who can see the task, and map the errors (below).
+3. **Enforce the claim where your policy needs it.** For example, before calling `CompleteTaskStep`, reject a user who does not hold the claim. Exempt machine callers such as `CompleteTaskStepByToken`. The check and the submit are two calls, but that gap is harmless: the workflow still accepts only one submission for a step.
+4. **Optionally gate the view on the claim.** Pass a fact such as `claim:mine` in the claims you give the renderer, and use it in `visibleWhen.requireClaim` to hide actions from someone who does not hold the claim. The renderer rejects a render config that references a fact you did not pass, so pass every claim fact your configs use on every read, with `false` for the ones that don't hold.
+
+| Error                      | Returned by                    | HTTP |
+|----------------------------|--------------------------------|------|
+| `ErrHolderRequired`        | `ClaimTask`, `ReleaseTask`     | 400  |
+| `ErrTaskNotFound`          | `ClaimTask`, `ReleaseTask`     | 404  |
+| `*ClaimHeldError` (matches `ErrClaimHeld`) | `ClaimTask` | 409; its `Holder` says who has the claim |
+| `ErrTaskCompleted`         | `ClaimTask`                    | 409  |
+| `ErrNotClaimHolder`        | `ReleaseTask`                  | 403  |
+
+"Claim" here is not `TaskStore.ClaimStep`, which makes a step the task's active step, and not the claims passed to the renderer (`renderer.Facts.Claims`), which are authorization facts such as `role:officer`.
+
+---
+
 ## Error semantics
 
-`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
+`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
 
 The orchestrator uses two sentinel errors to signal "this isn't really an error, the workflow should park":
 
@@ -314,9 +364,9 @@ Things the demo cuts corners on, that you'll want for a real deployment:
 - **Durable `TaskStore`.** The demo writes JSON to `/tmp`. Use Postgres / Spanner / DynamoDB.
 - **Idempotent `onTaskCompleted`.** Temporal retries; you must tolerate replay.
 - **Observability.** Plugins log via `log.Printf`. Replace with your structured logger; surface task state transitions, plugin errors, and callback failures to your observability stack.
-- **Schema.** Add `active_step_id` and `seq` to your task table (section 1) before deploying a version that uses the guarded writes.
+- **Schema.** Add `active_step_id` and `seq` to your task table (section 1) before deploying a version that uses the guarded writes, and `claimed_by` and `claimed_at` before using task claims.
 - **Plugin error handling.** Decide what should retry vs. fail-fast. The orchestrator currently surfaces non-`ErrSuspended` plugin errors to Temporal, which will retry per the activity's retry policy.
-- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task. Add authn/authz at your HTTP layer.
+- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task. Add authn/authz at your HTTP layer, including any claim requirement (section 7).
 
 ---
 

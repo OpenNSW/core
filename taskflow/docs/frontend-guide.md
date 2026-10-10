@@ -48,6 +48,8 @@ The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskMan
     "state": "PENDING_USER",
     "step_id": "0a0a0a0a-0000-4000-8000-00000000000a",
     "version": 4,
+    "claimed_by": "4c1d2e3f-0000-4000-8000-000000000001",
+    "claimed_at": "2026-05-18T09:20:02Z",
     "created_at": "2026-05-18T09:14:11Z",
     "updated_at": "2026-05-18T09:14:11Z"
   }
@@ -79,6 +81,8 @@ The `view` key is omitted (the JSON tag is `omitempty`). Listing is intentionall
 ```
 
 `step_id` is the step the task is on; send it back when you act on the view. `version` goes up every time the task moves on. It is read-only — never send it — and is there so you can keep the newest of several views you fetched.
+
+`claimed_by` and `claimed_at` say who is working the task and since when. Both are left out when nobody has claimed it. `claimed_by` is whatever your server recorded, usually an internal user ID, so don't show it as is or compare it with values from your login token. Your server decides what a claim is required for, and will normally add a display name and whether the claim is yours. Claiming does not change `version`.
 
 ### `View` JSON structure
 
