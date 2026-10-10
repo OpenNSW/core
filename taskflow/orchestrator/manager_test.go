@@ -9,6 +9,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/testutil"
@@ -192,6 +193,32 @@ func (s *safeMockTaskStore) CompleteTask(_ context.Context, taskID string, seq i
 		return 0, nil
 	}
 	t.State, t.Seq = store.StateCompleted, seq
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) ClaimTask(_ context.Context, taskID, holder string, at time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || (t.ClaimedBy != "" && t.ClaimedBy != holder) || t.State == store.StateCompleted {
+		return 0, nil
+	}
+	if t.ClaimedBy != holder {
+		t.ClaimedBy, t.ClaimedAt = holder, &at
+	}
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) ReleaseTask(_ context.Context, taskID, holder string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.ClaimedBy != holder {
+		return 0, nil
+	}
+	t.ClaimedBy, t.ClaimedAt = "", nil
 	s.tasks[taskID] = t
 	return 1, nil
 }

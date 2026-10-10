@@ -87,6 +87,9 @@ var ErrStaleStep = errors.New("step is no longer the active step of the task")
 // completing. A caller serving HTTP should answer it with 400.
 var ErrStepIDRequired = errors.New("step ID is required")
 
+// ErrTaskNotFound means no task has the given ID. A caller serving HTTP should answer it with 404.
+var ErrTaskNotFound = errors.New("task not found")
+
 // TaskManager orchestrates decoupled tasks and interactions under parent workflows.
 // It bridges macro-level workflows and micro-level interactive tasks via a single DB entry per task.
 type TaskManager struct {
@@ -394,7 +397,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 
 	record, exists := tm.db.GetTask(ctx, taskID)
 	if !exists {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 	if record.State == store.StateCompleted {
 		return fmt.Errorf("%w: task %s already completed", ErrStaleStep, taskID)
@@ -534,7 +537,7 @@ func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskReco
 func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string) (TaskView, error) {
 	record, exists := tm.db.GetTask(context, taskID)
 	if !exists {
-		return TaskView{}, fmt.Errorf("task record %s not found", taskID)
+		return TaskView{}, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
 	view, err := tm.renderer.Render(context, record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
