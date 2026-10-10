@@ -898,3 +898,44 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 		t.Errorf("list = %+v", list)
 	}
 }
+
+// The task view and the list carry the claim, and leave it out of the JSON when there is none.
+func TestTaskViews_CarryTheClaim(t *testing.T) {
+	db := newSafeMockTaskStore()
+	ctx := context.Background()
+	db.InitTask(ctx, store.TaskRecord{TaskID: "task-c", TaskType: "TEST", State: "PENDING_USER", Data: map[string]any{}})
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	view, err := tm.GetTaskRenderInfo(ctx, "task-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"claimed_by", "claimed_at"} {
+		if _, ok := fields[key]; ok {
+			t.Errorf("unclaimed view has %q: %s", key, encoded)
+		}
+	}
+
+	if err := tm.ClaimTask(ctx, "task-c", "user-a"); err != nil {
+		t.Fatal(err)
+	}
+	view, err = tm.GetTaskRenderInfo(ctx, "task-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.ClaimedBy != "user-a" || view.ClaimedAt == nil {
+		t.Errorf("view claim = (%q, %v), want (user-a, a time)", view.ClaimedBy, view.ClaimedAt)
+	}
+	list := tm.GetAllTasks(ctx, "")
+	if len(list) != 1 || list[0].ClaimedBy != "user-a" || list[0].ClaimedAt == nil {
+		t.Errorf("list = %+v", list)
+	}
+}

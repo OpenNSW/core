@@ -21,7 +21,11 @@ type TaskView struct {
 	StepID string `json:"step_id,omitempty"`
 	// Version increases every time the task moves on. It is read-only: clients use it to keep the
 	// newest of several views they fetched, and it is never accepted as input.
-	Version   int64           `json:"version"`
+	Version int64 `json:"version"`
+	// ClaimedBy is who holds the task's claim, as the host recorded it (see TaskManager.ClaimTask);
+	// empty when the task is unclaimed. ClaimedAt is when they claimed it.
+	ClaimedBy string          `json:"claimed_by,omitempty"`
+	ClaimedAt *time.Time      `json:"claimed_at,omitempty"`
 	View      json.RawMessage `json:"view,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
