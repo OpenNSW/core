@@ -547,6 +547,8 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		State:     record.State,
 		StepID:    record.ActiveStepID,
 		Version:   record.Seq,
+		ClaimedBy: record.ClaimedBy,
+		ClaimedAt: record.ClaimedAt,
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt,
 		View:      view, // actually attach the render output
@@ -571,6 +573,8 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, caseID string) []TaskVie
 			State:     r.State,
 			StepID:    r.ActiveStepID,
 			Version:   r.Seq,
+			ClaimedBy: r.ClaimedBy,
+			ClaimedAt: r.ClaimedAt,
 			CreatedAt: r.CreatedAt,
 			UpdatedAt: r.UpdatedAt,
 		})

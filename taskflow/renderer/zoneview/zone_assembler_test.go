@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
 )
@@ -168,5 +169,34 @@ func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testi
 		if len(c.Handles) != 0 {
 			t.Errorf("slot %q offers %d handles while ADVANCING, want none", c.ID, len(c.Handles))
 		}
+	}
+}
+
+// The view carries the claim the record holds, and leaves it out of the JSON when there is none.
+func TestAssemble_CarriesTheClaim(t *testing.T) {
+	a := newTestAssembler(t)
+	claims := map[string]bool{"role:trader": false, "role:cha": true}
+
+	zv, err := a.Assemble(context.Background(), pendingRecord(claimGatedConfig), claims)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	encoded, err := json.Marshal(zv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"claimed_by"`) || strings.Contains(string(encoded), `"claimed_at"`) {
+		t.Errorf("unclaimed view carries a claim: %s", encoded)
+	}
+
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	claimed := pendingRecord(claimGatedConfig)
+	claimed.ClaimedBy, claimed.ClaimedAt = "user-a", &at
+	zv, err = a.Assemble(context.Background(), claimed, claims)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if zv.ClaimedBy != "user-a" || zv.ClaimedAt == nil || !zv.ClaimedAt.Equal(at) {
+		t.Errorf("view claim = (%q, %v), want (user-a, %v)", zv.ClaimedBy, zv.ClaimedAt, at)
 	}
 }
