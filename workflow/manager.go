@@ -67,10 +67,10 @@ type TaskPayload struct {
 	TaskTemplateID string
 	// Inputs contains the specific subset of WorkflowVariables mapped to this task's requirements.
 	Inputs map[string]any
-	// RootWorkflowID is the workflow ID of the top-level execution. WorkflowID alone doesn't
-	// identify the root for a deeply nested child, so the engine propagates this explicitly from
-	// the root through every level of nesting (see VarRootWorkflowID).
-	RootWorkflowID string
+	// CaseID is the case the workflow belongs to (see VarCaseID). It is the same at every level
+	// of nesting, so it names the case of a task in a deeply nested child, which WorkflowID
+	// alone does not.
+	CaseID string
 }
 
 // AdminParkPayload carries the context of a node parking in NodeStatusAwaitingAdmin, delivered
@@ -82,8 +82,8 @@ type AdminParkPayload struct {
 	WorkflowID string
 	// RunID is the unique identifier for this specific execution attempt.
 	RunID string
-	// RootWorkflowID is the workflow ID of the top-level execution (see TaskPayload.RootWorkflowID).
-	RootWorkflowID string
+	// CaseID is the case the parked workflow belongs to (see VarCaseID).
+	CaseID string
 	// NodeID is the ID of the graph node that parked. It names the definition, not this one run of
 	// it; see ActivationID for a run.
 	NodeID string
