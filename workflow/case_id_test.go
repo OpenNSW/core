@@ -49,3 +49,10 @@ func TestCaseIDDefaultsToTopLevelWorkflowID(t *testing.T) {
 	vars := runStartEnd(t, map[string]any{})
 	require.Equal(t, "default-test-workflow-id", vars[VarCaseID])
 }
+
+// An empty case ID is no case: the workflow is its own case, and the ID is stored so its
+// children copy it.
+func TestCaseIDEmptyDefaultsToTopLevelWorkflowID(t *testing.T) {
+	vars := runStartEnd(t, map[string]any{VarCaseID: ""})
+	require.Equal(t, "default-test-workflow-id", vars[VarCaseID])
+}

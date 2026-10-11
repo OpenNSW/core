@@ -556,10 +556,10 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 // field is intentionally not populated — callers should use GetTaskRenderInfo to fetch
 // the full rendered view for a specific task.
 //
-// If parentWorkflowID is non-empty, the result is narrowed to tasks spawned by that
-// parent workflow; an empty string returns all tasks.
-func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string) []TaskView {
-	records := tm.db.GetAllTasks(ctx, parentWorkflowID)
+// If caseID is non-empty, the result is narrowed to the case's tasks (TaskRecord.CaseID),
+// across every workflow of the case; an empty string returns all tasks.
+func (tm *TaskManager) GetAllTasks(ctx context.Context, caseID string) []TaskView {
+	records := tm.db.GetAllTasks(ctx, caseID)
 	resList := make([]TaskView, 0, len(records))
 	for _, r := range records {
 		resList = append(resList, TaskView{

@@ -33,10 +33,10 @@ func (t *testStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (T
 	return TaskRecord{}, false
 }
 
-func (t *testStore) GetAllTasks(_ context.Context, parentWorkflowID string) []TaskRecord {
+func (t *testStore) GetAllTasks(_ context.Context, caseID string) []TaskRecord {
 	var list []TaskRecord
 	for _, record := range t.tasks {
-		if parentWorkflowID != "" && record.ParentWorkflowID != parentWorkflowID {
+		if caseID != "" && record.CaseID != caseID {
 			continue
 		}
 		list = append(list, record)

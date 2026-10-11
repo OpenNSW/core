@@ -59,11 +59,13 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		Edges:             make([]Edge, len(def.Edges)),
 	}
 
-	// Only a top-level execution can reach this with VarCaseID unset — every nested child is
-	// started with it already present in initialWorkflowVariables (copied through wholesale by
+	// Only a top-level execution can reach this without a case — every nested child is started
+	// with one already present in initialWorkflowVariables (copied through wholesale by
 	// BATCH_SPLIT/PARALLEL_SPLIT, or set explicitly by SPLIT_TASK) — so a top-level workflow the
-	// host started without a case is its own case.
-	if _, ok := instance.WorkflowVariables[VarCaseID]; !ok {
+	// host started without a case, or with an empty one, is its own case. The check matches
+	// caseID()'s, and the ID is stored rather than only returned, so every child copies a
+	// non-empty case ID instead of falling back to its own workflow ID.
+	if v, _ := instance.WorkflowVariables[VarCaseID].(string); v == "" {
 		instance.WorkflowVariables[VarCaseID] = instance.ID
 	}
 
