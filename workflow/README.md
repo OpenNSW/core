@@ -91,7 +91,7 @@ Each partition runs as a child workflow, and the join merges its items back by I
 
 * **`input_mapping`** (parent path → child path): each partition starts with only the mapped
   variables, plus the engine's context variables (names starting with `_`, such as
-  `_root_workflow_id`). A missing source parks the split unless its key ends in `?`. A split
+  `_case_id`). A missing source parks the split unless its key ends in `?`. A split
   without an `input_mapping` gives its partitions no workflow variables besides their items.
 * **`output_mapping`** (child path → parent path): the parent path is replaced with a flat
   list of the unique values the partitions hold at the child path, in partition order. A

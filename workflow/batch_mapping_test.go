@@ -227,7 +227,7 @@ func withTaskInputs(def WorkflowDefinition) WorkflowDefinition {
 		"npqs.reference_number?": "parent_ref",
 		"secret?":                "secret",
 		"commodities?":           "items",
-		"_root_workflow_id?":     "root",
+		"_case_id?":              "root",
 	}
 	for i := range def.Nodes {
 		if def.Nodes[i].Type == NodeTypeTask {
@@ -316,7 +316,7 @@ func (s *BatchGatewayTestSuite) TestBatchValidation_SplitMappings() {
 		{"input: writes the items variable", map[string]string{"npqs.items": "commodities"}, nil, "cannot read or write the items variable"},
 		{"input: reads the items variable", map[string]string{"commodities": "all_items"}, nil, "cannot read or write the items variable"},
 		{"input: reads the items variable, optional", map[string]string{"commodities?": "all_items"}, nil, "cannot read or write the items variable"},
-		{"input: writes an engine variable", map[string]string{"npqs.root": "_root_workflow_id"}, nil, "reserved for the engine"},
+		{"input: writes an engine variable", map[string]string{"npqs.root": "_case_id"}, nil, "reserved for the engine"},
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {

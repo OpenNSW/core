@@ -171,10 +171,6 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	}
 	initialData["_task_id"] = taskID
 
-	// root_workflow_id is the top-level workflow's ID, propagated by the engine through every
-	// level of nesting (see engine.VarRootWorkflowID).
-	rootWorkflowID := payload.RootWorkflowID
-
 	record := store.TaskRecord{
 		TaskID:           taskID,
 		TaskType:         template.Type,
@@ -182,7 +178,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		RenderConfig:     renderConfig,
 		ParentWorkflowID: payload.WorkflowID,
 		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
-		RootWorkflowID:   rootWorkflowID,
+		CaseID:           payload.CaseID,       // the same at every level of nesting (see engine.VarCaseID)
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
 		CreatedAt:        time.Now(),
