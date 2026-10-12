@@ -216,26 +216,39 @@ func (s *Set) Registry(ctx context.Context, v int) (*Registry, error) {
 		return reg, nil
 	}
 
-	// One probe at a time; a caller that waited here may find its version already loaded.
+	if err := s.probe(ctx, v); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	reg, ok = s.views[v]
+	latest := s.latest
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("%w: %d (highest published is %d)", ErrUnknownManifestVersion, v, latest)
+	}
+	return reg, nil
+}
+
+// probe loads manifests above the highest loaded one, up to version upTo (0: until the loader
+// reports one missing). It returns nil when there was nothing to load. One probe runs at a time
+// (a caller that waited may find the work done), it holds no lock that lookups wait on while it
+// fetches, and after a probe that loads nothing new, whatever the reason, the next one waits
+// reprobeInterval, so retries of a pinned flow cannot turn into a loader round trip each.
+func (s *Set) probe(ctx context.Context, upTo int) error {
 	s.probeMu.Lock()
 	defer s.probeMu.Unlock()
 	s.mu.RLock()
-	reg, ok = s.views[v]
 	latest, lastEmpty := s.latest, s.lastEmptyProbe
 	s.mu.RUnlock()
-	if ok {
-		return reg, nil
-	}
-	if v < latest {
-		// Versions load contiguously from 1, so a gap below latest cannot happen.
-		return nil, fmt.Errorf("%w: %d", ErrUnknownManifestVersion, v)
+	if upTo != 0 && upTo <= latest {
+		return nil // loaded while this caller waited
 	}
 	if !lastEmpty.IsZero() && s.now().Sub(lastEmpty) < reprobeInterval {
-		return nil, fmt.Errorf("%w: %d (highest published is %d)", ErrUnknownManifestVersion, v, latest)
+		return nil
 	}
 
-	// Fetch only up to v: a later manifest, malformed or not, is no reason to fail this one.
-	cfgs, fetchErr := fetchManifests(ctx, s.loader, latest+1, v)
+	// Fetch only up to upTo: a later manifest, malformed or not, is no reason to fail this one.
+	cfgs, fetchErr := fetchManifests(ctx, s.loader, latest+1, upTo)
 
 	s.mu.Lock()
 	var addErr error
@@ -244,29 +257,25 @@ func (s *Set) Registry(ctx context.Context, v int) (*Registry, error) {
 			break
 		}
 	}
-	reg, ok = s.views[v]
-	if ok {
+	newLatest := s.latest
+	reached := upTo != 0 && newLatest >= upTo
+	if reached || (upTo == 0 && newLatest > latest && addErr == nil && fetchErr == nil) {
 		s.lastEmptyProbe = time.Time{}
 	} else {
-		// Any probe that did not produce v backs off, whatever the reason, so a pinned flow's
-		// retries cannot turn into a loader round trip each.
 		s.lastEmptyProbe = s.now()
 	}
-	newLatest := s.latest
 	s.mu.Unlock()
 
 	if newLatest > latest {
 		slog.InfoContext(ctx, "artifact manifests loaded on demand", "from", latest+1, "latest", newLatest)
 	}
-	switch {
-	case ok:
-		return reg, nil
-	case addErr != nil:
-		return nil, addErr
-	case fetchErr != nil:
-		return nil, fetchErr
+	if reached {
+		return nil
 	}
-	return nil, fmt.Errorf("%w: %d (highest published is %d)", ErrUnknownManifestVersion, v, newLatest)
+	if addErr != nil {
+		return addErr
+	}
+	return fetchErr
 }
 
 // CurrentRegistry returns the registry for the current version.
@@ -277,21 +286,39 @@ func (s *Set) CurrentRegistry() *Registry {
 }
 
 // GetExplicit fetches an explicitly versioned artifact without a manifest version, from
-// whichever loaded manifest lists it: every manifest up to the current one, and any newer one a
-// flow has loaded on demand. LoadSet guarantees every manifest that lists an (id, kind,
+// whichever manifest lists it. LoadSet guarantees every manifest that lists an (id, kind,
 // version) points it at the same path, so the result does not depend on which one is used.
 // Use it for artifacts requested by explicit version outside any flow, such as static data.
+//
+// A version no loaded manifest lists makes it probe for newer manifests (backing off as
+// Registry does): a form in a flow that a newer replica started can ask for a version only a
+// manifest this replica has not loaded lists.
 func GetExplicit[T Artifact](ctx context.Context, s *Set, id, version string) (T, error) {
 	var zero T
+	kind := kindOf[T]()
 	if version == "" {
-		return zero, fmt.Errorf("%w: %s/%s needs an explicit version", ErrNotFound, id, kindOf[T]())
+		return zero, fmt.Errorf("%w: %s/%s needs an explicit version", ErrNotFound, id, kind)
 	}
-	s.mu.RLock()
-	row, ok := s.explicit[Key{ID: id, Kind: kindOf[T](), Version: version}]
-	reg := s.views[row.manifest]
-	s.mu.RUnlock()
+	key := Key{ID: id, Kind: kind, Version: version}
+	reg, ok := s.explicitRegistry(key)
 	if !ok {
-		return zero, fmt.Errorf("%w: %s/%s version %q", ErrNotFound, id, kindOf[T](), version)
+		if err := s.probe(ctx, 0); err != nil {
+			return zero, fmt.Errorf("%w: %s/%s version %q (probing newer manifests: %v)", ErrNotFound, id, kind, version, err)
+		}
+		if reg, ok = s.explicitRegistry(key); !ok {
+			return zero, fmt.Errorf("%w: %s/%s version %q", ErrNotFound, id, kind, version)
+		}
 	}
 	return Get[T](ctx, reg, id, version)
+}
+
+// explicitRegistry returns a registry of a loaded manifest that lists key.
+func (s *Set) explicitRegistry(key Key) (*Registry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	row, ok := s.explicit[key]
+	if !ok {
+		return nil, false
+	}
+	return s.views[row.manifest], true
 }
