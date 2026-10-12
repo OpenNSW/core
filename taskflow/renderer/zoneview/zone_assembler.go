@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/OpenNSW/core/artifact"
 	tfrenderer "github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
 )
@@ -29,7 +30,11 @@ func NewZoneViewAssembler(inner *TaskRenderer) *ZoneViewAssembler {
 // own. Pass nil when the render config gates nothing on a claim. Because a
 // hidden section is absent from the projector's output, its handles are dropped
 // with it — the renderer only decorates sections the projector actually emitted.
+// Templates resolve through record.ManifestVersion, which Assemble puts on ctx.
 func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecord, claims map[string]bool) (ZoneView, error) {
+	// The template provider resolves the render config's templates through the task's manifest
+	// version (artifact.ManifestVersionFrom), so a form does not change under an open task.
+	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
 	view, err := a.inner.Render(ctx, record.RenderConfig, tfrenderer.Facts{
 		State:  record.State,
 		Data:   record.Data,
