@@ -52,7 +52,7 @@ type ActivationRef struct {
 }
 
 // ExecuteTaskActivity pushes the task to your application and sleeps waiting for it or completes synchronously
-func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, rootWorkflowID string, step ActivationRef) (map[string]any, error) {
+func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, caseID string, step ActivationRef) (map[string]any, error) {
 	info := activity.GetInfo(ctx)
 	payload := TaskPayload{
 		WorkflowID:     info.WorkflowExecution.ID,
@@ -62,7 +62,7 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 		Seq:            step.Seq,
 		TaskTemplateID: taskTemplateID,
 		Inputs:         inputs,
-		RootWorkflowID: rootWorkflowID,
+		CaseID:         caseID,
 	}
 
 	// Trigger custom code block. ExecuteTaskActivityHandler can return error ErrResultPending to pause the workflow

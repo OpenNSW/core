@@ -59,12 +59,14 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		Edges:             make([]Edge, len(def.Edges)),
 	}
 
-	// Only the root execution reaches this with VarRootWorkflowID unset — every nested child is
-	// started with it already present in initialWorkflowVariables (copied through wholesale by
-	// BATCH_SPLIT/PARALLEL_SPLIT, or set explicitly by SPLIT_TASK), so this seeds it exactly once
-	// per workflow tree, at the true root.
-	if _, ok := instance.WorkflowVariables[VarRootWorkflowID]; !ok {
-		instance.WorkflowVariables[VarRootWorkflowID] = instance.ID
+	// Only a top-level execution can reach this without a case — every nested child is started
+	// with one already present in initialWorkflowVariables (copied through wholesale by
+	// BATCH_SPLIT/PARALLEL_SPLIT, or set explicitly by SPLIT_TASK) — so a top-level workflow the
+	// host started without a case, or with an empty one, is its own case. The check matches
+	// caseID()'s, and the ID is stored rather than only returned, so every child copies a
+	// non-empty case ID instead of falling back to its own workflow ID.
+	if v, _ := instance.WorkflowVariables[VarCaseID].(string); v == "" {
+		instance.WorkflowVariables[VarCaseID] = instance.ID
 	}
 
 	for _, node := range def.Nodes {
@@ -427,10 +429,9 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 	return nil
 }
 
-// rootWorkflowID returns this execution's root workflow ID, propagated from the top-level
-// execution via VarRootWorkflowID (see GraphInterpreterWorkflow).
-func (g *graphInterpreter) rootWorkflowID() string {
-	if v, ok := g.instance.WorkflowVariables[VarRootWorkflowID].(string); ok && v != "" {
+// caseID returns the case this execution belongs to (see VarCaseID).
+func (g *graphInterpreter) caseID() string {
+	if v, ok := g.instance.WorkflowVariables[VarCaseID].(string); ok && v != "" {
 		return v
 	}
 	return g.instance.ID
@@ -452,7 +453,7 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
 
-	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID(),
+	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
 		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq}).Get(ctx, &result)
 	if err != nil {
 		return withCategory(ParkCategoryTaskFailure, err)

@@ -68,14 +68,14 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	return model.ToDomain(), true
 }
 
-func (s *TaskStore) GetAllTasks(ctx context.Context, parentWorkflowID string) []store.TaskRecord {
+func (s *TaskStore) GetAllTasks(ctx context.Context, caseID string) []store.TaskRecord {
 	var models []TaskRecordModel
 	query := s.db.WithContext(ctx)
-	if parentWorkflowID != "" {
-		query = query.Where("root_workflow_id = ?", parentWorkflowID)
+	if caseID != "" {
+		query = query.Where("case_id = ?", caseID)
 	}
 	if err := query.Find(&models).Error; err != nil {
-		slog.ErrorContext(ctx, "taskflow gorm store: GetAllTasks db error", "parent_workflow_id", parentWorkflowID, "error", err)
+		slog.ErrorContext(ctx, "taskflow gorm store: GetAllTasks db error", "case_id", caseID, "error", err)
 		return nil
 	}
 

@@ -45,42 +45,44 @@ const (
 	// current_executions.workflow_id (varchar(255)).
 	maxWorkflowIDLen = 255
 	// childIDSuffixLen is the fixed width of the "--<16-hex-char hash>" suffix
-	// FormatChildWorkflowID appends to the root.
+	// FormatChildWorkflowID appends to the case ID.
 	childIDSuffixLen = 2 + 16
-	// maxRootForChildID is the longest root FormatChildWorkflowID can prefix without the
+	// maxPrefixForChildID is the longest case ID FormatChildWorkflowID can prefix without the
 	// result exceeding maxWorkflowIDLen.
-	maxRootForChildID = maxWorkflowIDLen - childIDSuffixLen
+	maxPrefixForChildID = maxWorkflowIDLen - childIDSuffixLen
 )
 
-// FormatChildWorkflowID constructs a deterministic child workflow ID from the root workflow ID,
+// FormatChildWorkflowID constructs a deterministic child workflow ID from the case ID,
 // the parent's own workflow ID, the gateway node ID, and the branch ID.
 //
 // The result is always "<root>--<16-hex-char hash>": each level's hash folds in the parent's full
 // workflow ID, not just this level's nodeID/branchID, so the ID uniquely commits to the full
 // ancestor chain no matter how deep the nesting goes. Fixed-width output keeps the ID within
 // Temporal's varchar(255) current_executions.workflow_id column regardless of branch depth — an
-// oversized root is capped via boundRootForChildID first, so the guarantee holds independent of
-// how long the caller's root workflow ID is.
+// oversized case ID is capped via boundPrefixForChildID first, so the guarantee holds independent
+// of how long the caller's case ID is. Two workflows of the same case (a host's several
+// top-level workflows) share the prefix; the hash, which folds in the parent's workflow ID, keeps
+// their children apart.
 //
-// rootWorkflowID is taken as given rather than parsed out of parentWorkflowID — callers already
-// have it via VarRootWorkflowID, which the engine propagates explicitly to every level of nesting.
-func FormatChildWorkflowID(rootWorkflowID, parentWorkflowID, nodeID, branchID string) string {
-	root := boundRootForChildID(rootWorkflowID)
+// caseID is taken as given rather than parsed out of parentWorkflowID — callers already have it
+// via VarCaseID, which the engine propagates explicitly to every level of nesting.
+func FormatChildWorkflowID(caseID, parentWorkflowID, nodeID, branchID string) string {
+	root := boundPrefixForChildID(caseID)
 	sum := sha256.Sum256([]byte(parentWorkflowID + "|" + nodeID + "|" + branchID))
 	return root + "--" + hex.EncodeToString(sum[:8])
 }
 
-// boundRootForChildID caps a root workflow ID at maxRootForChildID so FormatChildWorkflowID's
+// boundPrefixForChildID caps a case ID at maxPrefixForChildID so FormatChildWorkflowID's
 // output can never exceed maxWorkflowIDLen. A root within budget passes through unchanged; an
 // oversized one is truncated and given a short hash suffix of the full root, so two long roots
 // that happen to share a prefix still can't collide once capped.
-func boundRootForChildID(root string) string {
-	if len(root) <= maxRootForChildID {
+func boundPrefixForChildID(root string) string {
+	if len(root) <= maxPrefixForChildID {
 		return root
 	}
 	sum := sha256.Sum256([]byte(root))
 	suffix := hex.EncodeToString(sum[:4]) // 8 hex chars
-	keep := maxRootForChildID - len(suffix) - 1
+	keep := maxPrefixForChildID - len(suffix) - 1
 	if keep < 0 {
 		keep = 0
 	}

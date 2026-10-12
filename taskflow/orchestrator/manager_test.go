@@ -303,7 +303,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		ActivationID:   "step-1",
 		TaskTemplateID: "test_template",
 		Inputs:         map[string]any{"userform.name": "Alice"},
-		RootWorkflowID: "parent-workflow",
+		CaseID:         "parent-workflow",
 	}
 
 	if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
@@ -324,10 +324,9 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 	if task.ParentWorkflowID != "parent-workflow" {
 		t.Errorf("expected parent workflow 'parent-workflow', got '%s'", task.ParentWorkflowID)
 	}
-	// A top-level workflow ID has no "--" separator, so the root consignment ID
-	// is the workflow ID itself.
-	if task.RootWorkflowID != "parent-workflow" {
-		t.Errorf("expected root workflow 'parent-workflow', got '%s'", task.RootWorkflowID)
+	// The task carries the case the engine passed in the payload.
+	if task.CaseID != "parent-workflow" {
+		t.Errorf("expected case 'parent-workflow', got '%s'", task.CaseID)
 	}
 
 	// 2. StartTaskStep — generic_user_input
@@ -467,19 +466,18 @@ func TestStartTask_InitTaskErrorPreventsWorkflowStart(t *testing.T) {
 	}
 }
 
-// TestStartTask_PassesThroughRootWorkflowID verifies that RootWorkflowID on the
-// stored TaskRecord comes straight from payload.RootWorkflowID, as propagated by
-// the engine (see engine.VarRootWorkflowID) — StartTask no longer derives it by
-// parsing payload.WorkflowID.
-func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
+// TestStartTask_PassesThroughCaseID verifies that CaseID on the stored
+// TaskRecord comes straight from payload.CaseID, as propagated by the engine
+// (see engine.VarCaseID), rather than from parsing payload.WorkflowID.
+func TestStartTask_PassesThroughCaseID(t *testing.T) {
 	cases := []struct {
-		name           string
-		workflowID     string
-		rootWorkflowID string
+		name       string
+		workflowID string
+		caseID     string
 	}{
 		{"top-level workflow", "consignment-123", "consignment-123"},
 		{"nested child workflow", "consignment-123--a1b2c3d4e5f60789", "consignment-123"},
-		{"empty root workflow id", "consignment-123", ""},
+		{"empty case id", "consignment-123", ""},
 	}
 
 	for _, tc := range cases {
@@ -493,7 +491,7 @@ func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
 				NodeID:         "node-1",
 				ActivationID:   "step-1",
 				TaskTemplateID: "test_template",
-				RootWorkflowID: tc.rootWorkflowID,
+				CaseID:         tc.caseID,
 			}
 			if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
 				t.Fatalf("StartTask failed: %v", err)
@@ -503,8 +501,8 @@ func TestStartTask_PassesThroughRootWorkflowID(t *testing.T) {
 			if !ok {
 				t.Fatal("expected task record to be saved")
 			}
-			if task.RootWorkflowID != tc.rootWorkflowID {
-				t.Errorf("RootWorkflowID = %q, want %q", task.RootWorkflowID, tc.rootWorkflowID)
+			if task.CaseID != tc.caseID {
+				t.Errorf("CaseID = %q, want %q", task.CaseID, tc.caseID)
 			}
 		})
 	}

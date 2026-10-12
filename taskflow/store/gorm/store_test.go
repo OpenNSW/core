@@ -42,7 +42,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, render_config TEXT,
 		parent_workflow_id TEXT, parent_step_id TEXT,
 		task_workflow_id TEXT,
-		active_task_template_id TEXT, root_workflow_id TEXT NOT NULL DEFAULT '',
+		active_task_template_id TEXT, case_id TEXT NOT NULL DEFAULT '',
 		active_step_id TEXT NULL, seq INTEGER NOT NULL DEFAULT 0, data TEXT,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`).Error; err != nil {
 		t.Fatalf("create table: %v", err)
@@ -234,4 +234,28 @@ func TestStepLifecycle_StaleWritesAreDropped(t *testing.T) {
 	n, err = s.CompleteTask(ctx, task1, 6)
 	wantRows(t, n, err, 1)
 	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
+}
+
+// GetAllTasks lists a case's tasks across every workflow of the case: a host that runs several
+// top-level workflows for one case finds all their tasks by the case ID.
+func TestGetAllTasksListsACaseAcrossWorkflows(t *testing.T) {
+	s, ctx := newTestStore(t)
+	for _, r := range []store.TaskRecord{
+		{TaskID: "export-task", ParentWorkflowID: "C1:export:u1", CaseID: "C1"},
+		{TaskID: "payment-task", ParentWorkflowID: "C1:payment:u2", CaseID: "C1"},
+		{TaskID: "other-case-task", ParentWorkflowID: "C2:export:u3", CaseID: "C2"},
+	} {
+		r.TaskType, r.State, r.Data = "TEST", "STARTING", map[string]any{}
+		if err := s.InitTask(ctx, r); err != nil {
+			t.Fatalf("InitTask %s: %v", r.TaskID, err)
+		}
+	}
+
+	got := map[string]bool{}
+	for _, r := range s.GetAllTasks(ctx, "C1") {
+		got[r.TaskID] = true
+	}
+	if len(got) != 2 || !got["export-task"] || !got["payment-task"] {
+		t.Errorf("GetAllTasks(C1) = %v, want export-task and payment-task", got)
+	}
 }

@@ -242,7 +242,7 @@ func (g *graphInterpreter) spawnBatchChildren(
 		maputil.SetNestedKey(childVars, itemsVar, toAnySlice(p.Items))
 		childVars[VarScopePath] = childScopePath
 
-		childWorkflowID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, nodeID, edgeID)
+		childWorkflowID := FormatChildWorkflowID(g.caseID(), parentInfo.WorkflowExecution.ID, nodeID, edgeID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: childWorkflowID,
 		})
