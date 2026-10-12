@@ -33,7 +33,7 @@ authn:
 
 > **Note:** every token must carry a `grant_type` claim — it decides user vs. client principal, and a token without it is rejected with `unsupported grant type`. This is not a standard access-token claim (RFC 9068 does not define it), so an IdP that omits it will not work with this package as-is.
 
-> **Note:** `audience` is what binds a token to this service: any client the IdP issues a token for this audience is accepted. Which clients may call the service is authorization policy — restrict it in authz or the application using the principal's `ClientID`, not here. If your IdP sets `aud` to the requesting client rather than the API, configure an audience / API resource for the service in the IdP.
+> **Note:** `audience` is what binds a token to this service: any client the IdP issues a token for this audience is accepted. Which clients may call the service is authorization policy, not this package's concern. For client-credentials tokens, restrict it in authz or the application using `ClientPrincipal.ClientID`. User (`authorization_code`) tokens produce a `UserPrincipal` that does not carry the originating client ID, so restricting those by client must be done another way (e.g. IdP-side policy or a dedicated audience per client group). If your IdP sets `aud` to the requesting client rather than the API, configure an audience / API resource for the service in the IdP.
 
 ## Middleware
 
