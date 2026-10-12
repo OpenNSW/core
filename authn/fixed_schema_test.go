@@ -5,7 +5,6 @@ package authn
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -26,7 +25,7 @@ func TestFixedSchemaClaims_KeysAreFolded(t *testing.T) {
 // even though a case-sensitive guard would not recognise them.
 func TestTokenClaims_JSONBindingIsCaseInsensitive(t *testing.T) {
 	var c tokenClaims
-	raw := `{"Roles":["admin"],"Client_ID":"evil","GRANT_TYPE":"client_credentials","SCOPE":"a b"}`
+	raw := `{"Roles":["admin"],"Client_ID":"evil","SCOPE":"a b"}`
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -40,9 +39,6 @@ func TestTokenClaims_JSONBindingIsCaseInsensitive(t *testing.T) {
 	}
 	if c.ClientID != "evil" {
 		t.Fatalf(`"Client_ID" did not bind to tokenClaims.ClientID: %q`, c.ClientID)
-	}
-	if c.GrantType != ClientCredentialsGrant {
-		t.Fatalf(`"GRANT_TYPE" did not bind to tokenClaims.GrantType: %q`, c.GrantType)
 	}
 	if len(c.Scopes) != 2 {
 		t.Fatalf(`"SCOPE" did not bind to tokenClaims.Scopes: %#v`, c.Scopes)
@@ -96,7 +92,7 @@ func TestRolesClaim(t *testing.T) {
 		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
 		defer cleanup()
 
-		claims := newBaseClaims(AuthorizationCodeGrant)
+		claims := newBaseClaims()
 		claims["sub"] = testUserID
 		claims["groups"] = []string{"exporter", "broker"}
 		// The literal "roles" claim is ignored once roles move elsewhere.
@@ -106,25 +102,8 @@ func TestRolesClaim(t *testing.T) {
 		if err != nil {
 			t.Fatalf("extract: %v", err)
 		}
-		if got := p.UserPrincipal.Roles; len(got) != 2 || got[0] != "exporter" || got[1] != "broker" {
+		if got := p.Roles; len(got) != 2 || got[0] != "exporter" || got[1] != "broker" {
 			t.Fatalf("roles = %#v, want [exporter broker]", got)
-		}
-	})
-
-	t.Run("applies to client principals too", func(t *testing.T) {
-		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
-		defer cleanup()
-
-		claims := newBaseClaims(ClientCredentialsGrant)
-		claims["sub"] = "SOME_CLIENT"
-		claims["groups"] = []string{"ingest"}
-
-		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
-		if err != nil {
-			t.Fatalf("extract: %v", err)
-		}
-		if got := p.ClientPrincipal.Roles; len(got) != 1 || got[0] != "ingest" {
-			t.Fatalf("roles = %#v, want [ingest]", got)
 		}
 	})
 
@@ -132,15 +111,15 @@ func TestRolesClaim(t *testing.T) {
 		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
 		defer cleanup()
 
-		claims := newBaseClaims(AuthorizationCodeGrant)
+		claims := newBaseClaims()
 		claims["sub"] = testUserID
 
 		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
 		if err != nil {
 			t.Fatalf("expected a user with no roles to authenticate, got %v", err)
 		}
-		if len(p.UserPrincipal.Roles) != 0 {
-			t.Fatalf("roles = %#v, want none", p.UserPrincipal.Roles)
+		if len(p.Roles) != 0 {
+			t.Fatalf("roles = %#v, want none", p.Roles)
 		}
 	})
 
@@ -150,7 +129,7 @@ func TestRolesClaim(t *testing.T) {
 		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
 		defer cleanup()
 
-		claims := newBaseClaims(AuthorizationCodeGrant)
+		claims := newBaseClaims()
 		claims["sub"] = testUserID
 		claims["groups"] = "exporter broker"
 
@@ -165,7 +144,7 @@ func TestRolesClaim(t *testing.T) {
 		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
 		defer cleanup()
 
-		claims := newBaseClaims(AuthorizationCodeGrant)
+		claims := newBaseClaims()
 		claims["sub"] = testUserID
 		claims["groups"] = []string{"exporter"}
 		claims["roles"] = "legacy-string"
@@ -174,7 +153,7 @@ func TestRolesClaim(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected the unused roles claim's shape to be irrelevant, got %v", err)
 		}
-		if got := p.UserPrincipal.Roles; len(got) != 1 || got[0] != "exporter" {
+		if got := p.Roles; len(got) != 1 || got[0] != "exporter" {
 			t.Fatalf("roles = %#v, want [exporter]", got)
 		}
 	})
@@ -183,7 +162,7 @@ func TestRolesClaim(t *testing.T) {
 		extractor, privateKey, cleanup := newTokenExtractor(t)
 		defer cleanup()
 
-		claims := newBaseClaims(AuthorizationCodeGrant)
+		claims := newBaseClaims()
 		claims["sub"] = testUserID
 		claims["roles"] = "exporter"
 
@@ -228,35 +207,16 @@ func TestRolesClaim_NameValidation(t *testing.T) {
 			t.Fatalf("expected a namespaced claim name to be accepted, got %v", err)
 		}
 	})
-
-	t.Run("cannot also be declared as an extra claim, in either option order", func(t *testing.T) {
-		orders := map[string][]Option{
-			"roles first":   {WithRolesClaim("groups"), WithUserClaims(ClaimSpec{Optional: []string{"groups"}})},
-			"claims first":  {WithUserClaims(ClaimSpec{Optional: []string{"groups"}}), WithRolesClaim("groups")},
-			"client claims": {WithRolesClaim("groups"), WithClientClaims(ClaimSpec{Required: []string{"groups"}})},
-		}
-		for name, opts := range orders {
-			t.Run(name, func(t *testing.T) {
-				err := construct(opts...)
-				if err == nil {
-					t.Fatalf("expected the roles claim to be reserved")
-				}
-				if !strings.Contains(err.Error(), "groups") {
-					t.Fatalf("error should name the offending claim, got %v", err)
-				}
-			})
-		}
-	})
 }
 
-// TestRolesClaim_NoDeclaredClaimsYieldsNilExtraClaims pins that remapping
-// roles (which forces a payload decode) does not turn the "nothing declared"
-// case from a nil ExtraClaims into an empty non-nil map.
-func TestRolesClaim_NoDeclaredClaimsYieldsNilExtraClaims(t *testing.T) {
+// TestRolesClaim_OnlyFixedClaimsYieldsNilExtraClaims pins that a token carrying
+// nothing beyond the fixed schema and the remapped roles claim reads as a nil
+// ExtraClaims, not an empty non-nil map.
+func TestRolesClaim_OnlyFixedClaimsYieldsNilExtraClaims(t *testing.T) {
 	extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
 	defer cleanup()
 
-	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims := newBaseClaims()
 	claims["sub"] = testUserID
 	claims["groups"] = []string{"exporter"}
 
@@ -264,7 +224,7 @@ func TestRolesClaim_NoDeclaredClaimsYieldsNilExtraClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if p.UserPrincipal.ExtraClaims != nil {
-		t.Fatalf("expected nil ExtraClaims, got %#v", p.UserPrincipal.ExtraClaims)
+	if p.ExtraClaims != nil {
+		t.Fatalf("expected nil ExtraClaims, got %#v", p.ExtraClaims)
 	}
 }

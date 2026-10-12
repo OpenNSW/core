@@ -35,8 +35,7 @@ func newTokenExtractor(t *testing.T) (*TokenExtractor, *rsa.PrivateKey, func()) 
 }
 
 // newTokenExtractorWithOptions mirrors newTokenExtractor but threads Options
-// through to NewTokenExtractor, for tests exercising WithUserClaims /
-// WithClientClaims / WithRolesClaim.
+// through to NewTokenExtractor, for tests exercising WithRolesClaim.
 func newTokenExtractorWithOptions(t *testing.T, opts ...Option) (*TokenExtractor, *rsa.PrivateKey, func()) {
 	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -67,22 +66,24 @@ func newTokenExtractorWithOptions(t *testing.T, opts ...Option) (*TokenExtractor
 	return extractor, privateKey, jwksServer.Close
 }
 
-func newBaseClaims(grantType AllowedGrantType) jwt.MapClaims {
+func newBaseClaims() jwt.MapClaims {
 	now := time.Now()
 	return jwt.MapClaims{
-		"iss":        testIssuer,
-		"aud":        testClientID,
-		"client_id":  testClientID,
-		"grant_type": grantType,
-		"iat":        now.Add(-1 * time.Minute).Unix(),
-		"nbf":        now.Add(-1 * time.Minute).Unix(),
-		"exp":        now.Add(10 * time.Minute).Unix(),
+		"iss":       testIssuer,
+		"aud":       testClientID,
+		"sub":       testUserID,
+		"client_id": testClientID,
+		"iat":       now.Add(-1 * time.Minute).Unix(),
+		"nbf":       now.Add(-1 * time.Minute).Unix(),
+		"exp":       now.Add(10 * time.Minute).Unix(),
 	}
 }
 
+// newUserToken signs a token as issued to a person signing in through a client:
+// a user subject carrying identity claims.
 func newUserToken(t *testing.T, privateKey *rsa.PrivateKey) string {
 	t.Helper()
-	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims := newBaseClaims()
 	claims["sub"] = testUserID
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
@@ -92,9 +93,11 @@ func newUserToken(t *testing.T, privateKey *rsa.PrivateKey) string {
 	return signToken(t, privateKey, claims)
 }
 
+// newClientToken signs a token as issued to a system via client credentials:
+// the subject is the client itself and no identity claims are carried.
 func newClientToken(t *testing.T, privateKey *rsa.PrivateKey) string {
 	t.Helper()
-	claims := newBaseClaims(ClientCredentialsGrant)
+	claims := newBaseClaims()
 	claims["sub"] = "FCAU_TO_NSW"
 	return signToken(t, privateKey, claims)
 }

@@ -9,23 +9,20 @@ import (
 	"testing"
 )
 
-func TestNewManager_AllowsNilUserProfileService(t *testing.T) {
+func TestNewManager_Defaults(t *testing.T) {
 	cfg := Config{
 		JWKSURL:  "https://localhost/jwks",
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
 	}
 
-	manager, err := NewManager(nil, cfg)
+	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if manager == nil {
 		t.Fatalf("expected manager, got nil")
 		return
-	}
-	if manager.userProfileService != nil {
-		t.Fatalf("expected nil userProfileService, got %T", manager.userProfileService)
 	}
 	if manager.tokenExtractor == nil {
 		t.Fatal("expected tokenExtractor to be initialized")
@@ -41,7 +38,7 @@ func TestNewManager_InvalidConfig(t *testing.T) {
 		Audience: "TRADER_PORTAL_APP",
 	}
 
-	if _, err := NewManager(nil, cfg); err == nil {
+	if _, err := NewManager(cfg); err == nil {
 		t.Fatalf("expected error for invalid config")
 	}
 }
@@ -61,7 +58,7 @@ func TestNewManager_InsecureSkipTLSVerify(t *testing.T) {
 		InsecureSkipTLSVerify: true,
 	}
 
-	manager, err := NewManager(nil, cfg)
+	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -84,7 +81,7 @@ func TestManager_Health_Success(t *testing.T) {
 		Audience: "TRADER_PORTAL_APP",
 	}
 
-	manager, err := NewManager(nil, cfg)
+	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -100,7 +97,7 @@ func TestManager_MiddlewareFunctions(t *testing.T) {
 		Audience: "TRADER_PORTAL_APP",
 	}
 
-	manager, err := NewManager(nil, cfg)
+	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -129,7 +126,7 @@ func TestManager_RequireAuthMiddleware(t *testing.T) {
 		Audience: "TRADER_PORTAL_APP",
 	}
 
-	manager, err := NewManager(nil, cfg)
+	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -159,73 +156,19 @@ func TestManager_Close(t *testing.T) {
 	}
 }
 
-func TestNewManager_WiresExtraClaims(t *testing.T) {
-	cfg := Config{
-		JWKSURL:  "https://localhost/jwks",
-		Issuer:   "https://localhost/token",
-		Audience: "TRADER_PORTAL_APP",
-		// "email" appears in both slices: required must win on the Config
-		// path too, independently of the order buildClaimOptions emits.
-		UserClaims:   ClaimSpec{Optional: []string{"email", "given_name"}, Required: []string{"ouHandle", "email"}},
-		ClientClaims: ClaimSpec{Optional: []string{"department"}, Required: []string{"cost_center"}},
-		RolesClaim:   "groups",
-	}
-
-	manager, err := NewManager(nil, cfg)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-
-	if got := manager.tokenExtractor.rolesClaim; got != "groups" {
-		t.Fatalf("rolesClaim = %q, want groups", got)
-	}
-
-	wantUser := map[string]bool{"email": true, "given_name": false, "ouHandle": true}
-	if len(manager.tokenExtractor.userExtraClaims) != len(wantUser) {
-		t.Fatalf("userExtraClaims = %#v, want %#v", manager.tokenExtractor.userExtraClaims, wantUser)
-	}
-	for name, required := range wantUser {
-		if got, ok := manager.tokenExtractor.userExtraClaims[name]; !ok || got != required {
-			t.Fatalf("userExtraClaims[%q] = (%v, %v); want (%v, true)", name, got, ok, required)
-		}
-	}
-
-	wantClient := map[string]bool{"department": false, "cost_center": true}
-	if len(manager.tokenExtractor.clientExtraClaims) != len(wantClient) {
-		t.Fatalf("clientExtraClaims = %#v, want %#v", manager.tokenExtractor.clientExtraClaims, wantClient)
-	}
-	for name, required := range wantClient {
-		if got, ok := manager.tokenExtractor.clientExtraClaims[name]; !ok || got != required {
-			t.Fatalf("clientExtraClaims[%q] = (%v, %v); want (%v, true)", name, got, ok, required)
-		}
-	}
-}
-
-func TestNewManager_RejectsFixedSchemaExtraClaim(t *testing.T) {
-	cfg := Config{
-		JWKSURL:    "https://localhost/jwks",
-		Issuer:     "https://localhost/token",
-		Audience:   "TRADER_PORTAL_APP",
-		UserClaims: ClaimSpec{Optional: []string{"scope"}},
-	}
-	if _, err := NewManager(nil, cfg); err == nil {
-		t.Fatalf("expected error for fixed-schema claim declaration")
-	}
-}
-
-// TestNewManager_RejectsRolesClaimCollision covers the ordering trap: the
-// roles claim is reserved, and buildClaimOptions emits WithUserClaims before
-// WithRolesClaim, so the collision can only be caught after every option has
-// been applied.
-func TestNewManager_RejectsRolesClaimCollision(t *testing.T) {
+func TestNewManager_WiresRolesClaim(t *testing.T) {
 	cfg := Config{
 		JWKSURL:    "https://localhost/jwks",
 		Issuer:     "https://localhost/token",
 		Audience:   "TRADER_PORTAL_APP",
 		RolesClaim: "groups",
-		UserClaims: ClaimSpec{Optional: []string{"groups"}},
 	}
-	if _, err := NewManager(nil, cfg); err == nil {
-		t.Fatalf("expected error declaring the roles claim as an extra claim")
+
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got := manager.tokenExtractor.rolesClaim; got != "groups" {
+		t.Fatalf("rolesClaim = %q, want groups", got)
 	}
 }

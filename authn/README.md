@@ -7,33 +7,25 @@ JWT-based authentication. Validates tokens against a JWKS endpoint, extracts ide
 ```go
 import "github.com/OpenNSW/core/authn"
 
-manager, err := authn.NewManager(userProfileSvc, authn.Config{
+manager, err := authn.NewManager(authn.Config{
     JWKSURL:  "https://idp.example.com/.well-known/jwks.json",
     Issuer:   "https://idp.example.com",
     Audience: "my-api",
-
-    // Optional: declare any claims beyond the fixed schema you need. See
-    // "Extra claims" below.
-    UserClaims: authn.ClaimSpec{Optional: []string{"email", "ouId", "ouHandle"}},
 })
 ```
 
-`UserProfileService` is optional. When provided, it is called on the first appearance of a user token to create or retrieve a persisted user record (e.g. to assign an internal user ID). Pass `nil` to skip user persistence.
-
-`Config` (and `ClaimSpec`) carry `yaml` struct tags, so it can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`):
+`Config` carries `yaml` struct tags, so it can be embedded in a larger application config struct and populated generically (e.g. via `yaml.Unmarshal`):
 
 ```yaml
 authn:
   jwksURL: https://idp.example.com/.well-known/jwks.json
   issuer: https://idp.example.com
   audience: my-api
-  userClaims:
-    optional: [email, ouId, ouHandle]
 ```
 
-> **Note:** every token must carry a `grant_type` claim — it decides user vs. client principal, and a token without it is rejected with `unsupported grant type`. This is not a standard access-token claim (RFC 9068 does not define it), so an IdP that omits it will not work with this package as-is.
+A token is accepted when its signature, `iss`, `aud` and `exp` check out and it carries non-empty `sub` and `client_id` claims. How the token was obtained (`grant_type`) plays no part: a person signing in through a client and a system using client credentials get the same `Principal`, distinguished only by the roles, scopes and claims they carry. Every other claim in the token is passed through as `ExtraClaims` — nothing has to be declared.
 
-> **Note:** `audience` is what binds a token to this service: any client the IdP issues a token for this audience is accepted. Which clients may call the service is authorization policy, not this package's concern. For client-credentials tokens, restrict it in authz or the application using `ClientPrincipal.ClientID`. User (`authorization_code`) tokens produce a `UserPrincipal` that does not carry the originating client ID, so restricting those by client must be done another way (e.g. IdP-side policy or a dedicated audience per client group). If your IdP sets `aud` to the requesting client rather than the API, configure an audience / API resource for the service in the IdP.
+> **Note:** `audience` is what binds a token to this service: any client the IdP issues a token for this audience is accepted. Which clients may call the service is authorization policy, not this package's concern — restrict it in authz or the application using `AuthContext.ClientID()`. If your IdP sets `aud` to the requesting client rather than the API, configure an audience / API resource for the service in the IdP.
 
 ## Middleware
 
@@ -45,6 +37,34 @@ mux.Handle("/api/v1/tasks", manager.RequireAuthMiddleware()(handler))
 mux.Handle("/api/v1/public", manager.OptionalAuthMiddleware()(handler))
 ```
 
+`authn` only authenticates. Anything your application does with the validated principal — provisioning a user record, loading a profile, attaching tenant data — goes in your own middleware, chained after `authn`'s:
+
+```go
+// in the application, not in authn
+func ProvisionUser(users *user.Service) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            authCtx := authn.GetAuthContext(r.Context())
+            u, err := users.GetOrCreate(r.Context(), authCtx.Subject(), authCtx.ExtraClaims())
+            if err != nil {
+                http.Error(w, "user provisioning failed", http.StatusInternalServerError)
+                return
+            }
+            next.ServeHTTP(w, r.WithContext(user.NewContext(r.Context(), u)))
+        })
+    }
+}
+
+// wrap all protected routes once, not per route
+api := http.NewServeMux()
+api.HandleFunc("POST /api/x", handlerX)
+
+root := http.NewServeMux()
+root.Handle("/api/", manager.RequireAuthMiddleware()(ProvisionUser(users)(api)))
+```
+
+The application owns that policy: who gets a record, what goes on the context, and whether a failure rejects the request.
+
 ## Reading identity in handlers
 
 ```go
@@ -54,81 +74,47 @@ if authCtx == nil {
     return
 }
 
-// Human user token
-if authCtx.Type() == authn.UserPrincipalType {
-    fmt.Println(authCtx.User.ID)                             // internal persisted ID (if UserProfileService set)
-    fmt.Println(authCtx.User.Roles)                          // role claims
-    fmt.Println(authCtx.User.ExtraClaims.String("email"))    // "" unless declared — see "Extra claims"
-    fmt.Println(authCtx.User.ExtraClaims.String("ouHandle"))
-}
-
-// Machine-to-machine token
-if authCtx.Type() == authn.ClientPrincipalType {
-    fmt.Println(authCtx.Client.ClientID)
-}
+fmt.Println(authCtx.Subject())                        // JWT "sub"
+fmt.Println(authCtx.ClientID())                       // JWT "client_id"
+fmt.Println(authCtx.Roles())                          // role claims
+fmt.Println(authCtx.Scopes())                         // scope claims
+fmt.Println(authCtx.ExtraClaims().String("email"))    // any other claim — see "Extra claims"
 ```
 
-`AuthContext` also exposes a nil-safe accessor seam that works for either principal type without branching — `Type()`, `Subject()`, `Roles()`, `Scopes()`, and `ExtraClaims()`:
+The accessors are nil-safe, so they can be called on a nil `*AuthContext`:
 
 ```go
-// Safe even when authCtx is nil or the request was a client token.
 email := authn.GetAuthContext(r.Context()).ExtraClaims().String("email")
 ```
 
+The same values are available as fields on `authCtx.Principal`.
+
 ## Extra claims (beyond the fixed schema)
 
-`authn`'s fixed schema is deliberately small: `client_id`, `grant_type`, `scope`, and `roles` (plus the JWT registered claims). Anything else — `email`, `phone_number`, `ouId`, `ouHandle`, an IdP-specific claim like `given_name`, or anything your identity provider emits — is declared explicitly via `Config` fields (`Manager` path) or functional options (direct `TokenExtractor` construction). Separate declarations exist for user-principal (`authorization_code` grant) and client-principal (`client_credentials` grant) tokens, since some claims are only meaningful for one or the other.
-
-```go
-manager, err := authn.NewManager(userProfileSvc, authn.Config{
-    JWKSURL:  "...",
-    Issuer:   "...",
-    Audience: "...",
-
-    UserClaims: authn.ClaimSpec{
-        Optional: []string{"email", "ouId", "ouHandle", "given_name"},
-        Required: []string{"phone_number"},
-    },
-    ClientClaims: authn.ClaimSpec{
-        Optional: []string{"department"},
-    },
-})
-```
-
-Or, constructing a `TokenExtractor` directly:
-
-```go
-extractor, err := authn.NewTokenExtractor(jwksURL, issuer, audience,
-    authn.WithUserClaims(authn.ClaimSpec{
-        Optional: []string{"email", "ouId", "ouHandle"},
-        Required: []string{"phone_number"},
-    }),
-)
-```
-
-Reading extra claims in a handler:
+`authn`'s fixed schema is deliberately small: `sub`, `client_id`, `scope`, and `roles` (plus the JWT registered claims `iss`, `aud`, `exp`, `nbf`, `iat`, `jti`). Every other claim in the token — `email`, `phone_number`, `ouId`, `grant_type`, an IdP-specific claim like `given_name`, a namespaced claim like `https://app.example.com/department` — is passed through in `ExtraClaims`, keyed by its exact name.
 
 ```go
 authCtx := authn.GetAuthContext(r.Context())
-if authCtx == nil || authCtx.Type() != authn.UserPrincipalType {
-    return
-}
-email  := authCtx.User.ExtraClaims.String("email")     // "" if not declared/present
-groups := authCtx.User.ExtraClaims.Strings("groups")   // JSON array of strings, or a space-delimited string
-roles  := authCtx.User.Roles                           // roles are fixed schema, not an extra claim
+email  := authCtx.ExtraClaims().String("email")     // "" if absent or not a string
+groups := authCtx.ExtraClaims().Strings("groups")   // JSON array of strings, or a space-delimited string
+dept   := authCtx.ExtraClaims()["department"]       // any other shape: index the map directly
 ```
 
-If a `UserProfileService` implementation needs one of these values (e.g. to scope users by organization), declare it and read it from the principal passed into `GetOrCreateUser` — see "Principal fields" below.
+`authn` does not decide which of these a request needs. If your application depends on a claim — an organization/tenant identifier used for scoping, say — check it in your own middleware or handler, so a token without it is rejected rather than silently scoped to `""`:
+
+```go
+if authn.GetAuthContext(r.Context()).ExtraClaims().String("ouId") == "" {
+    http.Error(w, "forbidden", http.StatusForbidden)
+    return
+}
+```
 
 **Semantics:**
-- **User-scoped vs. client-scoped.** `UserClaims` applies only to user-principal tokens, `ClientClaims` only to client-principal tokens. A name declared on one side is never extracted from the other.
-- **Optional:** a claim that is absent, JSON-null, or an empty/whitespace-only string is silently skipped — the token is never rejected.
-- **Required:** the token is rejected unless the claim carries a usable value — a non-blank string, or a non-empty array of non-blank strings. A number, boolean, object, empty array or mixed array is *not* accepted, because it would read back as `""`/`nil` and silently defeat the requirement. A name listed in both `Optional` and `Required` (in any order, across any number of calls) is required.
-- Claim names are matched **exactly** — JWT claim names are case-sensitive (RFC 7519 §4) and only whitespace-trimmed. Nested lookups are not supported: a name is a top-level key, which is what lets namespaced names like `https://app.example.com/roles` work verbatim.
+- Claims `authn` binds itself never appear in `ExtraClaims`, so each value has one home: read `Subject()`, not `ExtraClaims()["sub"]`. Case variants of fixed-schema names (`Roles`, `SUB`) are excluded too, because `encoding/json` matches struct tags case-insensitively and binds them to the fixed field. A remapped roles claim (see below) is excluded under its exact name.
+- A claim whose value is JSON null or an empty/whitespace-only string is dropped, so it reads the same as a claim the token never carried. A token with no other claims has a nil `ExtraClaims`.
+- Claim names are matched **exactly** — JWT claim names are case-sensitive (RFC 7519 §4). Nested lookups are not supported: a name is a top-level key, which is what lets namespaced names like `https://app.example.com/roles` work verbatim.
 - Values are the claim's JSON-decoded Go representation, with one normalization: every JSON string a value *directly* carries is whitespace-trimmed — the value itself, and the elements of a top-level array of strings. Nested objects are never rewritten. (Fixed-schema claims such as `sub` are decoded separately and are not trimmed.)
 - Use `ExtraClaims.String(name)` for a plain string value and `ExtraClaims.Strings(name)` for a list-shaped claim. `Strings` accepts a JSON array of strings *or* a single space-delimited string (the convention the `scope` claim uses), so it whitespace-splits free text — use `String` for anything that is not list-shaped. Both are nil-safe and return the zero value for absent/wrong-shape claims; they never panic or error.
-- A claim already bound by `authn` — the fixed schema, any case variant of it, or your configured `RolesClaim` — cannot be declared as an extra claim. Construction (or `Config.Validate()`) fails fast. Case variants are rejected because `encoding/json` matches struct tags case-insensitively, so a payload key of `Roles` still lands in the fixed-schema roles field.
-- A blank claim name is a construction error, not a silent no-op — a trailing comma in `MY_CLAIMS=email,` would otherwise drop a rule you asked for.
 
 ## Remapping the roles claim
 
@@ -144,60 +130,38 @@ Dotted paths into nested objects (Keycloak's `realm_access.roles`) are **not** s
 
 ## Principal fields
 
-**`UserContext`**
-
 | Field | Description |
 |---|---|
-| `ID` | Internal persisted user ID (set by `UserProfileService`) |
-| `IDPUserID` | Subject claim from the token |
+| `Subject` | JWT `sub` claim: the IdP's ID for the caller |
+| `ClientID` | JWT `client_id` claim: the OAuth2 client the token was issued to |
 | `Roles` | Role claims |
 | `Scopes` | Scope claims |
-| `ExtraClaims` | Claims beyond the fixed schema, populated only for names you declared — see "Extra claims" above |
+| `ExtraClaims` | Every other claim in the token — see "Extra claims" above |
 
-**`ClientContext`**
+## Migrating from user and client principals
 
-| Field | Description |
-|---|---|
-| `ClientID` | Client ID claim |
-| `Roles` | Role claims |
-| `Scopes` | Scope claims |
-| `ExtraClaims` | Claims beyond the fixed schema, populated only for names you declared — see "Extra claims" above |
-
-**`UserProfileService`**
-
-```go
-type UserProfileService interface {
-    GetOrCreateUser(ctx context.Context, principal *UserPrincipal) (string, error)
-}
-```
-
-Called on first login for user-principal tokens. `principal.Subject` is the JWT `sub` claim — the IdP's user ID, *not* the persisted ID you return. `principal.ExtraClaims` holds whatever claims you declared; index it with `principal.ExtraClaims.String("email")`, etc.
-
-`principal` is never nil and **must not be mutated**: the middleware has already built the request's `AuthContext` from it and shares the same `ExtraClaims` map.
-
-## Migrating from the fixed email/phone/ouId/ouHandle fields
-
-Those four claims used to be fixed-schema fields, populated on every user token. They are IdP-specific rather than standard OIDC, so they are now ordinary extra claims that you declare.
+Earlier versions split every caller into a user or a client principal by the token's `grant_type` claim. There is now one `Principal`.
 
 | Before | After |
 |---|---|
-| `authCtx.User.Email` | `authCtx.User.ExtraClaims.String("email")` + declare `"email"` |
-| `authCtx.User.PhoneNumber` (`*string`) | `...String("phone_number")` + declare it |
-| `authCtx.User.OUID` | `...String("ouId")` + declare it |
-| `authCtx.User.OUHandle` | `...String("ouHandle")` + declare it |
-| `UserPrincipal.UserID` | `UserPrincipal.Subject` |
-| `GetOrCreateUser(ctx, idpUserID, email, phone, ouID, ouHandle)` | `GetOrCreateUser(ctx, principal)` |
+| `NewManager(userProfileSvc, cfg)` | `NewManager(cfg)` |
+| `Middleware(userProfileSvc, extractor)` / `RequireAuth(userProfileSvc, extractor)` | `Middleware(extractor)` / `RequireAuth(extractor)` |
+| `UserProfileService.GetOrCreateUser` | Your own middleware chained after `authn` — see "Middleware" |
+| `authCtx.User.ID` (persisted ID) | Whatever your provisioning middleware puts on the context |
+| `authCtx.User.IDPUserID` | `authCtx.Subject()` |
+| `authCtx.Client.ClientID` | `authCtx.ClientID()` |
+| `authCtx.User.Roles` / `authCtx.Client.Roles` (and `Scopes`, `ExtraClaims`) | `authCtx.Roles()` (and `Scopes()`, `ExtraClaims()`) |
+| `authCtx.Type()`, `UserPrincipalType`, `ClientPrincipalType` | Removed — branch on roles, scopes or claims instead |
+| `UserClaims` / `ClientClaims` (`ClaimSpec{Optional, Required}`), `WithUserClaims` / `WithClientClaims` | Removed — every claim is in `ExtraClaims`; check required ones in your own middleware |
 
-**Declaring is not optional.** An undeclared claim reads back as `""` even when the signed token carries it, and nothing warns you — the compiler catches the removed struct fields and the changed `GetOrCreateUser` signature, but it cannot catch a missing declaration. If a value is load-bearing (an organization/tenant identifier used for scoping, say), put it in `Required` so a token without it is rejected rather than silently scoped to `""`:
+Behaviour changes the compiler will not catch:
 
-```go
-UserClaims: authn.ClaimSpec{
-    Required: []string{"ouId"},
-    Optional: []string{"email", "phone_number", "ouHandle"},
-},
-```
-
-Earlier versions rejected a user token missing `email`, `ouId`, or `ouHandle`. That check is now yours to declare.
+- **`Subject()` now returns the JWT `sub` claim.** For user tokens it used to return the persisted user ID from `UserProfileService` (falling back to `sub`), and for client tokens it returned the `client_id`. Anything keyed by `Subject()` — stored records, audit entries, cache keys — must be checked.
+- **`sub` is required on every token.** Client-credentials tokens without `sub` used to be accepted; they are now rejected.
+- **`grant_type` is ignored.** Tokens without it, or with any value, are accepted. It now passes through in `ExtraClaims` like any other claim.
+- **Required claims are no longer enforced by `authn`.** A token missing a claim you previously listed as `Required` is now accepted; move that check into your own middleware.
+- **`ExtraClaims` now holds every non-fixed claim**, not just declared ones. Code that treated "present in `ExtraClaims`" as "declared in config" must be checked.
+- **The JSON shape of `AuthContext` changed**, for anything that serializes it.
 
 ## Health check
 

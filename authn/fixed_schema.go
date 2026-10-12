@@ -6,7 +6,6 @@ package authn
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -15,13 +14,12 @@ import (
 // tag on tokenClaims.Roles.
 const defaultRolesClaim = "roles"
 
-// fixedSchemaClaims guards against a consumer redeclaring a claim name that is
-// already part of authn's fixed schema as an extra claim.
+// fixedSchemaClaims lists the claims authn binds itself, which are therefore
+// kept out of ExtraClaims so each value has exactly one home.
 //
-// This is purely a mechanical name-collision guard, not a "standard claims"
-// allowlist: being in this map means the claim already has a dedicated field
-// (or, for sub/client_id/grant_type, drives the package's own dispatch logic),
-// not that it's inherently more "generic" than a claim that isn't. It should
+// Being in this map means the claim already has a dedicated Principal field or
+// is consumed by validation, not that it's inherently more "generic" than a
+// claim that isn't. It should
 // only grow when a claim actually graduates from "extra" to "fixed" —
 // demonstrated load-bearing across multiple independent consumers, the same
 // way ouId/ouHandle/email/phone_number were evaluated and found not to
@@ -31,7 +29,6 @@ const defaultRolesClaim = "roles"
 // foldClaimName). TestFixedSchemaClaims_KeysAreFolded enforces that.
 var fixedSchemaClaims = map[string]bool{
 	"client_id":       true,
-	"grant_type":      true,
 	"scope":           true,
 	defaultRolesClaim: true,
 	// JWT registered claims (RFC 7519 §4.1), always present via jwt.RegisteredClaims.
@@ -44,56 +41,15 @@ var fixedSchemaClaims = map[string]bool{
 	"jti": true,
 }
 
-// foldClaimName normalizes a claim name for fixed-schema collision checks only.
+// foldClaimName normalizes a claim name for fixed-schema membership checks only.
 //
-// JWT claim names are case-sensitive (RFC 7519 §4) and extraction matches them
-// exactly, so this is deliberately NOT applied when reading a payload. The
-// collision guard has to fold because the fixed schema is bound by
-// encoding/json, whose struct-tag matching IS case-insensitive: without
-// folding, declaring "Roles" or "Client_Id" passes the guard while the very
-// same payload key still lands in tokenClaims.Roles / tokenClaims.ClientID.
+// JWT claim names are case-sensitive (RFC 7519 §4), so this is deliberately
+// NOT applied to the names stored in ExtraClaims. Membership checks have to
+// fold because the fixed schema is bound by encoding/json, whose struct-tag
+// matching IS case-insensitive: a payload key of "Roles" or "Client_Id" lands
+// in tokenClaims.Roles / tokenClaims.ClientID just as the lowercase key would.
 func foldClaimName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// validateClaimNames reports every problem with one set of declared extra-claim
-// names at once — blank names, and names already bound by authn — so a
-// consumer fixes all of them in one pass instead of one per restart. what names
-// the declaration site (e.g. "UserClaims.Required") and appears in the error.
-//
-// rolesClaim is reserved alongside the fixed schema: once roles are read from
-// "groups", that name has a dedicated field (Principal.Roles) and declaring it
-// as an extra claim would surface one claim under two meanings.
-func validateClaimNames(what string, names []string, rolesClaim string) error {
-	var blank bool
-	var reserved []string
-
-	for _, name := range names {
-		trimmed := strings.TrimSpace(name)
-		if trimmed == "" {
-			blank = true
-			continue
-		}
-		folded := foldClaimName(trimmed)
-		if fixedSchemaClaims[folded] || folded == foldClaimName(rolesClaim) {
-			reserved = append(reserved, trimmed)
-		}
-	}
-
-	if blank {
-		return fmt.Errorf("%s contains an empty claim name", what)
-	}
-	if len(reserved) > 0 {
-		// Sorted and de-duplicated so the message is identical run to run;
-		// callers hit this at startup and may assert on it in tests.
-		slices.Sort(reserved)
-		reserved = slices.Compact(reserved)
-		return fmt.Errorf(
-			"%s declares claim(s) %v that authn already binds (fixed schema: client_id, grant_type, scope, %s, and the JWT registered claims)",
-			what, reserved, rolesClaim,
-		)
-	}
-	return nil
 }
 
 // validateRolesClaimName reports whether name is usable as the roles claim.
