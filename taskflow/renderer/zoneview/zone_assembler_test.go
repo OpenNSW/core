@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/taskflow/store"
+	"github.com/OpenNSW/core/uiprojector"
 )
 
 func newTestAssembler(t *testing.T) *ZoneViewAssembler {
@@ -167,6 +169,37 @@ func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testi
 	for _, c := range decodeView(t, zv.View) {
 		if len(c.Handles) != 0 {
 			t.Errorf("slot %q offers %d handles while ADVANCING, want none", c.ID, len(c.Handles))
+		}
+	}
+}
+
+// versionProbe records the manifest version on the context of each template fetch.
+type versionProbe struct{ seen []int }
+
+func (p *versionProbe) GetTemplate(ctx context.Context, _ string) ([]byte, error) {
+	v, _ := artifact.ManifestVersionFrom(ctx)
+	p.seen = append(p.seen, v)
+	return []byte(`"text"`), nil
+}
+
+// The renderer's template provider sees the task's manifest version.
+func TestAssemble_ResolvesTemplatesThroughTheTasksManifestVersion(t *testing.T) {
+	probe := &versionProbe{}
+	asm, err := uiprojector.NewAssembler(probe, uiprojector.DefaultProjectors())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := pendingRecord(claimGatedConfig)
+	record.ManifestVersion = 7
+	if _, err := NewZoneViewAssembler(NewTaskRenderer(asm)).Assemble(context.Background(), record, map[string]bool{"role:trader": true, "role:cha": true}); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if len(probe.seen) == 0 {
+		t.Fatal("no template was fetched")
+	}
+	for _, v := range probe.seen {
+		if v != 7 {
+			t.Errorf("template fetched with manifest version %d, want 7", v)
 		}
 	}
 }

@@ -43,6 +43,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 		parent_workflow_id TEXT, parent_step_id TEXT,
 		task_workflow_id TEXT,
 		active_task_template_id TEXT, case_id TEXT NOT NULL DEFAULT '',
+		manifest_version INTEGER NOT NULL DEFAULT 0,
 		active_step_id TEXT NULL, seq INTEGER NOT NULL DEFAULT 0, data TEXT,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`).Error; err != nil {
 		t.Fatalf("create table: %v", err)

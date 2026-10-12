@@ -80,7 +80,7 @@ func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) 
 	return nil, nil
 }
 
-func (m *mockTemporalManager) RegisterDefinitionHandler(_ func(templateID string) (engine.WorkflowDefinition, error)) {
+func (m *mockTemporalManager) RegisterDefinitionHandler(_ engine.DefinitionHandler) {
 }
 
 func (m *mockTemporalManager) RegisterAdminParkHandler(_ engine.AdminParkHandler) {
@@ -212,13 +212,14 @@ func newTestPluginsRegistry() *plugins.Registry {
 	return pr
 }
 
-func newTestTaskManager(db store.TaskStore, registry *artifact.Registry, tm engine.TemporalManager, cb TaskCompletedCallback) *TaskManager {
+func newTestTaskManager(db store.TaskStore, registry *artifact.Set, tm engine.TemporalManager, cb TaskCompletedCallback) *TaskManager {
 	return NewTaskManager(db, registry, newTestPluginsRegistry(), nil, tm, cb, noopRenderer{})
 }
 
 func noopCallback(_, _ string, _ map[string]any) error { return nil }
 
-func newTestRegistry() *artifact.Registry {
+// newTestRegistry returns a one-manifest artifact set; tasks in these tests run on version 1.
+func newTestRegistry() *artifact.Set {
 	m := testutil.MemLoader{
 		"task_test_template.json": []byte(`{
 			"id": "test_template",
@@ -258,14 +259,19 @@ func newTestRegistry() *artifact.Registry {
 			}
 		}`),
 	}
-	reg := artifact.NewRegistry(m)
-	reg.RegisterArtifact("test_template", "task_template", "", "task_test_template.json")
-	reg.RegisterArtifact("test_workflow_v1", "workflow", "", "wf_test_workflow_v1.json")
-	reg.RegisterArtifact("test_render_config", "generic_template", "", "generic_render_config.json")
-	reg.RegisterArtifact("generic_user_input", "subtask_template", "", "subtask_generic_user_input.json")
-	reg.RegisterArtifact("generic_user_input_with_extensions", "subtask_template", "", "subtask_generic_user_input_with_extensions.json")
-	reg.RegisterArtifact("generic_external_review", "subtask_template", "", "subtask_generic_external_review.json")
-	return reg
+	m[artifact.ManifestPath(1)] = []byte(`{"artifacts": [
+			{"id": "test_template", "kind": "task_template", "path": "task_test_template.json"},
+			{"id": "test_workflow_v1", "kind": "workflow", "path": "wf_test_workflow_v1.json"},
+			{"id": "test_render_config", "kind": "generic_template", "path": "generic_render_config.json"},
+			{"id": "generic_user_input", "kind": "subtask_template", "path": "subtask_generic_user_input.json"},
+			{"id": "generic_user_input_with_extensions", "kind": "subtask_template", "path": "subtask_generic_user_input_with_extensions.json"},
+			{"id": "generic_external_review", "kind": "subtask_template", "path": "subtask_generic_external_review.json"}
+		]}`)
+	set, err := artifact.LoadSet(context.Background(), m)
+	if err != nil {
+		panic(err)
+	}
+	return set
 }
 
 // ---------------------------------------------------------------------------
@@ -297,13 +303,14 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 
 	// 1. StartTask
 	payload := engine.TaskPayload{
-		WorkflowID:     "parent-workflow",
-		RunID:          "parent-run",
-		NodeID:         "node-1",
-		ActivationID:   "step-1",
-		TaskTemplateID: "test_template",
-		Inputs:         map[string]any{"userform.name": "Alice"},
-		CaseID:         "parent-workflow",
+		ManifestVersion: 1,
+		WorkflowID:      "parent-workflow",
+		RunID:           "parent-run",
+		NodeID:          "node-1",
+		ActivationID:    "step-1",
+		TaskTemplateID:  "test_template",
+		Inputs:          map[string]any{"userform.name": "Alice"},
+		CaseID:          "parent-workflow",
 	}
 
 	if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
@@ -331,12 +338,13 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 
 	// 2. StartTaskStep — generic_user_input
 	payloadTaskWF := engine.TaskPayload{
-		WorkflowID:     task.TaskWorkflowID,
-		RunID:          "task-run",
-		NodeID:         "task-node",
-		ActivationID:   "task-step",
-		Seq:            1,
-		TaskTemplateID: "generic_user_input",
+		ManifestVersion: 1,
+		WorkflowID:      task.TaskWorkflowID,
+		RunID:           "task-run",
+		NodeID:          "task-node",
+		ActivationID:    "task-step",
+		Seq:             1,
+		TaskTemplateID:  "generic_user_input",
 	}
 	if _, err := tm.StartTaskStep(context.Background(), payloadTaskWF); err != nil && !errors.Is(err, activity.ErrResultPending) {
 		t.Fatalf("StartTaskStep failed: %v", err)
@@ -408,8 +416,9 @@ func TestStartTask_UnknownTemplateID(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
-		WorkflowID:     "parent-wf",
-		TaskTemplateID: "does_not_exist",
+		ManifestVersion: 1,
+		WorkflowID:      "parent-wf",
+		TaskTemplateID:  "does_not_exist",
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown template ID, got nil")
@@ -426,8 +435,9 @@ func TestStartTask_TaskWorkflowManagerError(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), mockTaskWF, noopCallback)
 
 	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
-		WorkflowID:     "parent-wf",
-		TaskTemplateID: "test_template",
+		ManifestVersion: 1,
+		WorkflowID:      "parent-wf",
+		TaskTemplateID:  "test_template",
 	})
 	if err == nil {
 		t.Fatal("expected error when task StartWorkflow fails, got nil")
@@ -454,9 +464,10 @@ func TestStartTask_InitTaskErrorPreventsWorkflowStart(t *testing.T) {
 	tm := newTestTaskManager(taskStore, newTestRegistry(), mockTaskWF, noopCallback)
 
 	_, err := tm.StartTask(context.Background(), engine.TaskPayload{
-		WorkflowID:     "parent-wf",
-		ActivationID:   "step-1",
-		TaskTemplateID: "test_template",
+		ManifestVersion: 1,
+		WorkflowID:      "parent-wf",
+		ActivationID:    "step-1",
+		TaskTemplateID:  "test_template",
 	})
 	if err == nil {
 		t.Fatal("expected error when InitTask fails, got nil")
@@ -486,12 +497,13 @@ func TestStartTask_PassesThroughCaseID(t *testing.T) {
 			tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 			payload := engine.TaskPayload{
-				WorkflowID:     tc.workflowID,
-				RunID:          "run-1",
-				NodeID:         "node-1",
-				ActivationID:   "step-1",
-				TaskTemplateID: "test_template",
-				CaseID:         tc.caseID,
+				ManifestVersion: 1,
+				WorkflowID:      tc.workflowID,
+				RunID:           "run-1",
+				NodeID:          "node-1",
+				ActivationID:    "step-1",
+				TaskTemplateID:  "test_template",
+				CaseID:          tc.caseID,
 			}
 			if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
 				t.Fatalf("StartTask failed: %v", err)
@@ -516,8 +528,9 @@ func TestStartTaskStep_UnknownWorkflowID(t *testing.T) {
 	tm := newTestTaskManager(newSafeMockTaskStore(), newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
-		WorkflowID:     "workflow-that-was-never-registered",
-		TaskTemplateID: "generic_user_input",
+		ManifestVersion: 1,
+		WorkflowID:      "workflow-that-was-never-registered",
+		TaskTemplateID:  "generic_user_input",
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown workflow ID, got nil")
@@ -527,17 +540,19 @@ func TestStartTaskStep_UnknownWorkflowID(t *testing.T) {
 func TestStartTaskStep_UnknownTaskTemplateID(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.InitTask(context.Background(), store.TaskRecord{
-		TaskID:         "task-1",
-		TaskWorkflowID: "task-workflow-1",
-		State:          "STARTING",
-		Data:           map[string]any{},
+		ManifestVersion: 1,
+		TaskID:          "task-1",
+		TaskWorkflowID:  "task-workflow-1",
+		State:           "STARTING",
+		Data:            map[string]any{},
 	})
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
-		WorkflowID:     "task-workflow-1",
-		TaskTemplateID: "not_a_real_template",
+		ManifestVersion: 1,
+		WorkflowID:      "task-workflow-1",
+		TaskTemplateID:  "not_a_real_template",
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown task_template_id in StartTaskStep, got nil")
@@ -551,10 +566,11 @@ func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
 	)
 	db := newSafeMockTaskStore()
 	db.InitTask(context.Background(), store.TaskRecord{
-		TaskID:         taskID,
-		TaskWorkflowID: "task-ext-workflow",
-		State:          "STARTING",
-		Data:           map[string]any{},
+		ManifestVersion: 1,
+		TaskID:          taskID,
+		TaskWorkflowID:  "task-ext-workflow",
+		State:           "STARTING",
+		Data:            map[string]any{},
 	})
 
 	// The dispatcher receives the callback token for the step, not the bare task ID.
@@ -567,12 +583,13 @@ func TestStartTaskStep_ExternalReviewPath(t *testing.T) {
 	tm := NewTaskManager(db, newTestRegistry(), pr, nil, &mockTemporalManager{}, noopCallback, noopRenderer{})
 
 	_, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
-		WorkflowID:     "task-ext-workflow",
-		RunID:          "run-1",
-		NodeID:         "node-ext",
-		ActivationID:   stepID,
-		Seq:            1,
-		TaskTemplateID: "generic_external_review",
+		ManifestVersion: 1,
+		WorkflowID:      "task-ext-workflow",
+		RunID:           "run-1",
+		NodeID:          "node-ext",
+		ActivationID:    stepID,
+		Seq:             1,
+		TaskTemplateID:  "generic_external_review",
 	})
 	if err != nil && !errors.Is(err, activity.ErrResultPending) {
 		t.Fatalf("StartTaskStep for generic_external_review failed: %v", err)
@@ -608,9 +625,10 @@ func TestCompleteTaskStep_UnknownTaskID(t *testing.T) {
 func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.InitTask(context.Background(), store.TaskRecord{
-		TaskID: "task-done",
-		State:  "COMPLETED",
-		Data:   map[string]any{},
+		ManifestVersion: 1,
+		TaskID:          "task-done",
+		State:           "COMPLETED",
+		Data:            map[string]any{},
 	})
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
@@ -624,9 +642,10 @@ func TestCompleteTaskStep_AlreadyCompleted(t *testing.T) {
 func TestCompleteTaskStep_NoActiveStep(t *testing.T) {
 	db := newSafeMockTaskStore()
 	db.InitTask(context.Background(), store.TaskRecord{
-		TaskID: "task-starting",
-		State:  "STARTING",
-		Data:   map[string]any{},
+		ManifestVersion: 1,
+		TaskID:          "task-starting",
+		State:           "STARTING",
+		Data:            map[string]any{},
 	})
 
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
@@ -779,6 +798,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 
 	// Setup a task record with active step configuration
 	record := store.TaskRecord{
+		ManifestVersion:      1,
 		TaskID:               "test-task-ext",
 		TaskType:             "TEST",
 		State:                "PENDING_USER",
@@ -853,7 +873,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 // The task view and the list carry the step to act on and the version.
 func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.InitTask(context.Background(), store.TaskRecord{TaskID: "task-v", TaskType: "TEST", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
+	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(context.Background(), "task-v")

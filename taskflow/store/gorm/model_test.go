@@ -29,6 +29,7 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		ParentWorkflowID:     "consignment-9--node-3--branch-1",
 		ParentStepID:         "step-3",
 		CaseID:               "consignment-9",
+		ManifestVersion:      3,
 		TaskWorkflowID:       "task-wf-1",
 		ActiveTaskTemplateID: "tmpl-1",
 		ActiveStepID:         "0a0a0a0a-0000-4000-8000-00000000000a",
@@ -40,6 +41,9 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 
 	if got.CaseID != original.CaseID {
 		t.Errorf("CaseID not preserved: got %q, want %q", got.CaseID, original.CaseID)
+	}
+	if got.ManifestVersion != original.ManifestVersion {
+		t.Errorf("ManifestVersion: got %d, want %d", got.ManifestVersion, original.ManifestVersion)
 	}
 	if got.TaskID != original.TaskID {
 		t.Errorf("TaskID: got %q, want %q", got.TaskID, original.TaskID)

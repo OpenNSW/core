@@ -23,7 +23,7 @@ const wakeTaskID = "5f0c9b1e-3d2a-4c6b-8e7f-0a1b2c3d4e5f"
 func wakeUpFixture(t *testing.T, db store.TaskStore) (*TaskManager, *mockTemporalManager) {
 	t.Helper()
 	ctx := context.Background()
-	db.InitTask(ctx, store.TaskRecord{TaskID: wakeTaskID, TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: wakeTaskID, TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf", Data: map[string]any{}})
 	if _, err := db.ClaimStep(ctx, wakeTaskID, store.StepClaim{
 		StepID: stepA, Seq: 4, ActiveTaskTemplateID: "generic_user_input", State: store.StateStartingStep,
 		Data: map[string]any{"in": "value"},
@@ -220,7 +220,8 @@ func TestCompleteTaskStep_CallbackBeforeTheRenderWriteWins(t *testing.T) {
 	}
 
 	if _, err := tm.StartTaskStep(context.Background(), engine.TaskPayload{
-		WorkflowID: "task-wf", ActivationID: stepA, Seq: 4, TaskTemplateID: "generic_user_input",
+		ManifestVersion: 1,
+		WorkflowID:      "task-wf", ActivationID: stepA, Seq: 4, TaskTemplateID: "generic_user_input",
 	}); err == nil {
 		t.Fatal("expected ErrResultPending from the suspended plugin")
 	}
@@ -234,7 +235,7 @@ func TestCompleteTaskStep_CallbackBeforeTheRenderWriteWins(t *testing.T) {
 // startTaskStepManager is a task manager over db whose USER_INPUT plugin is a probe.
 func startTaskStepManager(t *testing.T, db *safeMockTaskStore) (*TaskManager, *probePlugin) {
 	t.Helper()
-	db.InitTask(context.Background(), store.TaskRecord{TaskID: wakeTaskID, TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf", Data: map[string]any{}})
+	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: wakeTaskID, TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf", Data: map[string]any{}})
 	tm, _, probe := startTaskStepFixtureOver(t, db)
 	return tm, probe
 }

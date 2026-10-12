@@ -210,12 +210,14 @@ func TestAdminParkNotificationCarriesCategoryAndMappings(t *testing.T) {
 
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
 		"global_user_email": "user@example.com",
+		VarManifestVersion:  5,
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 
 	require.Equal(t, ParkCategoryInputMapping, captured.ParkCategory)
+	require.Equal(t, 5, captured.ManifestVersion, "AdminParkPayload carries the workflow's manifest version")
 	require.Equal(t, map[string]string{"missing_global_var": "local_key"}, captured.InputMapping)
 	require.Empty(t, captured.OutputMapping)
 	require.Equal(t, parkedID, captured.ActivationID, "AdminParkPayload.ActivationID matches NodeInfo's")
