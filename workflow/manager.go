@@ -71,7 +71,15 @@ type TaskPayload struct {
 	// of nesting, so it names the case of a task in a deeply nested child, which WorkflowID
 	// alone does not.
 	CaseID string
+	// ManifestVersion is the artifact manifest version to resolve TaskTemplateID and everything
+	// it leads to through (see VarManifestVersion). 0 if the host started the workflow without
+	// one.
+	ManifestVersion int
 }
+
+// DefinitionHandler returns the workflow definition templateID names in artifact manifest
+// manifestVersion (see VarManifestVersion). The engine calls it when a SPLIT_TASK node fans out.
+type DefinitionHandler func(manifestVersion int, templateID string) (WorkflowDefinition, error)
 
 // AdminParkPayload carries the context of a node parking in NodeStatusAwaitingAdmin, delivered
 // to an AdminParkHandler so the host application can decide how to surface the event — log it,
@@ -84,6 +92,10 @@ type AdminParkPayload struct {
 	RunID string
 	// CaseID is the case the parked workflow belongs to (see VarCaseID).
 	CaseID string
+	// ManifestVersion is the artifact manifest version the parked workflow resolves its
+	// templates through (see VarManifestVersion), so a handler that shows or checks the
+	// parked node's template uses the flow's own version. 0 if the host set none.
+	ManifestVersion int
 	// NodeID is the ID of the graph node that parked. It names the definition, not this one run of
 	// it; see ActivationID for a run.
 	NodeID string
@@ -289,7 +301,7 @@ type TemporalManager interface {
 	Manager
 
 	// RegisterDefinitionHandler registers the handler function for fetching sub-workflow definitions.
-	RegisterDefinitionHandler(handler func(templateID string) (WorkflowDefinition, error))
+	RegisterDefinitionHandler(handler DefinitionHandler)
 
 	// RegisterAdminParkHandler registers the handler invoked whenever a node parks for admin
 	// intervention. Optional — see AdminParkHandler's doc for what a nil/unregistered handler
@@ -355,7 +367,7 @@ func NewTemporalManager(
 	return m
 }
 
-func (m *temporalManagerImpl) RegisterDefinitionHandler(handler func(templateID string) (WorkflowDefinition, error)) {
+func (m *temporalManagerImpl) RegisterDefinitionHandler(handler DefinitionHandler) {
 	m.activities.FetchWorkflowDefinitionHandler = handler
 }
 

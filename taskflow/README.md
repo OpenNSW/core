@@ -84,7 +84,9 @@ workflowRunner := workflow.NewTemporalManager(
 onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
     return parentWorkflowManager.CompleteActivation(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
 }
-tm = orchestrator.NewTaskManager(store, artifactRegistry, pluginRegistry, workflowRunner, onTaskCompleted, taskRenderer)
+// artifacts is an *artifact.Set: each task resolves its templates through the manifest version
+// its parent workflow carries (workflow.VarManifestVersion), and records it on the task.
+tm = orchestrator.NewTaskManager(store, artifacts, pluginRegistry, nil /* extensions */, workflowRunner, onTaskCompleted, taskRenderer)
 
 // 5. Start the Temporal worker
 if err := workflowRunner.StartWorker(); err != nil {

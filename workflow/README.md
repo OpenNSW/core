@@ -91,7 +91,7 @@ Each partition runs as a child workflow, and the join merges its items back by I
 
 * **`input_mapping`** (parent path → child path): each partition starts with only the mapped
   variables, plus the engine's context variables (names starting with `_`, such as
-  `_case_id`). A missing source parks the split unless its key ends in `?`. A split
+  `_case_id` and `_manifest_version`). A missing source parks the split unless its key ends in `?`. A split
   without an `input_mapping` gives its partitions no workflow variables besides their items.
 * **`output_mapping`** (child path → parent path): the parent path is replaced with a flat
   list of the unique values the partitions hold at the child path, in partition order. A
@@ -197,10 +197,20 @@ manager := engine.NewTemporalManager(
     completionHandler, // WorkflowCompletionHandler
 )
 
-// Register sub-workflow definition loader (required if using SPLIT_TASK nodes)
-manager.RegisterDefinitionHandler(func(templateID string) (engine.WorkflowDefinition, error) {
-    // Retrieve definition from database or local files
-    return loadDefinition(templateID), nil
+// Register sub-workflow definition loader (required if using SPLIT_TASK nodes). It resolves
+// templateID in the manifest version the calling workflow carries (VarManifestVersion).
+manager.RegisterDefinitionHandler(func(manifestVersion int, templateID string) (engine.WorkflowDefinition, error) {
+    reg, err := artifacts.Registry(ctx, manifestVersion)
+    if err != nil {
+        return engine.WorkflowDefinition{}, err
+    }
+    return workflowdef.Load(ctx, reg, templateID)
+})
+
+// Start a top-level workflow on the current manifest version. The engine carries it to every
+// child workflow and reports it on every task activation (TaskPayload.ManifestVersion).
+err := manager.StartWorkflow(ctx, id, def, map[string]any{
+    engine.VarManifestVersion: artifacts.Current(),
 })
 
 // Start the internal worker to begin execution

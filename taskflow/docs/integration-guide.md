@@ -13,7 +13,7 @@ To run the orchestrator, you provide concrete implementations of four dependenci
 | Dependency        | Interface                            | What it does                                                   |
 |-------------------|--------------------------------------|----------------------------------------------------------------|
 | Task store        | `store.TaskStore`                    | Persists `TaskRecord`s                                         |
-| Template registry | `orchestrator.TaskTemplateRegistry`  | Looks up task / step / workflow / render-config definitions |
+| Artifacts         | `*artifact.Set`                      | Task / step / workflow / render-config definitions, per manifest version |
 | Plugin registry   | `*plugins.Registry` (concrete)       | Maps `TaskType` → plugin handler                               |
 | Temporal manager  | `engine.TemporalManager`             | Starts task workflows and resumes parked activities            |
 | Renderer          | `renderer.Renderer`                  | Turns `(state, data)` + render config → a UI view              |
@@ -22,10 +22,10 @@ To run the orchestrator, you provide concrete implementations of four dependenci
 Then you call:
 
 ```go
-tm := orchestrator.NewTaskManager(db, registry, pluginsReg, taskWorkflowManager, onTaskCompleted, rdr)
+tm := orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions */, taskWorkflowManager, onTaskCompleted, rdr)
 ```
 
-…and wire `tm.StartTask`, `tm.StartTaskStep`, and `tm.HandleTaskCompletion` into your Temporal handlers. `demo/main.go` is the complete worked example.
+…and wire `tm.StartTask`, `tm.StartTaskStep`, and `tm.HandleTaskCompletion` into your Temporal handlers. Start every parent workflow with `workflow.VarManifestVersion` set to `artifacts.Current()`: `StartTask` records that version on the task and refuses a payload without one, and every later step, submission and render of the task resolves through it. `demo/main.go` is the complete worked example.
 
 ---
 
@@ -182,7 +182,7 @@ taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
 
 // ... construct managers ...
 
-tm = orchestrator.NewTaskManager(db, registry, pluginsReg, taskWorkflowManager, onTaskCompleted, rdr)
+tm = orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions */, taskWorkflowManager, onTaskCompleted, rdr)
 ```
 
 ---

@@ -120,7 +120,6 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     if err := artifacts.Validate(ctx, artifacts.Current(), corechecks.Checks()); err != nil {
         return nil, err
     }
-    registry := artifacts.CurrentRegistry()
 
     // 3. Payment
     paymentRepo := NewPaymentRepo(db)
@@ -152,7 +151,8 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     onTaskCompleted := func(parentWorkflowID, parentStepID string, vars map[string]any) error {
         return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentStepID, vars)
     }
-    tm = orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, microRunner, onTaskCompleted, taskRenderer)
+    // Each task resolves its templates through the manifest version its workflow carries.
+    tm = orchestrator.NewTaskManager(taskStore, artifacts, pluginRegistry, nil /* extensions */, microRunner, onTaskCompleted, taskRenderer)
     microRunner.StartWorker()
 
     // 6. Macro workflow runner
@@ -161,6 +161,10 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
         onMacroTaskActivation, onMacroCompletion,
     )
     macroRunner.StartWorker()
+    // Start each top-level workflow on the current manifest; the engine carries the version to
+    // every child workflow and task:
+    //   vars[workflow.VarManifestVersion] = artifacts.Current()
+    //   macroRunner.StartWorkflow(ctx, id, def, vars)
 
     // 7. Auth
     authnManager, _ := authn.NewManager(userProfileSvc, cfg.Authn)

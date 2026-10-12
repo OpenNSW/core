@@ -31,6 +31,11 @@ type TaskRecord struct {
 	// lists a case's tasks by it.
 	CaseID string `json:"case_id"`
 
+	// ManifestVersion is the artifact manifest version the task resolves its templates through
+	// (see workflow.VarManifestVersion): the parent workflow's at the time the task started. Every
+	// step of the task, and every render of it, uses it.
+	ManifestVersion int `json:"manifest_version"`
+
 	// Active step execution coordinates — used to resume/wake the currently active step via the API.
 	// WARNING: Since the store only holds a single set of coordinates, only one step can be active at any given time
 	// (strictly sequential execution). Parallel/concurrent steps inside a single Task Workflow are not supported.
