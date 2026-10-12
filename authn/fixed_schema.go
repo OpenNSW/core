@@ -9,28 +9,28 @@ import (
 	"strings"
 )
 
-// defaultRolesClaim is the claim name authn reads roles from unless a consumer
-// points it elsewhere with WithRolesClaim. It must stay in sync with the json
-// tag on tokenClaims.Roles.
-const defaultRolesClaim = "roles"
+// rolesClaim is the claim authn reads roles from. It must stay in sync with the
+// json tag on tokenClaims.Roles.
+const rolesClaim = "roles"
 
 // fixedSchemaClaims lists the claims authn binds itself, which are therefore
 // kept out of ExtraClaims so each value has exactly one home.
 //
 // Being in this map means the claim already has a dedicated Principal field or
 // is consumed by validation, not that it's inherently more "generic" than a
-// claim that isn't. It should
-// only grow when a claim actually graduates from "extra" to "fixed" —
-// demonstrated load-bearing across multiple independent consumers, the same
-// way ouId/ouHandle/email/phone_number were evaluated and found not to
-// qualify — never pre-emptively.
+// claim that isn't. It should only grow when a claim graduates from "extra" to
+// "fixed" because consumers depend on it, never pre-emptively.
 //
 // Every key MUST be lowercase, because lookups fold the candidate name (see
 // foldClaimName). TestFixedSchemaClaims_KeysAreFolded enforces that.
 var fixedSchemaClaims = map[string]bool{
-	"client_id":       true,
-	"scope":           true,
-	defaultRolesClaim: true,
+	"client_id": true,
+	"scope":     true,
+	rolesClaim:  true,
+	// Standard identity claims (see ClaimsConfig).
+	"email":    true,
+	"ouid":     true,
+	"ouhandle": true,
 	// JWT registered claims (RFC 7519 §4.1), always present via jwt.RegisteredClaims.
 	"iss": true,
 	"sub": true,
@@ -52,32 +52,10 @@ func foldClaimName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
-// validateRolesClaimName reports whether name is usable as the roles claim.
-// Any case-spelling of "roles" is fine — it IS the roles claim. Any other
-// fixed-schema name is not: it already feeds a different field, and pointing
-// roles at it would bind one claim to two meanings (WithRolesClaim("scope")
-// would try to read the space-delimited scope string as a roles array and
-// reject every token).
-func validateRolesClaimName(name string) error {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return fmt.Errorf("roles claim name is empty")
-	}
-	if folded := foldClaimName(trimmed); folded != defaultRolesClaim && fixedSchemaClaims[folded] {
-		return fmt.Errorf("roles claim %q is part of authn's fixed schema and already feeds a different field", trimmed)
-	}
-	return nil
-}
-
 // rolesValue captures the raw "roles" claim without imposing a shape at JSON
-// decode time.
-//
-// Binding the field as []string would make the SHAPE of the literal "roles"
-// claim a hard token-validity condition even for consumers who moved roles
-// elsewhere with WithRolesClaim: struct tags are static, so a token carrying
-// `"roles": "legacy-string"` would be rejected by encoding/json before authn
-// ever looked at the configured claim. Capturing the raw value defers that
-// decision to parseRolesClaim, which applies it only to the claim in force.
+// decode time, so parseRolesClaim can judge it: binding the field as []string
+// would reject a wrong-shaped claim with an opaque encoding/json error, and
+// would leave role strings untrimmed.
 type rolesValue struct{ value any }
 
 func (r *rolesValue) UnmarshalJSON(data []byte) error {
@@ -100,9 +78,8 @@ func (r *rolesValue) UnmarshalJSON(data []byte) error {
 // Rejecting rather than ignoring a wrong-shaped value is also deliberate: roles
 // feed authz.Principal, and a silently empty roles slice reads as "granted
 // nothing" — which fails closed for a require-role check, but fails OPEN for
-// any check phrased as "deny if the principal has role X". A mistyped
-// WithRolesClaim must fail loudly on the first request.
-func parseRolesClaim(name string, value any) ([]string, error) {
+// any check phrased as "deny if the principal has role X".
+func parseRolesClaim(value any) ([]string, error) {
 	switch v := value.(type) {
 	case nil:
 		return nil, nil
@@ -111,12 +88,12 @@ func parseRolesClaim(name string, value any) ([]string, error) {
 		for _, item := range v {
 			role, ok := item.(string)
 			if !ok {
-				return nil, fmt.Errorf("jwt claim %q must be an array of strings", name)
+				return nil, fmt.Errorf("jwt claim %q must be an array of strings", rolesClaim)
 			}
 			roles = append(roles, strings.TrimSpace(role))
 		}
 		return roles, nil
 	default:
-		return nil, fmt.Errorf("jwt claim %q must be an array of strings", name)
+		return nil, fmt.Errorf("jwt claim %q must be an array of strings", rolesClaim)
 	}
 }

@@ -60,13 +60,7 @@ func NewManager(authConfig Config) (*Manager, error) {
 // Options, so Config-driven (NewManager) and direct (NewTokenExtractor)
 // callers share identical semantics.
 func buildOptions(cfg Config) []Option {
-	var opts []Option
-	// Only when set: WithRolesClaim("") would blank the extractor's default
-	// and be rejected by validateRolesClaimName.
-	if cfg.RolesClaim != "" {
-		opts = append(opts, WithRolesClaim(cfg.RolesClaim))
-	}
-	return opts
+	return []Option{WithClaims(cfg.Claims)}
 }
 
 // Middleware returns the auth middleware function.

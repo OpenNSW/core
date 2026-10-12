@@ -44,30 +44,3 @@ func TestConfigValidate(t *testing.T) {
 		})
 	}
 }
-
-func TestConfigValidate_RejectsFixedSchemaRolesClaim(t *testing.T) {
-	cfg := Config{
-		JWKSURL:    "https://localhost/jwks",
-		Issuer:     "https://localhost/token",
-		Audience:   "TRADER_PORTAL_APP",
-		RolesClaim: "scope",
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected error for a roles claim that is a fixed-schema name")
-	}
-}
-
-// TestConfigValidate_AllowsNamespacedRolesClaim locks in that a claim name is
-// matched exactly rather than parsed: Auth0-style namespaced claims contain
-// dots and slashes and must not be mistaken for a nested path.
-func TestConfigValidate_AllowsNamespacedRolesClaim(t *testing.T) {
-	cfg := Config{
-		JWKSURL:    "https://localhost/jwks",
-		Issuer:     "https://localhost/token",
-		Audience:   "TRADER_PORTAL_APP",
-		RolesClaim: "https://app.example.com/roles",
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-}

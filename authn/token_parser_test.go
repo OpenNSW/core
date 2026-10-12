@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -484,4 +485,94 @@ func TestParseRSAPublicKey_InvalidData(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTokenExtractor_StandardClaims(t *testing.T) {
+	extractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
+
+	t.Run("populated and trimmed", func(t *testing.T) {
+		claims := newBaseClaims()
+		claims["email"] = "  " + testEmail + " \n"
+		claims["ouId"] = testOUID
+		claims["ouHandle"] = testOUHandle
+
+		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		if p.Email != testEmail || p.OUID != testOUID || p.OUHandle != testOUHandle {
+			t.Fatalf("unexpected standard claims: %+v", p)
+		}
+	})
+
+	t.Run("optional by default: absent or blank reads as empty", func(t *testing.T) {
+		claims := newBaseClaims()
+		claims["ouId"] = "   "
+
+		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+		if err != nil {
+			t.Fatalf("expected success with no standard claims, got %v", err)
+		}
+		if p.Email != "" || p.OUID != "" || p.OUHandle != "" {
+			t.Fatalf("expected empty standard claims, got %+v", p)
+		}
+	})
+
+	t.Run("a non-string value rejects the token", func(t *testing.T) {
+		claims := newBaseClaims()
+		claims["email"] = 42
+
+		if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims)); err == nil {
+			t.Fatal("expected error for a non-string email claim")
+		}
+	})
+}
+
+func TestTokenExtractor_RequiredStandardClaims(t *testing.T) {
+	tests := []struct {
+		name   string
+		config ClaimsConfig
+		claim  string
+	}{
+		{"email", ClaimsConfig{Email: ClaimConfig{Required: true}}, "email"},
+		{"ouId", ClaimsConfig{OUID: ClaimConfig{Required: true}}, "ouId"},
+		{"ouHandle", ClaimsConfig{OUHandle: ClaimConfig{Required: true}}, "ouHandle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithClaims(tt.config))
+			defer cleanup()
+
+			for _, value := range []any{nil, "", "   "} {
+				claims := newBaseClaims()
+				if value != nil {
+					claims[tt.claim] = value
+				}
+				_, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+				want := fmt.Sprintf("jwt missing or empty required claim %q", tt.claim)
+				if err == nil || err.Error() != want {
+					t.Fatalf("value %#v: expected %q, got %v", value, want, err)
+				}
+			}
+
+			claims := newBaseClaims()
+			claims[tt.claim] = "present"
+			if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims)); err != nil {
+				t.Fatalf("expected success when %s is present, got %v", tt.claim, err)
+			}
+		})
+	}
+
+	// Required applies to every token: a client-credentials token without an
+	// email is rejected too.
+	t.Run("applies to client tokens", func(t *testing.T) {
+		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t,
+			WithClaims(ClaimsConfig{Email: ClaimConfig{Required: true}}))
+		defer cleanup()
+
+		if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + newClientToken(t, privateKey)); err == nil {
+			t.Fatal("expected a client token without email to be rejected")
+		}
+	})
 }

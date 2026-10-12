@@ -59,8 +59,20 @@ func TestAuthContext_Accessors(t *testing.T) {
 		ClientID: testClientID,
 		Roles:    []string{"exporter"},
 		Scopes:   []string{"nsw:task:read"},
+		Email:    testEmail,
+		OUID:     testOUID,
+		OUHandle: testOUHandle,
 	}}
 
+	if got := authCtx.Email(); got != testEmail {
+		t.Errorf("Email() = %q, want %q", got, testEmail)
+	}
+	if got := authCtx.OUID(); got != testOUID {
+		t.Errorf("OUID() = %q, want %q", got, testOUID)
+	}
+	if got := authCtx.OUHandle(); got != testOUHandle {
+		t.Errorf("OUHandle() = %q, want %q", got, testOUHandle)
+	}
 	if got := authCtx.Subject(); got != testUserID {
 		t.Errorf("Subject() = %q, want %q", got, testUserID)
 	}
@@ -75,7 +87,8 @@ func TestAuthContext_Accessors(t *testing.T) {
 	}
 
 	var nilCtx *AuthContext
-	if nilCtx.Subject() != "" || nilCtx.ClientID() != "" || nilCtx.Roles() != nil || nilCtx.Scopes() != nil {
+	if nilCtx.Subject() != "" || nilCtx.ClientID() != "" || nilCtx.Roles() != nil || nilCtx.Scopes() != nil ||
+		nilCtx.Email() != "" || nilCtx.OUID() != "" || nilCtx.OUHandle() != "" {
 		t.Error("expected zero values from a nil AuthContext")
 	}
 }

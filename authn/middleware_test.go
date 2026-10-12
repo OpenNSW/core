@@ -168,7 +168,7 @@ func TestAuthMiddleware_ValidUserToken(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_ExtraClaims(t *testing.T) {
+func TestAuthMiddleware_IdentityClaims(t *testing.T) {
 	tokenExtractor, privateKey, cleanup := newTokenExtractor(t)
 	defer cleanup()
 
@@ -177,12 +177,12 @@ func TestAuthMiddleware_ExtraClaims(t *testing.T) {
 	testHandlerCalled := false
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		testHandlerCalled = true
-		claims := GetAuthContext(r.Context()).ExtraClaims()
-		if claims.String("email") != testEmail ||
-			claims.String("phone_number") != testPhone ||
-			claims.String("ouId") != testOUID ||
-			claims.String("ouHandle") != testOUHandle {
-			t.Fatalf("unexpected extra claims: %#v", claims)
+		authCtx := GetAuthContext(r.Context())
+		if authCtx.Email() != testEmail || authCtx.OUID() != testOUID || authCtx.OUHandle() != testOUHandle {
+			t.Fatalf("unexpected standard claims: %+v", authCtx.Principal)
+		}
+		if got := authCtx.ExtraClaims().String("phone_number"); got != testPhone {
+			t.Fatalf("phone_number = %q, want %q", got, testPhone)
 		}
 		w.WriteHeader(http.StatusOK)
 	})

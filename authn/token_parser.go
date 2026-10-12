@@ -35,22 +35,24 @@ func (s *spaceDelimitedScope) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// tokenClaims is deliberately minimal: only the claims every Principal carries
-// (sub and client_id, both required; scope for OAuth2 permission scoping;
-// roles for the authz seam) plus the JWT registered claims (iss/aud/exp/...)
-// needed for signature/expiry/issuer/audience validation. Everything else
-// (email, phone_number, ouId, ouHandle, given_name, ...) is IdP-specific and
-// passes through as ExtraClaims (see extra_claims.go) instead of a dedicated
-// field.
+// tokenClaims is deliberately small: the claims every Principal carries (sub
+// and client_id, both required; scope for OAuth2 permission scoping; roles for
+// the authz seam), the standard identity claims (email, ouId, ouHandle; each
+// optional unless configured as required), plus the JWT registered claims
+// (iss/aud/exp/...) needed for signature/expiry/issuer/audience validation.
+// Everything else (phone_number, given_name, ...) passes through as
+// ExtraClaims (see extra_claims.go) instead of a dedicated field.
 //
-// Roles is captured shape-free (see rolesValue) so that WithRolesClaim can
-// genuinely move roles elsewhere; parseRolesClaim enforces the shape on
-// whichever claim is actually in force.
+// Roles is captured shape-free (see rolesValue); parseRolesClaim enforces its
+// shape.
 type tokenClaims struct {
 	jwt.RegisteredClaims
 	ClientID string              `json:"client_id"`
 	Roles    rolesValue          `json:"roles"`
 	Scopes   spaceDelimitedScope `json:"scope,omitempty"`
+	Email    string              `json:"email"`
+	OUID     string              `json:"ouId"`
+	OUHandle string              `json:"ouHandle"`
 }
 
 // Principal is the authenticated caller a validated token describes. There is
@@ -59,13 +61,26 @@ type tokenClaims struct {
 // only by what they carry (roles, scopes, claims), never by kind.
 type Principal struct {
 	// Subject is the JWT "sub" claim: the identity provider's ID for the
-	// caller.
+	// caller. Always non-empty: a token without "sub" is rejected.
 	Subject string `json:"subject"`
 	// ClientID is the JWT "client_id" claim: the OAuth2 client the token was
-	// issued to.
-	ClientID    string      `json:"clientId"`
-	Roles       []string    `json:"roles"`
-	Scopes      []string    `json:"scopes"`
+	// issued to. Always non-empty: a token without "client_id" is rejected.
+	ClientID string `json:"clientId"`
+	// Roles is the JWT "roles" claim, nil when the token does not carry it. A
+	// "roles" claim that is not an array of strings rejects the token.
+	Roles []string `json:"roles"`
+	// Scopes is the space-delimited JWT "scope" claim, nil when the token does
+	// not carry it.
+	Scopes []string `json:"scopes"`
+
+	// Email, OUID and OUHandle are the standard identity claims "email",
+	// "ouId" and "ouHandle", whitespace-trimmed. Each is "" when the token
+	// does not carry it, unless configured as required (see ClaimsConfig),
+	// in which case such a token is rejected.
+	Email    string `json:"email,omitempty"`
+	OUID     string `json:"ouId,omitempty"`
+	OUHandle string `json:"ouHandle,omitempty"`
+
 	ExtraClaims ExtraClaims `json:"extraClaims,omitempty"`
 }
 
@@ -92,9 +107,8 @@ type TokenExtractor struct {
 	expAudience string
 	httpClient  *http.Client
 
-	// rolesClaim is the claim name roles are read from; defaultRolesClaim
-	// unless overridden by WithRolesClaim.
-	rolesClaim string
+	// claims configures the standard identity claims; see WithClaims.
+	claims ClaimsConfig
 
 	cacheMu       sync.RWMutex
 	cachedJWKS    *jwksResponse
@@ -114,7 +128,7 @@ func NewTokenExtractorWithClient(jwksURL, issuer, audience string, httpClient *h
 }
 
 // newExtractor is the single construction path, so a defaulted field
-// (rolesClaim) can only be forgotten in one place.
+// (jwksCacheTTL) can only be forgotten in one place.
 func newExtractor(jwksURL, issuer, audience string, httpClient *http.Client, opts ...Option) (*TokenExtractor, error) {
 	extractor := &TokenExtractor{
 		jwksURL:      strings.TrimSpace(jwksURL),
@@ -122,7 +136,6 @@ func newExtractor(jwksURL, issuer, audience string, httpClient *http.Client, opt
 		expAudience:  strings.TrimSpace(audience),
 		jwksCacheTTL: defaultJWKSCacheTTL,
 		httpClient:   httpClient,
-		rolesClaim:   defaultRolesClaim,
 	}
 
 	for _, opt := range opts {
@@ -149,12 +162,6 @@ func (te *TokenExtractor) validateConfig() error {
 	if te.httpClient == nil {
 		return fmt.Errorf("http client is not configured")
 	}
-
-	if err := validateRolesClaimName(te.rolesClaim); err != nil {
-		return err
-	}
-	te.rolesClaim = strings.TrimSpace(te.rolesClaim)
-
 	return nil
 }
 
@@ -201,7 +208,26 @@ func (te *TokenExtractor) ExtractPrincipalFromHeader(authHeader string) (*Princi
 		return nil, fmt.Errorf("jwt missing client_id claim")
 	}
 
-	extra, roles, err := te.resolveClaims(tokenString, claims)
+	email := strings.TrimSpace(claims.Email)
+	ouID := strings.TrimSpace(claims.OUID)
+	ouHandle := strings.TrimSpace(claims.OUHandle)
+	for _, c := range []struct {
+		name   string
+		config ClaimConfig
+		value  string
+	}{
+		{"email", te.claims.Email, email},
+		{"ouId", te.claims.OUID, ouID},
+		{"ouHandle", te.claims.OUHandle, ouHandle},
+	} {
+		if c.config.Required && c.value == "" {
+			// Claim NAMES only, never values: this error reaches the
+			// middleware's Debug log with request context.
+			return nil, fmt.Errorf("jwt missing or empty required claim %q", c.name)
+		}
+	}
+
+	extra, roles, err := resolveClaims(tokenString, claims)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +236,10 @@ func (te *TokenExtractor) ExtractPrincipalFromHeader(authHeader string) (*Princi
 		Subject:     claims.Subject,
 		ClientID:    claims.ClientID,
 		Roles:       roles,
-		Scopes:      []string(claims.Scopes),
+		Scopes:      claims.Scopes,
+		Email:       email,
+		OUID:        ouID,
+		OUHandle:    ouHandle,
 		ExtraClaims: extra,
 	}, nil
 }

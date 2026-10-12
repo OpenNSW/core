@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 )
@@ -142,17 +141,13 @@ func normalizeClaimValue(value any) any {
 // a blank string) are dropped, so they read the same as claims the token never
 // carried.
 //
-// The fixed-schema exclusion folds case, for the same reason the roles-claim
-// guard does: encoding/json binds struct tags case-insensitively, so a payload
-// key of "Roles" or "SUB" already landed in a fixed field and must not surface
-// a second time under ExtraClaims. rolesClaim is excluded too: once roles are
-// read from "groups", that claim is Principal.Roles. It is matched exactly,
-// because a custom roles claim is read from the payload exactly — "Groups"
-// never fed Roles, so it stays an extra claim.
-func extractExtraClaims(payload map[string]any, rolesClaim string) ExtraClaims {
+// The fixed-schema exclusion folds case: encoding/json binds struct tags
+// case-insensitively, so a payload key of "Roles" or "SUB" already landed in a
+// fixed field and must not surface a second time under ExtraClaims.
+func extractExtraClaims(payload map[string]any) ExtraClaims {
 	var extra ExtraClaims
 	for name, value := range payload {
-		if fixedSchemaClaims[foldClaimName(name)] || name == rolesClaim || claimAbsent(value) {
+		if fixedSchemaClaims[foldClaimName(name)] || claimAbsent(value) {
 			continue
 		}
 		if extra == nil {
@@ -163,28 +158,19 @@ func extractExtraClaims(payload map[string]any, rolesClaim string) ExtraClaims {
 	return extra
 }
 
-// resolveClaims produces the two payload-derived pieces of a principal that
-// depend on configuration — the roles slice and the extra claims — sharing a
-// single payload decode between them.
-func (te *TokenExtractor) resolveClaims(tokenString string, claims *tokenClaims) (ExtraClaims, []string, error) {
+// resolveClaims produces the roles slice and the extra claims of a principal.
+// The extra claims need a second decode of the payload, since tokenClaims only
+// binds the fixed schema.
+func resolveClaims(tokenString string, claims *tokenClaims) (ExtraClaims, []string, error) {
+	roles, err := parseRolesClaim(claims.Roles.value)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	payload, err := decodeJWTPayload(tokenString)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to decode token payload for claim extraction: %w", err)
 	}
 
-	// The "" guard matters: a TokenExtractor built as a struct literal (only
-	// possible in-package) has no rolesClaim and must not read as "custom".
-	rolesName, rolesRaw := defaultRolesClaim, claims.Roles.value
-	if te.rolesClaim != "" && te.rolesClaim != defaultRolesClaim {
-		rolesName, rolesRaw = te.rolesClaim, payload[te.rolesClaim]
-		if rolesRaw == nil {
-			slog.Debug("configured roles claim absent from token", "claim", rolesName)
-		}
-	}
-	roles, err := parseRolesClaim(rolesName, rolesRaw)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return extractExtraClaims(payload, rolesName), roles, nil
+	return extractExtraClaims(payload), roles, nil
 }

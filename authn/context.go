@@ -60,6 +60,33 @@ func (a *AuthContext) ClientID() string {
 	return a.Principal.ClientID
 }
 
+// Email returns the principal's "email" claim, or "" when absent or
+// unauthenticated.
+func (a *AuthContext) Email() string {
+	if a == nil {
+		return ""
+	}
+	return a.Principal.Email
+}
+
+// OUID returns the principal's "ouId" claim, or "" when absent or
+// unauthenticated.
+func (a *AuthContext) OUID() string {
+	if a == nil {
+		return ""
+	}
+	return a.Principal.OUID
+}
+
+// OUHandle returns the principal's "ouHandle" claim, or "" when absent or
+// unauthenticated.
+func (a *AuthContext) OUHandle() string {
+	if a == nil {
+		return ""
+	}
+	return a.Principal.OUHandle
+}
+
 // Roles returns the granted roles for the principal, or nil.
 func (a *AuthContext) Roles() []string {
 	if a == nil {

@@ -102,8 +102,8 @@ func TestExtraClaims_PassThrough(t *testing.T) {
 	defer cleanup()
 
 	claims := newBaseClaims()
-	claims["email"] = testEmail
-	claims["ouId"] = testOUID
+	claims["phone_number"] = testPhone
+	claims["given_name"] = "Trader"
 	claims["grant_type"] = "client_credentials"
 	claims["https://app.example.com/department"] = "customs"
 	claims["count"] = 42
@@ -119,8 +119,8 @@ func TestExtraClaims_PassThrough(t *testing.T) {
 	extra := p.ExtraClaims
 
 	for name, want := range map[string]string{
-		"email":                              testEmail,
-		"ouId":                               testOUID,
+		"phone_number":                       testPhone,
+		"given_name":                         "Trader",
 		"grant_type":                         "client_credentials",
 		"https://app.example.com/department": "customs",
 	} {
@@ -160,19 +160,23 @@ func TestExtraClaims_ExcludesFixedSchema(t *testing.T) {
 	claims["scope"] = "nsw:task:read"
 	claims["roles"] = []string{"exporter"}
 	claims["email"] = testEmail
+	claims["ouId"] = testOUID
+	claims["ouHandle"] = testOUHandle
+	claims["phone_number"] = testPhone
 
 	p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if len(p.ExtraClaims) != 1 || p.ExtraClaims.String("email") != testEmail {
-		t.Fatalf("ExtraClaims = %#v, want only email", p.ExtraClaims)
+	if len(p.ExtraClaims) != 1 || p.ExtraClaims.String("phone_number") != testPhone {
+		t.Fatalf("ExtraClaims = %#v, want only phone_number", p.ExtraClaims)
 	}
 
 	t.Run("case variants", func(t *testing.T) {
 		claims := newBaseClaims()
 		claims["Roles"] = []string{"exporter"}
 		claims["SCOPE"] = "nsw:task:read"
+		claims["OUID"] = testOUID
 
 		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
 		if err != nil {
@@ -182,29 +186,6 @@ func TestExtraClaims_ExcludesFixedSchema(t *testing.T) {
 			t.Fatalf("ExtraClaims = %#v, want none", p.ExtraClaims)
 		}
 	})
-}
-
-// TestExtraClaims_ExcludesCustomRolesClaim covers WithRolesClaim: the
-// configured claim feeds Roles and is excluded exactly as it is read — a
-// differently-cased key never fed Roles, so it stays an extra claim.
-func TestExtraClaims_ExcludesCustomRolesClaim(t *testing.T) {
-	extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithRolesClaim("groups"))
-	defer cleanup()
-
-	claims := newBaseClaims()
-	claims["groups"] = []string{"exporter"}
-	claims["Groups"] = "other"
-
-	p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
-	if _, present := p.ExtraClaims["groups"]; present {
-		t.Fatalf("roles claim leaked into ExtraClaims: %#v", p.ExtraClaims)
-	}
-	if got := p.ExtraClaims.String("Groups"); got != "other" {
-		t.Fatalf("Groups = %q, want other", got)
-	}
 }
 
 func TestExtraClaims_AbsentValuesAreDropped(t *testing.T) {
@@ -231,7 +212,7 @@ func TestExtraClaims_ValuesAreTrimmed(t *testing.T) {
 	defer cleanup()
 
 	claims := newBaseClaims()
-	claims["email"] = "  trader@example.com \n"
+	claims["phone_number"] = "  " + testPhone + " \n"
 	claims["groups"] = []any{" a ", "b "}
 
 	p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
@@ -239,8 +220,8 @@ func TestExtraClaims_ValuesAreTrimmed(t *testing.T) {
 		t.Fatalf("extract: %v", err)
 	}
 	extra := p.ExtraClaims
-	if got := extra.String("email"); got != testEmail {
-		t.Fatalf("email = %q, want %q", got, testEmail)
+	if got := extra.String("phone_number"); got != testPhone {
+		t.Fatalf("phone_number = %q, want %q", got, testPhone)
 	}
 	if got := extra.Strings("groups"); len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("groups = %#v, want [a b]", got)

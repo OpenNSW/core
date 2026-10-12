@@ -156,19 +156,19 @@ func TestManager_Close(t *testing.T) {
 	}
 }
 
-func TestNewManager_WiresRolesClaim(t *testing.T) {
+func TestNewManager_WiresClaims(t *testing.T) {
 	cfg := Config{
-		JWKSURL:    "https://localhost/jwks",
-		Issuer:     "https://localhost/token",
-		Audience:   "TRADER_PORTAL_APP",
-		RolesClaim: "groups",
+		JWKSURL:  "https://localhost/jwks",
+		Issuer:   "https://localhost/token",
+		Audience: "TRADER_PORTAL_APP",
+		Claims:   ClaimsConfig{OUID: ClaimConfig{Required: true}},
 	}
 
 	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if got := manager.tokenExtractor.rolesClaim; got != "groups" {
-		t.Fatalf("rolesClaim = %q, want groups", got)
+	if got := manager.tokenExtractor.claims; got != cfg.Claims {
+		t.Fatalf("claims = %+v, want %+v", got, cfg.Claims)
 	}
 }

@@ -35,7 +35,7 @@ func newTokenExtractor(t *testing.T) (*TokenExtractor, *rsa.PrivateKey, func()) 
 }
 
 // newTokenExtractorWithOptions mirrors newTokenExtractor but threads Options
-// through to NewTokenExtractor, for tests exercising WithRolesClaim.
+// through to NewTokenExtractor, for tests exercising WithClaims.
 func newTokenExtractorWithOptions(t *testing.T, opts ...Option) (*TokenExtractor, *rsa.PrivateKey, func()) {
 	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
