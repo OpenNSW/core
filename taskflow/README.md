@@ -131,7 +131,7 @@ Register it: `pluginRegistry.Register("MY_PLUGIN", &MyPlugin{remoteManager: rm})
 ## Key invariants
 
 - **`TaskID` is the parent's step ID.** A step is one run of a TASK node, so a node revisited by a loop starts a new task. A step is addressed by its step ID (`CompleteTaskStep(ctx, taskID, stepID, payload)`), and a call for a step that is no longer active is rejected with `ErrStaleStep`.
-- **The task row is written through guarded statements.** `ActiveStepID` and `Seq` change only via `ClaimStep`, `WriteRenderState`, `PersistSubmission` and `CompleteTask`, each one atomic conditional write whose 0-rows result means "stale, dropped".
+- **The task row is written through guarded statements.** `ActiveStepID` and `Seq` change only via `ClaimStep`, `WriteRenderState`, `PersistSubmission`, `CompleteTask` and `CancelTask`, each one atomic conditional write whose 0-rows result means "stale, dropped".
 - **Plugins suspend with `plugins.ErrSuspended`.** Synchronous plugins return `nil`; the workflow advances without waiting.
 - **`StartTask` returns `activity.ErrResultPending`** on the happy path. The parent activity suspends until `onTaskCompleted` fires.
 - **Submission payloads are scoped** to the active step's `OutputNamespace` in `TaskRecord.Data`. Callers send a raw object; the server stamps the correct key.

@@ -144,6 +144,16 @@ func (s *TaskStore) PersistSubmission(ctx context.Context, taskID, stepID string
 	})
 }
 
+func (s *TaskStore) CancelTask(ctx context.Context, taskID string) (int64, error) {
+	// No active_step_id or seq check: cancelling isn't about any one step. Advancing seq is what
+	// drops a step write still in flight: WriteRenderState and PersistSubmission need seq to equal
+	// their step's, and a retried ClaimStep needs it to be no higher.
+	return s.stepUpdate(ctx, taskID, "state <> ?", []any{store.StateCompleted}, map[string]any{
+		"state": store.StateCancelled,
+		"seq":   gorm.Expr("seq + 1"),
+	})
+}
+
 func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error) {
 	// No active_step_id check, for the same reason as ClaimStep: completion isn't about which step
 	// is active, only about whether a later step has already superseded this seq.

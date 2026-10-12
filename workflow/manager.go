@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -284,6 +285,35 @@ type AdminInterventionResolver interface {
 	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
 }
 
+// ForcedParkErrorType is the error type of the failure ForceParkActivation completes a step with.
+// It shows in the parked node's LastError.
+const ForcedParkErrorType = "AdminForcedPark"
+
+// ActivationParker is implemented by managers that can park a node that is waiting on its step, for
+// a node that is healthy but must be overridden by an admin. Like AdminInterventionResolver it is
+// kept separate from Manager; callers type-assert for it.
+type ActivationParker interface {
+	// ForceParkActivation fails the pending step activationID of workflowID with a non-retryable
+	// error of type ForcedParkErrorType, so the TASK node waiting on it parks in
+	// NodeStatusAwaitingAdmin with ParkCategoryTaskFailure and can be resolved like any parked node.
+	// runID may be empty to address the workflow's current run. It returns an error wrapping
+	// ErrActivationNotPending if that step is not pending.
+	//
+	// It only fails the step: whatever the step was waiting on, such as a task workflow, is still
+	// running and is the caller's to stop.
+	ForceParkActivation(ctx context.Context, workflowID, runID, activationID, reason string) error
+}
+
+// WorkflowTerminator is implemented by managers that can stop a running workflow outright. Like
+// AdminInterventionResolver it is kept separate from Manager; callers type-assert for it.
+type WorkflowTerminator interface {
+	// TerminateWorkflow stops workflowID immediately and runs nothing further of it: no node
+	// completes, and a workflow that is a task's never reports its completion. runID may be empty to
+	// address the current run. It returns an error wrapping ErrWorkflowNotFound if there is no
+	// running execution to stop, including one that has already closed.
+	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error
+}
+
 // TemporalManager extends the Manager interface with worker control methods.
 type TemporalManager interface {
 	Manager
@@ -392,6 +422,28 @@ func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID
 	var notFound *serviceerror.NotFound
 	if errors.As(err, &notFound) {
 		return fmt.Errorf("%w: %w", ErrActivationNotPending, err)
+	}
+	return err
+}
+
+// ForceParkActivation fails the step's Activity through CompleteActivityByID. The error is
+// non-retryable because the TASK node's Activity has no retry limit: a retryable one would run the
+// Activity again instead of parking the node.
+func (m *temporalManagerImpl) ForceParkActivation(ctx context.Context, workflowID, runID, activationID, reason string) error {
+	cause := temporal.NewNonRetryableApplicationError("forced park by admin: "+reason, ForcedParkErrorType, nil)
+	err := m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, activationID, nil, cause)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return fmt.Errorf("%w: %w", ErrActivationNotPending, err)
+	}
+	return err
+}
+
+func (m *temporalManagerImpl) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error {
+	err := m.temporalClient.TerminateWorkflow(ctx, workflowID, runID, reason)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return fmt.Errorf("%w: %w", ErrWorkflowNotFound, err)
 	}
 	return err
 }
