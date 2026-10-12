@@ -413,3 +413,29 @@ func TestLatestPrefersTheUnversionedRow(t *testing.T) {
 		t.Fatalf("GetExplicit(1) = %q, %v; want the explicit row", old.Subject, err)
 	}
 }
+
+// A version only a manifest published after the set loaded lists is found by probing.
+func TestGetExplicitFindsAVersionInANewerManifest(t *testing.T) {
+	ctx := context.Background()
+	src := testutil.MemLoader{
+		"manifest_v1.json": manifest(row("ports", "email", "1", "ports.json")),
+		"ports.json":       []byte(`{"subject":"one"}`),
+	}
+	set, err := artifact.LoadSet(ctx, src)
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	src["manifest_v2.json"] = manifest(row("ports", "email", "1", "ports.json"), row("ports", "email", "2", "ports_v2.json"))
+	src["ports_v2.json"] = []byte(`{"subject":"two"}`)
+
+	got, err := artifact.GetExplicit[fakeEmail](ctx, set, "ports", "2")
+	if err != nil || got.Subject != "two" {
+		t.Fatalf("GetExplicit(2) = %q, %v; want the v2 file", got.Subject, err)
+	}
+	if set.Current() != 1 || set.Latest() != 2 {
+		t.Errorf("current, latest = %d, %d; want 1, 2", set.Current(), set.Latest())
+	}
+	if _, err := artifact.GetExplicit[fakeEmail](ctx, set, "ports", "9"); !errors.Is(err, artifact.ErrNotFound) {
+		t.Errorf("an unpublished version: expected ErrNotFound, got %v", err)
+	}
+}
