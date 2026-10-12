@@ -209,7 +209,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
-			VarRootWorkflowID:   g.rootWorkflowID(),
+			VarCaseID:           g.caseID(),
 			VarSplitNodeID:      node.ID,
 			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{
@@ -219,7 +219,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 			},
 		}
 
-		deterministicChildID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		deterministicChildID := FormatChildWorkflowID(g.caseID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: deterministicChildID,
 		})
@@ -240,7 +240,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 	// can still record every branch that was actually spawned.
 	var startErrors []error
 	for _, p := range prepared {
-		childID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		childID := FormatChildWorkflowID(g.caseID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		var childExec workflow.Execution
 		if err := activeBranches[childID].Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
 			startErrors = append(startErrors, fmt.Errorf("failed to start child workflow %s: %w", childID, err))

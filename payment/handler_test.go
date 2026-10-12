@@ -130,7 +130,7 @@ func newRealServiceForGateway(t *testing.T, gatewayID string, gw PaymentGateway)
 	}
 	registry, err := NewRegistry(path, factories)
 	require.NoError(t, err)
-	return NewPaymentService(nil, registry)
+	return NewPaymentService(nil, registry, &fakeReferences{})
 }
 
 func TestHandleWebhook_PopulatesRequestContextForVerifyWebhook(t *testing.T) {

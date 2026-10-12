@@ -9,12 +9,13 @@ shapes that vocabulary can produce, and gives a runnable config for each.
 
 ## 1. Segment vocabulary
 
-Five segment types, each with its own config fields ([../config.go](../config.go)):
+Six segment types, each with its own config fields ([../config.go](../config.go)):
 
 | Type | YAML fields | Renders |
 |---|---|---|
 | `literal` | `value` | the fixed string, unchanged |
 | `list` | `list`, `param` | a caller-supplied param, after validating it against a named list |
+| `param` | `param`, `pattern` | a caller-supplied param as is, after checking it against a required, anchored RE2 `pattern` |
 | `date` | `layout` | the current UTC time in a Go reference-date layout |
 | `sequence` | nested `sequence:` → `scopeKey`, `padding` | a durable counter, zero-padded |
 | `random` | nested `random:` → `scopeKey`, `charset`, `length`, `maxAttempts` | a fixed-length random value, checked for collisions |
@@ -44,10 +45,10 @@ What the engine actually enforces:
 
 - A format needs **at least one** segment.
 - A format may contain **at most one stateful segment** — `sequence` and `random` are
-  stateful (they commit to a store); `literal`, `list`, and `date` are pure functions of
+  stateful (they commit to a store); `literal`, `list`, `param`, and `date` are pure functions of
   the caller's params and the current time. See
   [Stateful Segment Limit](../README.md#stateful-segment-limit) for why.
-- Everything else is free: `literal`, `list`, and `date` may appear any number of times,
+- Everything else is free: `literal`, `list`, `param`, and `date` may appear any number of times,
   in any order, before or after the stateful segment.
 
 So a format is: any arrangement of pure segments, with at most one counter or random
@@ -136,6 +137,13 @@ examples show one possible draw. Each row has a runnable config in the appendix.
 |---|---|---|---|
 | C1 | `literal` | `STATIC-CODE` | Constant; every call returns the same string |
 | C2 | `literal` + `list` + `date` | `RTA-COL-20260817` | Deterministic; repeats for the same params on the same day |
+| C3 | `param` + `literal` | `00420100002` | Deterministic; repeats for the same param |
+
+**Derived** — one stateful draw shared by several IDs:
+
+| # | Segments | Example | Note |
+|---|---|---|---|
+| D1 | `sequence` + `literal` + `date`, then `literal` + `param` per ID | `PQC/P/1205/26`, `PQC/S/1205/26` | Two calls: draw a serial once, pass it to each ID |
 
 ---
 
@@ -151,8 +159,8 @@ reg, err := refid.NewRegistry(cfg,
 )
 ```
 
-A store option is only required if the config actually uses that segment type — C1 and C2
-need neither.
+A store option is only required if the config actually uses that segment type — C1, C2 and
+C3 need neither.
 
 ### S1 — `sequence`
 
@@ -453,3 +461,65 @@ lists:
 ```
 
 `Generate(ctx, "RTA", "batch_key", map[string]string{"officeCode": "COL"})` → `RTA-COL-20260817`
+
+### C3 — `param` + `literal`, value from an open set
+
+A `param` segment takes a value a controlled list cannot enumerate, such as a registration
+number. No stateful segment, so the same param always produces the same string.
+
+```yaml
+issuers:
+  - issuer: ACME
+    formats:
+      - idType: fee_ref
+        segments:
+          - type: param
+            param: payerNo
+            pattern: "[0-9]{4}"
+          - type: literal
+            value: "0100002"
+```
+
+`Generate(ctx, "ACME", "fee_ref", map[string]string{"payerNo": "0042"})` → `00420100002`
+
+### D1 — a serial shared by several IDs
+
+Every `Generate` call that renders a `sequence` draws a new number, so two IDs that must
+carry the same number cannot each have their own `sequence`. Draw the shared part once,
+then pass it as a `param` to each ID built from it.
+
+```yaml
+issuers:
+  - issuer: ACME
+    formats:
+      - idType: cert_serial
+        segments:
+          - type: sequence
+            sequence:
+              scopeKey: "{issuer}:{idType}:{yyyy}"
+              padding: 4
+          - type: literal
+            value: "/"
+          - type: date
+            layout: "06"
+      - idType: physical_cert
+        segments:
+          - type: literal
+            value: "PQC/P/"
+          - type: param
+            param: serial
+            pattern: "[0-9]{4}/[0-9]{2}"
+      - idType: salmonella_cert
+        segments:
+          - type: literal
+            value: "PQC/S/"
+          - type: param
+            param: serial
+            pattern: "[0-9]{4}/[0-9]{2}"
+```
+
+`Generate(ctx, "ACME", "cert_serial", nil)` → `1205/26`, then
+`Generate(ctx, "ACME", "physical_cert", map[string]string{"serial": "1205/26"})` → `PQC/P/1205/26`
+and `Generate(ctx, "ACME", "salmonella_cert", map[string]string{"serial": "1205/26"})` →
+`PQC/S/1205/26`. The serial carries the year too, so both IDs agree on it even if the calls
+straddle midnight on 31 December.

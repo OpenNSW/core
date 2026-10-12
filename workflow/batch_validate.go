@@ -3,7 +3,10 @@
 
 package engine
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ValidateBatchGateways checks structural invariants and topological containment for
 // BATCH_SPLIT / BATCH_JOIN pairs in the workflow definition. Call this at parse-time or
@@ -47,6 +50,19 @@ func ValidateBatchGateways(def WorkflowDefinition) error {
 	for splitID := range batchSplits {
 		if _, paired := pairedJoins[splitID]; !paired {
 			return fmt.Errorf("BATCH_SPLIT node %q has no paired BATCH_JOIN", splitID)
+		}
+	}
+
+	// 1b. Mappings belong on the BATCH_SPLIT, name both paths, leave the items variable to the
+	// item merge, and write each output destination once.
+	for joinID, join := range batchJoins {
+		if len(join.InputMapping) > 0 || len(join.OutputMapping) > 0 {
+			return fmt.Errorf("BATCH_JOIN node %q: input_mapping and output_mapping belong on the paired BATCH_SPLIT %q", joinID, join.BatchJoin.GatewayNodeID)
+		}
+	}
+	for splitID, split := range batchSplits {
+		if err := validateBatchSplitMappings(splitID, split); err != nil {
+			return err
 		}
 	}
 
@@ -177,5 +193,42 @@ func validateGatewayRegion(
 		}
 	}
 
+	return nil
+}
+
+// validateBatchSplitMappings checks a BATCH_SPLIT's input_mapping and output_mapping.
+func validateBatchSplitMappings(splitID string, split *Node) error {
+	itemsVar := DefaultItemsVariable
+	if split.BatchGateway != nil && split.BatchGateway.ItemsVariable != "" {
+		itemsVar = split.BatchGateway.ItemsVariable
+	}
+
+	for rawSource, destination := range split.InputMapping {
+		source, _ := parseMappingKey(rawSource)
+		if source == "" || destination == "" {
+			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping entries need both a source and a destination path", splitID)
+		}
+		if source == itemsVar || destination == itemsVar {
+			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping cannot read or write the items variable %q", splitID, itemsVar)
+		}
+		if strings.HasPrefix(destination, "_") {
+			return fmt.Errorf("BATCH_SPLIT node %q: input_mapping cannot write %q; names starting with \"_\" are reserved for the engine", splitID, destination)
+		}
+	}
+
+	sources := make(map[string]string, len(split.OutputMapping))
+	for rawSource, destination := range split.OutputMapping {
+		source, _ := parseMappingKey(rawSource)
+		if source == "" || destination == "" {
+			return fmt.Errorf("BATCH_SPLIT node %q: output_mapping entries need both a source and a destination path", splitID)
+		}
+		if source == itemsVar || destination == itemsVar {
+			return fmt.Errorf("BATCH_SPLIT node %q: output_mapping cannot read or write the items variable %q", splitID, itemsVar)
+		}
+		if other, exists := sources[destination]; exists {
+			return fmt.Errorf("BATCH_SPLIT node %q: output_mapping writes %q from both %q and %q", splitID, destination, other, source)
+		}
+		sources[destination] = source
+	}
 	return nil
 }

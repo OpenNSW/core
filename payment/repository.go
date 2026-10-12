@@ -6,6 +6,7 @@ package payment
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -13,6 +14,8 @@ import (
 
 // PaymentRepository defines the interface for managing PaymentTransactions.
 type PaymentRepository interface {
+	// Create stores a new transaction. A reference another transaction holds
+	// returns ErrDuplicateReference.
 	Create(ctx context.Context, tx *PaymentTransaction) error
 	GetByReferenceNumber(ctx context.Context, referenceNumber string) (*PaymentTransaction, error)
 	// GetByReferenceNumberForUpdate reads a transaction while holding a row-level
@@ -67,7 +70,35 @@ func (r *paymentRepository) GetByReferenceNumberForUpdate(ctx context.Context, r
 
 // Create inserts a new PaymentTransaction into the database.
 func (r *paymentRepository) Create(ctx context.Context, ptx *PaymentTransaction) error {
-	return r.db.WithContext(ctx).Create(ptx).Error
+	err := r.db.WithContext(ctx).Create(ptx).Error
+	if isDuplicateKey(r.db, err) && r.referenceHeldByAnother(ctx, ptx) {
+		return fmt.Errorf("%w: %s", ErrDuplicateReference, ptx.ReferenceNumber)
+	}
+	return err
+}
+
+// referenceHeldByAnother reports whether a transaction other than ptx holds
+// ptx's reference. It tells a duplicate reference apart from the other unique
+// violations an insert can hit, such as an existing ID, which drivers report
+// with the same error code.
+func (r *paymentRepository) referenceHeldByAnother(ctx context.Context, ptx *PaymentTransaction) bool {
+	holder, err := r.GetByReferenceNumber(ctx, ptx.ReferenceNumber)
+	return err == nil && holder != nil && holder.ID != ptx.ID
+}
+
+// isDuplicateKey reports whether err is a unique-constraint violation, as
+// gorm.ErrDuplicatedKey or as the dialector translates the driver's error.
+func isDuplicateKey(db *gorm.DB, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	if translator, ok := db.Dialector.(gorm.ErrorTranslator); ok {
+		return errors.Is(translator.Translate(err), gorm.ErrDuplicatedKey)
+	}
+	return false
 }
 
 // GetByReferenceNumber retrieves a PaymentTransaction by its reference number.

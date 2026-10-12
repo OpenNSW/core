@@ -171,10 +171,6 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	}
 	initialData["_task_id"] = taskID
 
-	// root_workflow_id is the top-level workflow's ID, propagated by the engine through every
-	// level of nesting (see engine.VarRootWorkflowID).
-	rootWorkflowID := payload.RootWorkflowID
-
 	record := store.TaskRecord{
 		TaskID:           taskID,
 		TaskType:         template.Type,
@@ -182,7 +178,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		RenderConfig:     renderConfig,
 		ParentWorkflowID: payload.WorkflowID,
 		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
-		RootWorkflowID:   rootWorkflowID,
+		CaseID:           payload.CaseID,       // the same at every level of nesting (see engine.VarCaseID)
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
 		CreatedAt:        time.Now(),
@@ -560,10 +556,10 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 // field is intentionally not populated — callers should use GetTaskRenderInfo to fetch
 // the full rendered view for a specific task.
 //
-// If parentWorkflowID is non-empty, the result is narrowed to tasks spawned by that
-// parent workflow; an empty string returns all tasks.
-func (tm *TaskManager) GetAllTasks(ctx context.Context, parentWorkflowID string) []TaskView {
-	records := tm.db.GetAllTasks(ctx, parentWorkflowID)
+// If caseID is non-empty, the result is narrowed to the case's tasks (TaskRecord.CaseID),
+// across every workflow of the case; an empty string returns all tasks.
+func (tm *TaskManager) GetAllTasks(ctx context.Context, caseID string) []TaskView {
+	records := tm.db.GetAllTasks(ctx, caseID)
 	resList := make([]TaskView, 0, len(records))
 	for _, r := range records {
 		resList = append(resList, TaskView{

@@ -27,7 +27,9 @@ type TaskRecord struct {
 	ParentWorkflowID string `json:"parent_workflow_id"`
 	ParentStepID     string `json:"parent_step_id"` // the parent's step ID: the Activity to complete
 
-	RootWorkflowID string `json:"root_workflow_id"`
+	// CaseID is the case the task's workflow belongs to (see workflow.VarCaseID); GetAllTasks
+	// lists a case's tasks by it.
+	CaseID string `json:"case_id"`
 
 	// Active step execution coordinates — used to resume/wake the currently active step via the API.
 	// WARNING: Since the store only holds a single set of coordinates, only one step can be active at any given time
@@ -112,7 +114,9 @@ type TaskStore interface {
 	InitTask(context context.Context, record TaskRecord) error
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
-	GetAllTasks(context context.Context, parentWorkflowID string) []TaskRecord
+	// GetAllTasks returns the tasks of a case (TaskRecord.CaseID), or every task when caseID is
+	// empty.
+	GetAllTasks(context context.Context, caseID string) []TaskRecord
 
 	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq, so a
 	// retry of the same step matches again and an older step's late attempt does not.
