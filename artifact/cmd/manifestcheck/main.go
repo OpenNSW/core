@@ -208,6 +208,22 @@ func checkImmutable(baseDir, headDir string) []error {
 		return []error{fmt.Errorf("base: %w", err)}
 	}
 
+	// Rows name paths relative to the bundle; reading through os.Root keeps a row that
+	// climbs out of it ("../x") from reading anything outside.
+	base, err := os.OpenRoot(baseDir)
+	if err != nil {
+		return []error{fmt.Errorf("base: %w", err)}
+	}
+	defer func() { _ = base.Close() }()
+	head, err := os.OpenRoot(headDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []error{fmt.Errorf("bundle %s was deleted; its published manifests must stay", filepath.Base(headDir))}
+	}
+	if err != nil {
+		return []error{err}
+	}
+	defer func() { _ = head.Close() }()
+
 	var problems []error
 	checked := make(map[string]bool)
 	same := func(rel, what string) {
@@ -215,12 +231,12 @@ func checkImmutable(baseDir, headDir string) []error {
 			return
 		}
 		checked[rel] = true
-		before, err := os.ReadFile(filepath.Join(baseDir, rel))
+		before, err := base.ReadFile(rel)
 		if err != nil {
 			problems = append(problems, fmt.Errorf("base: %w", err))
 			return
 		}
-		after, err := os.ReadFile(filepath.Join(headDir, rel))
+		after, err := head.ReadFile(rel)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			problems = append(problems, fmt.Errorf("%s %s was deleted; a published %s must stay", what, rel, what))

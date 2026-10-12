@@ -164,3 +164,26 @@ func TestImmutability(t *testing.T) {
 		}
 	})
 }
+
+func TestImmutabilityBundleDeletedOrEscaping(t *testing.T) {
+	t.Run("deleting a published bundle fails", func(t *testing.T) {
+		base, head := t.TempDir(), t.TempDir()
+		write(t, base, bundle())
+		code, out := check(t, "-base", base, "-root", head, "b")
+		if code != 1 || !strings.Contains(out, "bundle b was deleted") {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+	})
+
+	t.Run("a base row climbing out of the bundle reads nothing outside it", func(t *testing.T) {
+		base, head := t.TempDir(), t.TempDir()
+		files := map[string]string{"b/manifest_v1.json": `{"artifacts":[{"id":"x","kind":"generic_template","path":"../secret.json"}]}`}
+		write(t, base, files)
+		write(t, base, map[string]string{"secret.json": `{}`})
+		write(t, head, files)
+		code, out := check(t, "-base", base, "-root", head, "b")
+		if code != 1 || !strings.Contains(out, "base:") {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+	})
+}
