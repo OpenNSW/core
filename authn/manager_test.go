@@ -14,9 +14,6 @@ func TestNewManager_AllowsNilUserProfileService(t *testing.T) {
 		JWKSURL:  "https://localhost/jwks",
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
-		ClientIDs: []string{
-			"TRADER_PORTAL_APP",
-		},
 	}
 
 	manager, err := NewManager(nil, cfg)
@@ -42,9 +39,6 @@ func TestNewManager_InvalidConfig(t *testing.T) {
 	cfg := Config{
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
-		ClientIDs: []string{
-			"TRADER_PORTAL_APP",
-		},
 	}
 
 	if _, err := NewManager(nil, cfg); err == nil {
@@ -64,7 +58,6 @@ func TestNewManager_InsecureSkipTLSVerify(t *testing.T) {
 		JWKSURL:               "https://localhost/jwks",
 		Issuer:                "https://localhost/token",
 		Audience:              "TRADER_PORTAL_APP",
-		ClientIDs:             []string{"TRADER_PORTAL_APP"},
 		InsecureSkipTLSVerify: true,
 	}
 
@@ -89,9 +82,6 @@ func TestManager_Health_Success(t *testing.T) {
 		JWKSURL:  "https://localhost/jwks",
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
-		ClientIDs: []string{
-			"TRADER_PORTAL_APP",
-		},
 	}
 
 	manager, err := NewManager(nil, cfg)
@@ -108,9 +98,6 @@ func TestManager_MiddlewareFunctions(t *testing.T) {
 		JWKSURL:  "https://localhost/jwks",
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
-		ClientIDs: []string{
-			"TRADER_PORTAL_APP",
-		},
 	}
 
 	manager, err := NewManager(nil, cfg)
@@ -140,9 +127,6 @@ func TestManager_RequireAuthMiddleware(t *testing.T) {
 		JWKSURL:  "https://localhost/jwks",
 		Issuer:   "https://localhost/token",
 		Audience: "TRADER_PORTAL_APP",
-		ClientIDs: []string{
-			"TRADER_PORTAL_APP",
-		},
 	}
 
 	manager, err := NewManager(nil, cfg)
@@ -177,10 +161,9 @@ func TestManager_Close(t *testing.T) {
 
 func TestNewManager_WiresExtraClaims(t *testing.T) {
 	cfg := Config{
-		JWKSURL:   "https://localhost/jwks",
-		Issuer:    "https://localhost/token",
-		Audience:  "TRADER_PORTAL_APP",
-		ClientIDs: []string{"TRADER_PORTAL_APP"},
+		JWKSURL:  "https://localhost/jwks",
+		Issuer:   "https://localhost/token",
+		Audience: "TRADER_PORTAL_APP",
 		// "email" appears in both slices: required must win on the Config
 		// path too, independently of the order buildClaimOptions emits.
 		UserClaims:   ClaimSpec{Optional: []string{"email", "given_name"}, Required: []string{"ouHandle", "email"}},
@@ -223,7 +206,6 @@ func TestNewManager_RejectsFixedSchemaExtraClaim(t *testing.T) {
 		JWKSURL:    "https://localhost/jwks",
 		Issuer:     "https://localhost/token",
 		Audience:   "TRADER_PORTAL_APP",
-		ClientIDs:  []string{"TRADER_PORTAL_APP"},
 		UserClaims: ClaimSpec{Optional: []string{"scope"}},
 	}
 	if _, err := NewManager(nil, cfg); err == nil {
@@ -240,7 +222,6 @@ func TestNewManager_RejectsRolesClaimCollision(t *testing.T) {
 		JWKSURL:    "https://localhost/jwks",
 		Issuer:     "https://localhost/token",
 		Audience:   "TRADER_PORTAL_APP",
-		ClientIDs:  []string{"TRADER_PORTAL_APP"},
 		RolesClaim: "groups",
 		UserClaims: ClaimSpec{Optional: []string{"groups"}},
 	}
