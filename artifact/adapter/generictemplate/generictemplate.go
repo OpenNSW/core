@@ -9,10 +9,11 @@ import (
 	"fmt"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/adapter/kinds"
 )
 
 // Kind is owned here.
-const Kind artifact.Kind = "generic_template"
+const Kind = kinds.GenericTemplate
 
 type loadable struct {
 	json.RawMessage
@@ -31,4 +32,10 @@ func (l *loadable) Parse(raw []byte) error {
 func Load(ctx context.Context, reg *artifact.Registry, id string) (json.RawMessage, error) {
 	w, err := artifact.Latest[loadable](ctx, reg, id)
 	return w.RawMessage, err
+}
+
+// Check parses a generic template. Its content is free-form JSON, so no references are returned.
+func Check(raw []byte) ([]artifact.Ref, error) {
+	var t loadable
+	return nil, t.Parse(raw)
 }

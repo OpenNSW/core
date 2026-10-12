@@ -52,3 +52,12 @@ func TestGenericTemplateAdapter(t *testing.T) {
 		}
 	})
 }
+
+func TestCheck(t *testing.T) {
+	if refs, err := generictemplate.Check([]byte(`{"a":1}`)); err != nil || refs != nil {
+		t.Fatalf("Check(valid) = %v, %v; want no refs and no error", refs, err)
+	}
+	if _, err := generictemplate.Check([]byte(`{`)); err == nil {
+		t.Fatal("expected an error for invalid JSON")
+	}
+}

@@ -44,7 +44,11 @@ Return `artifact.ErrNotFound` when the resource is absent; return other errors o
 
 ### `Registry`
 
-Holds registered loaders and a manifest table `(id, kind, version) → (loaderType, path)`. Created once at startup and shared read-only at runtime.
+Resolves `(id, kind, version) → path` for **one manifest** and fetches through the single loader. Shared read-only at runtime.
+
+### `Set`
+
+Holds every published manifest of one source, one `Registry` per manifest version, and names the current one. A flow records `set.Current()` when it starts and resolves every artifact through `set.Registry(ctx, version)` until it ends, so a deploy never changes the templates of a running flow. See [Versioned manifests](#versioned-manifests).
 
 ---
 
@@ -83,50 +87,68 @@ artifact.Latest[*EmailTemplate](ctx, reg, "welcome")
 ### 2. Wire up at startup
 
 ```go
-// One loader is the single source of truth for this registry.
+// One loader is the single source of truth for every manifest and artifact.
 loader, err := local.New(local.Config{Root: "/etc/configs"})
-reg := artifact.NewRegistry(loader)
 
-// Register artifact rows directly in code...
-reg.RegisterArtifact("welcome_email", "email_template", "v2", "emails/welcome.v2.json")
+// Load manifest_v1.json, manifest_v2.json, … and pick the current version.
+set, err := artifact.LoadSet(ctx, loader)                                // highest version
+set, err := artifact.LoadSet(ctx, loader, artifact.WithPinnedVersion(4)) // or a pinned one
 
-// ...or load them from the manifest, fetched through the same loader.
-cfg, err := artifact.LoadManifest(ctx, loader)
-artifact.RegisterFromConfig(reg, cfg)
+// Fetch and check every artifact of the current manifest before serving.
+checks := corechecks.Checks()
+checks["email_template"] = myEmailCheck
+if err := set.Validate(ctx, set.Current(), checks); err != nil { … }
 ```
 
-The loader is required — `NewRegistry(nil)` panics. `RegisterFromConfig` validates that each row has an `id`, `kind`, and `path`, so misconfiguration is caught at startup rather than at first access.
+A bare `Registry` can still be built by hand, for tests:
+
+```go
+reg := artifact.NewRegistry(loader)
+reg.RegisterArtifact("welcome_email", "email_template", "", "emails/welcome.json")
+```
+
+The loader is required — `NewRegistry(nil)` panics and `LoadSet(ctx, nil)` fails. `RegisterFromConfig` rejects a row without an `id`, `kind`, or `path`, and two rows with the same `id`, `kind` and `version`.
 
 ### 3. Fetch
 
 ```go
-// Fetch the newest registered version
+// Inside a flow: the version the flow recorded when it started.
+reg, err := set.Registry(ctx, flow.ManifestVersion)
 tmpl, err := artifact.Latest[EmailTemplate](ctx, reg, "welcome_email")
 
-// Fetch a specific pinned version (e.g. to resume a long-running workflow
-// that must stay on the version it started with)
-tmpl, err := artifact.Get[EmailTemplate](ctx, reg, "welcome_email", "v2")
+// Outside any flow, for an artifact requested by explicit version (static data):
+list, err := artifact.GetExplicit[StaticList](ctx, set, "ports", "2")
 ```
 
-Both calls: fetch bytes via the loader → call `Parse` → return typed value.
+All calls: fetch bytes via the loader → call `Parse` → return typed value. Within one manifest an artifact without an explicit version has a single row, so `Latest` returns it.
 
 ---
 
-## Manifest file
+## Versioned manifests
 
-The manifest is a single JSON file named `manifest.json`, resolved at the loader's
-root (`artifact.ManifestFilename`). `LoadManifest` fetches it through the loader,
-so the manifest lives alongside the artifacts it catalogs — one source for both.
-There is no per-row `loader`: the registry has exactly one.
+Manifests are `manifest_v1.json`, `manifest_v2.json`, … at the loader's root (`artifact.ManifestPath(v)`), alongside the artifacts they catalog. There is no per-row `loader`: the source has exactly one.
 
 ```json
 {
   "artifacts": [
-    { "id": "welcome_email",   "kind": "email_template", "version": "v2",  "path": "emails/welcome.v2.json" },
-    { "id": "import_clearance", "kind": "workflow",       "version": "v10", "path": "workflows/import_clearance.v10.json" }
+    { "id": "welcome_email",   "kind": "email_template", "path": "emails/welcome_v2.json" },
+    { "id": "import_clearance", "kind": "workflow",       "path": "workflows/import_clearance.json" },
+    { "id": "ports",            "kind": "static_data",    "version": "2", "path": "static/ports_v2.json" }
   ]
 }
 ```
+
+The rules that make a manifest version a stable snapshot:
+
+- **Published files never change.** A change to an artifact is a new file (`welcome_v2.json`), and a new manifest, with the next version number, points the same ID at it. Every older manifest keeps resolving what it resolved when it was published.
+- **Artifacts refer to each other by ID.** A task template names its workflow and render config by ID, and the manifest decides which file each ID is. Changing a render config needs a new manifest, not a new task template.
+- **Versions are contiguous from 1.** `LoadSet` probes upward until the loader reports `ErrNotFound`, so a gap hides every later manifest. Any other load error fails `LoadSet`; for S3 this means the reader needs `s3:ListBucket`, or a missing key is reported as access denied.
+- **An explicit `version` keeps its path.** A row with a `version` is fetched by that version outside any flow (`GetExplicit`), so every manifest that lists it must point at the same file. `LoadSet` rejects one that does not.
+- **The current version** is the highest one, unless `WithPinnedVersion` names an older one for a rollback. With a pin, `LoadSet` reads only manifests up to it, so a broken newer manifest cannot block the rollback.
+- **Newer manifests load on demand.** Replicas load their sets at different times. `Set.Registry` loads a version above the highest it has, so a flow pinned by a newer replica still runs on an older one. It fetches only up to the version asked for, holds no lock that lookups wait on while it fetches, and after a probe that fails or finds nothing it waits 10s before probing again. `Current` does not move until the set is reloaded.
+- **Within a manifest, the unversioned row wins.** `Latest` returns the row without a version when there is one, even if the manifest also lists explicit versions of the same ID.
+
+`artifact/cmd/manifestcheck` checks bundles on disk for an artifacts repository's CI: contiguous versions, every row loads and parses, references resolve, and with `-base` that no published manifest or artifact was changed or deleted.
 
 ---
 
@@ -138,7 +160,7 @@ There is no per-row `loader`: the registry has exactly one.
 | `artifact/loaders/s3`     | `s3.New(ctx, s3.Config{...})`    | Reads objects from an S3 bucket; builds the client from `Region`/`Endpoint`/credentials (S3-compatible stores supported); `Prefix` scopes an in-bucket sub-folder for multi-deployment buckets                                                           |
 | `artifact/loaders/github` | `github.New(github.Config{...})` | Reads files from a GitHub repo at a pinned `Ref` over the Contents API (`net/http`); `BasePath` scopes a sub-directory for multi-deployment repos. Set `UseRawHost` to fetch public repos via `raw.githubusercontent.com` (no token, no REST rate limit) |
 
-Both wrap their underlying "not found" errors as `artifact.ErrNotFound` so callers can use `errors.Is`.
+All wrap their underlying "not found" errors as `artifact.ErrNotFound` so callers can use `errors.Is`.
 
 ### Selecting a loader from config
 
@@ -189,6 +211,8 @@ m := testutil.MemLoader{
 }
 reg := artifact.NewRegistry(m)
 ```
+
+Put `manifest_v1.json` (and later versions) in a `MemLoader` to test against a `Set`.
 
 ---
 
