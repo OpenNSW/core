@@ -45,6 +45,8 @@ func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecor
 		State:     record.State,
 		StepID:    record.ActiveStepID,
 		Version:   record.Seq,
+		ClaimedBy: record.ClaimedBy,
+		ClaimedAt: record.ClaimedAt,
 		View:      view,
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt,

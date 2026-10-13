@@ -56,6 +56,30 @@ func (t *testStore) PersistSubmission(context.Context, string, string, int64, ma
 
 func (t *testStore) CompleteTask(context.Context, string, int64) (int64, error) { return 0, nil }
 
+func (t *testStore) ClaimTask(context.Context, string, string, time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (t *testStore) ReleaseTask(context.Context, string, string) (int64, error) { return 0, nil }
+
+// The copy must not share ClaimedAt with the original, as it shares no other reference state.
+func TestDeepCopy_CopiesClaimedAt(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	original := TaskRecord{TaskID: "test-1", ClaimedBy: "user-1", ClaimedAt: &at}
+
+	cp := original.DeepCopy()
+	if cp.ClaimedBy != "user-1" || cp.ClaimedAt == nil || !cp.ClaimedAt.Equal(at) {
+		t.Fatalf("claim not copied: got (%q, %v)", cp.ClaimedBy, cp.ClaimedAt)
+	}
+	if cp.ClaimedAt == original.ClaimedAt {
+		t.Fatal("ClaimedAt is shared with the original")
+	}
+
+	if got := (TaskRecord{TaskID: "test-2"}).DeepCopy().ClaimedAt; got != nil {
+		t.Errorf("unclaimed copy ClaimedAt = %v, want nil", got)
+	}
+}
+
 func TestTaskStoreInterface(t *testing.T) {
 	var store TaskStore = &testStore{tasks: make(map[string]TaskRecord)}
 

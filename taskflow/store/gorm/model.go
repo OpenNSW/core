@@ -28,8 +28,12 @@ type TaskRecordModel struct {
 	ActiveStepID *string         `gorm:"column:active_step_id;type:uuid"`
 	Seq          int64           `gorm:"column:seq;not null;default:0"`
 	Data         json.RawMessage `gorm:"column:data;type:jsonb;serializer:json"`
-	CreatedAt    time.Time       `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime"`
-	UpdatedAt    time.Time       `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime"`
+	// ClaimedBy and ClaimedAt belong to ClaimTask and ReleaseTask in store.go. InitTask never
+	// writes them. The table needs: claimed_by TEXT NULL, claimed_at TIMESTAMPTZ NULL.
+	ClaimedBy *string    `gorm:"column:claimed_by;type:text"`
+	ClaimedAt *time.Time `gorm:"column:claimed_at;type:timestamptz"`
+	CreatedAt time.Time  `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime"`
+	UpdatedAt time.Time  `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime"`
 }
 
 func (TaskRecordModel) TableName() string {
@@ -51,6 +55,11 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		activeStepID = *m.ActiveStepID
 	}
 
+	var claimedBy string
+	if m.ClaimedBy != nil {
+		claimedBy = *m.ClaimedBy
+	}
+
 	return store.TaskRecord{
 		TaskID:               m.TaskID,
 		TaskType:             m.TaskType,
@@ -64,6 +73,8 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		ActiveStepID:         activeStepID,
 		Seq:                  m.Seq,
 		Data:                 data,
+		ClaimedBy:            claimedBy,
+		ClaimedAt:            m.ClaimedAt,
 		CreatedAt:            m.CreatedAt,
 		UpdatedAt:            m.UpdatedAt,
 	}
@@ -81,6 +92,11 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		activeStepID = &r.ActiveStepID
 	}
 
+	var claimedBy *string
+	if r.ClaimedBy != "" {
+		claimedBy = &r.ClaimedBy
+	}
+
 	return TaskRecordModel{
 		TaskID:               r.TaskID,
 		TaskType:             r.TaskType,
@@ -94,5 +110,7 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		ActiveStepID:         activeStepID,
 		Seq:                  r.Seq,
 		Data:                 dataBytes,
+		ClaimedBy:            claimedBy,
+		ClaimedAt:            r.ClaimedAt,
 	}
 }
