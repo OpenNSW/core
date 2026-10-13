@@ -189,6 +189,42 @@ func TestRender_CarriesTitleAndLegalHandles(t *testing.T) {
 	}
 }
 
+// A legal handle carries its messages through, whatever
+// their shape, and a handle that declares none emits no "messages" key.
+func TestRender_PassesHandleMessagesThrough(t *testing.T) {
+	r := newTestRenderer(t)
+	const config = `{
+	  "id": "test:render",
+	  "sections": {
+	    "user_form": {
+	      "templateId": "t", "title": "User Form", "projector": "MARKDOWN",
+	      "handles": [
+	        { "command": "save_as_draft", "label": "Save as Draft" },
+	        { "command": "submit", "label": "Submit",
+	          "messages": { "QUEUED_EXTERNALLY": { "text": "Sent for review.", "variant": "success" } } }
+	      ]
+	    }
+	  },
+	  "states": {
+	    "PENDING_USER": { "actions": [{ "command": "save_as_draft" }, { "command": "submit" }] }
+	  }
+	}`
+
+	view := decodeView(t, render(t, r, config, tfrenderer.Facts{State: "PENDING_USER"}))
+	if len(view) != 1 {
+		t.Fatalf("got %d components %v, want 1", len(view), view)
+	}
+	got, err := json.Marshal(view[0].Handles)
+	if err != nil {
+		t.Fatalf("marshal handles: %v", err)
+	}
+	const want = `[{"command":"save_as_draft","label":"Save as Draft"},` +
+		`{"command":"submit","label":"Submit","messages":{"QUEUED_EXTERNALLY":{"text":"Sent for review.","variant":"success"}}}]`
+	if string(got) != want {
+		t.Errorf("got handles %s, want %s", got, want)
+	}
+}
+
 // With no render config there is nothing to show: an empty list
 func TestRender_EmptyConfigReturnsEmptyList(t *testing.T) {
 	r := newTestRenderer(t)
