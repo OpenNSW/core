@@ -247,10 +247,10 @@ The render config is snapshotted into the `TaskRecord` at `StartTask` time. Once
 
 ## 7. Task claims
 
-A claim records who is working a task, so two people don't act on it at once and everyone can see who has it. The split of work is:
+A claim records who is working a task, so the UI can show it and two people can avoid working the same task at once. For this MVP it is guidance. `CompleteTaskStep` does not read `claimed_by`: anyone who can call it can submit the active step. The split of work is:
 
-- **taskflow stores claims.** `TaskManager.ClaimTask(ctx, taskID, holder)` and `ReleaseTask(ctx, taskID, holder)` are atomic, and task views carry `claimed_by` and `claimed_at`. taskflow never decides who may claim a task or what a claim is required for.
-- **Your host enforces them.** It exposes claim and release endpoints, chooses the holder value, and decides which actions need the claim.
+- **taskflow stores claims.** `TaskManager.ClaimTask(ctx, taskID, holder)` and `ReleaseTask(ctx, taskID, holder)` are atomic, and task views carry `claimed_by` and `claimed_at`. Submitting a step does not check the holder.
+- **Your host shows them.** It exposes claim and release endpoints, chooses the holder value, and shows who holds the claim. Submitting a step stays available to anyone who can call it.
 
 The rules taskflow applies:
 
@@ -264,8 +264,8 @@ What your host needs to do:
 
 1. **Choose the holder value.** Use a stable, internal user ID, not an email or a display name. taskflow treats it as opaque. Resolve it to a name when you build responses.
 2. **Expose claim and release** for callers who can see the task, and map the errors (below).
-3. **Enforce the claim where your policy needs it, fenced with the submission.** Exempt machine callers such as `CompleteTaskStepByToken`, which hold no claim. A separate check before `CompleteTaskStep` is not safe on its own. Between the check and the submit, the holder can release the claim and another caller can take it. The workflow does not know who holds the claim: `CompleteActivation` accepts the submission from whoever made the call. The one-submission rule only stops a step being completed twice; it does not stop a submission from someone who no longer holds the claim. For claim-protected actions, serialise the check and the submit per task, for example by taking a row lock on the task across both, or by re-checking the holder inside the same lock that the submit runs under. Release and claim changes must wait for that lock too, so they cannot land between the check and the submit.
-4. **Optionally gate the view on the claim.** Pass a fact such as `claim:mine` in the claims you give the renderer, and use it in `visibleWhen.requireClaim` to hide actions from someone who does not hold the claim. The renderer rejects a render config that references a fact you did not pass, so pass every claim fact your configs use on every read, with `false` for the ones that don't hold.
+3. **Show the claim in the UI.** `CompleteTaskStep` accepts a call from anyone and does not read `claimed_by`. For this MVP, a claim is guidance so two people can see who is working the task and avoid working it at once. Machine callers such as `CompleteTaskStepByToken` hold no claim and can still complete the step.
+4. **Optionally hide actions in the view.** Pass a fact such as `claim:mine` in the claims you give the renderer, and use it in `visibleWhen.requireClaim` to hide actions from someone who does not hold the claim. That only changes what the view shows. The submit call is still accepted. The renderer rejects a render config that references a fact you did not pass, so pass every claim fact your configs use on every read, with `false` for the ones that don't hold.
 
 | Error                      | Returned by                    | HTTP |
 |----------------------------|--------------------------------|------|
@@ -366,7 +366,7 @@ Things the demo cuts corners on, that you'll want for a real deployment:
 - **Observability.** Plugins log via `log.Printf`. Replace with your structured logger; surface task state transitions, plugin errors, and callback failures to your observability stack.
 - **Schema.** Add `active_step_id` and `seq` to your task table (section 1) before deploying a version that uses the guarded writes, and `claimed_by` and `claimed_at` before using task claims.
 - **Plugin error handling.** Decide what should retry vs. fail-fast. The orchestrator currently surfaces non-`ErrSuspended` plugin errors to Temporal, which will retry per the activity's retry policy.
-- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task. Add authn/authz at your HTTP layer, including any claim requirement (section 7).
+- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task. Add authn/authz at your HTTP layer. A task claim is not part of that check (see [Task claims](#7-task-claims)).
 
 ---
 

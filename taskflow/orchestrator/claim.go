@@ -12,10 +12,10 @@ import (
 	"github.com/OpenNSW/core/taskflow/store"
 )
 
-// A claim records who is working a task, so two people do not act on it at once. The holder is an
-// opaque value chosen by the host (for example an internal user ID). taskflow only stores claims:
-// it never decides who may claim a task or what a claim is required for. That is the host's
-// policy, enforced in its own handlers before it calls CompleteTaskStep.
+// A claim records who is working a task, so the UI can show it and two people can avoid working
+// the same task at once. The holder is an opaque value chosen by the host (for example an internal
+// user ID). taskflow only stores claims. CompleteTaskStep does not read the holder: anyone who can
+// call it can submit the active step. For this MVP a claim is UI guidance.
 //
 // Not to be confused with store.TaskStore.ClaimStep, which makes a step the task's active step, or
 // with renderer.Facts.Claims, which are authorization facts for rendering.
