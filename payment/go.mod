@@ -5,8 +5,8 @@ go 1.26
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.10.0
-	github.com/shopspring/decimal v1.4.0
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/shopspring/decimal v1.5.0
 	github.com/stretchr/testify v1.12.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
