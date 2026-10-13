@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/OpenNSW/core/shared/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,7 @@ func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string
 	return m.webhookResp, m.webhookErr
 }
 func (m *mockService) SetTaskCompleter(TaskCompleter) {}
+func (m *mockService) WithAuditor(audit.Auditor)      {}
 
 // serve routes a webhook POST through a mux so PathValue("gatewayId") resolves.
 func serveWebhook(svc PaymentService) *httptest.ResponseRecorder {
