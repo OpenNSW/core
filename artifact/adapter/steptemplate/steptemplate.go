@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/adapter/kinds"
 	"github.com/OpenNSW/core/artifact/adapter/types"
 )
 
@@ -16,7 +17,7 @@ import (
 //
 // TODO(#taskflow-guarded-writes): change the wire value to "step_template" (and migrate every stored
 // template, in this repo and in hosts) once that content migration is planned.
-const Kind artifact.Kind = "subtask_template"
+const Kind = kinds.StepTemplate
 
 type loadable struct {
 	types.StepTemplate
@@ -39,4 +40,11 @@ func (l *loadable) Parse(raw []byte) error {
 func Load(ctx context.Context, reg *artifact.Registry, id string) (types.StepTemplate, error) {
 	w, err := artifact.Latest[loadable](ctx, reg, id)
 	return w.StepTemplate, err
+}
+
+// Check parses a step template. A step template's plugin properties may name other artifacts,
+// but only the plugin knows which fields do, so no references are returned.
+func Check(raw []byte) ([]artifact.Ref, error) {
+	var t loadable
+	return nil, t.Parse(raw)
 }

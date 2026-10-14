@@ -44,3 +44,12 @@ func TestStepTemplateAdapter(t *testing.T) {
 		}
 	})
 }
+
+func TestCheck(t *testing.T) {
+	if refs, err := steptemplate.Check([]byte(`{"id":"s","task_type":"USER_INPUT"}`)); err != nil || refs != nil {
+		t.Fatalf("Check(valid) = %v, %v; want no refs and no error", refs, err)
+	}
+	if _, err := steptemplate.Check([]byte(`{"task_type":"USER_INPUT"}`)); err == nil {
+		t.Fatal("expected an error for a step template without an id")
+	}
+}
