@@ -117,6 +117,8 @@ type RegistryOption func(*registryConfig)
 type registryConfig struct {
 	sequenceStore SequenceStore
 	randomStore   RandomStore
+	now           func() time.Time
+	clockSet      bool
 }
 
 // WithSequenceStore supplies the SequenceStore used to back "sequence"
@@ -139,6 +141,17 @@ func WithRandomStore(store RandomStore) RegistryOption {
 	}
 }
 
+// WithClock sets the time Generate reads, in place of time.Now. Generate calls
+// now once per ID and converts the result to UTC, so every date segment and
+// date placeholder of one ID shares one value. NewRegistry returns an error
+// when now is nil.
+func WithClock(now func() time.Time) RegistryOption {
+	return func(rc *registryConfig) {
+		rc.now = now
+		rc.clockSet = true
+	}
+}
+
 // formatKey is the composite map key used to look up a pre-compiled format.
 type formatKey struct {
 	issuer string
@@ -155,6 +168,7 @@ type compiledFormat struct {
 // Concurrent safety for sequence counters is the responsibility of SequenceStore.
 type registry struct {
 	formats map[formatKey]*compiledFormat
+	now     func() time.Time
 }
 
 // NewRegistry validates cfg and compiles all formats into an internal lookup
@@ -171,6 +185,12 @@ func NewRegistry(cfg Config, opts ...RegistryOption) (Registry, error) {
 	var rc registryConfig
 	for _, opt := range opts {
 		opt(&rc)
+	}
+	if rc.clockSet && rc.now == nil {
+		return nil, fmt.Errorf("refid: WithClock needs a non-nil clock")
+	}
+	if rc.now == nil {
+		rc.now = time.Now
 	}
 
 	formats := make(map[formatKey]*compiledFormat)
@@ -199,7 +219,7 @@ func NewRegistry(cfg Config, opts ...RegistryOption) (Registry, error) {
 		}
 	}
 
-	return &registry{formats: formats}, nil
+	return &registry{formats: formats, now: rc.now}, nil
 }
 
 // Generate implements Registry.
@@ -216,7 +236,7 @@ func (r *registry) Generate(ctx context.Context, issuer, idType string, params m
 		return "", fmt.Errorf("%w: %q", ErrUnknownIssuer, issuer)
 	}
 
-	now := time.Now().UTC()
+	now := r.now().UTC()
 
 	// 1. Validation pass: validate all segments before executing any side-effects (e.g. sequence counter increments)
 	for _, seg := range compiled.segments {

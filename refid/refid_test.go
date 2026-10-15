@@ -599,61 +599,235 @@ func TestGenerate_CounterDoesNotAdvanceOnOverflow(t *testing.T) {
 // ScopeKey resolution — counter isolation
 // -----------------------------------------------------------------------
 
-func TestScopeKey_DailyReset(t *testing.T) {
-	// The scope key includes {yyyyMMdd}, so counters from different days must
-	// start fresh. We can observe this with the memStore: generate one ID,
-	// check the counter key used, then verify a different date would produce
-	// a different scope key (counter would restart at 1).
-	//
-	// We indirectly validate this by asserting that two calls on the same day
-	// produce counters 000001 and 000002, while calls with a different date
-	// component would use a separate scope key (hence a different counter bucket).
-	store := newMemStore()
+// clockAt returns a clock that reads *at, so a test moves time by assigning it.
+func clockAt(at *time.Time) func() time.Time {
+	return func() time.Time { return *at }
+}
+
+func utc(year int, month time.Month, day, hour, min, sec int) time.Time {
+	return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
+}
+
+// A sequence scoped with a date placeholder restarts at 1 when the clock
+// crosses that period's boundary and continues within it. A sequence without a
+// date placeholder keeps counting across every boundary.
+func TestScopeKey_PeriodReset(t *testing.T) {
+	now := utc(2026, time.December, 31, 23, 59, 58)
+	for _, tc := range []struct {
+		name     string
+		scopeKey string
+		// steps are the clock readings and the sequence value each ID gets.
+		steps []struct {
+			at   time.Time
+			want string
+		}
+	}{
+		{
+			name: "yearly", scopeKey: "{issuer}:{idType}:{yyyy}",
+			steps: []struct {
+				at   time.Time
+				want string
+			}{
+				{utc(2026, time.December, 31, 23, 59, 59), "0001"},
+				{utc(2026, time.December, 31, 23, 59, 59), "0002"},
+				{utc(2027, time.January, 1, 0, 0, 0), "0001"},
+				{utc(2027, time.June, 15, 12, 0, 0), "0002"},
+			},
+		},
+		{
+			name: "monthly", scopeKey: "{issuer}:{idType}:{yyyyMM}",
+			steps: []struct {
+				at   time.Time
+				want string
+			}{
+				{utc(2026, time.January, 31, 23, 59, 59), "0001"},
+				{utc(2026, time.January, 31, 23, 59, 59), "0002"},
+				{utc(2026, time.February, 1, 0, 0, 0), "0001"},
+				{utc(2026, time.February, 28, 12, 0, 0), "0002"},
+				{utc(2027, time.February, 1, 0, 0, 0), "0001"},
+			},
+		},
+		{
+			name: "daily", scopeKey: "{issuer}:{idType}:{yyyyMMdd}",
+			steps: []struct {
+				at   time.Time
+				want string
+			}{
+				{utc(2026, time.March, 1, 23, 59, 59), "0001"},
+				{utc(2026, time.March, 1, 23, 59, 59), "0002"},
+				{utc(2026, time.March, 2, 0, 0, 0), "0001"},
+				{utc(2026, time.March, 2, 12, 0, 0), "0002"},
+			},
+		},
+		{
+			name: "no date placeholder", scopeKey: "{issuer}:{idType}",
+			steps: []struct {
+				at   time.Time
+				want string
+			}{
+				{utc(2026, time.December, 31, 23, 59, 59), "0001"},
+				{utc(2027, time.January, 1, 0, 0, 0), "0002"},
+				{utc(2028, time.January, 1, 0, 0, 0), "0003"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := refid.Config{Issuers: []refid.IssuerConfig{{
+				Issuer: "TEST",
+				Formats: []refid.FormatConfig{{
+					IDType: "seq",
+					Segments: []refid.SegmentConfig{
+						{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: tc.scopeKey, Padding: 4}},
+					},
+				}},
+			}}}
+			reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithClock(clockAt(&now)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, step := range tc.steps {
+				now = step.at
+				got, err := reg.Generate(context.Background(), "TEST", "seq", nil)
+				if err != nil {
+					t.Fatalf("step %d (%s): %v", i, step.at.Format(time.RFC3339), err)
+				}
+				if got != step.want {
+					t.Errorf("step %d (%s): got %q, want %q", i, step.at.Format(time.RFC3339), got, step.want)
+				}
+			}
+		})
+	}
+}
+
+// A daily scope that also carries a param restarts each param value's count at
+// midnight, independently of the others.
+func TestScopeKey_DailyResetPerParam(t *testing.T) {
+	now := utc(2026, time.March, 1, 23, 59, 59)
 	cfg := refid.Config{
-		Lists: map[string][]string{"office_location": {"COL"}},
+		Lists: map[string][]string{"office": {"COL", "KAN"}},
 		Issuers: []refid.IssuerConfig{{
-			Issuer: "FCAU",
+			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType: "case_id",
 				Segments: []refid.SegmentConfig{
-					{Type: refid.SegmentTypeLiteral, Value: "FCAU-"},
-					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
-					{Type: refid.SegmentTypeLiteral, Value: "-"},
-					{Type: refid.SegmentTypeDate, Layout: "20060102"},
-					{Type: refid.SegmentTypeLiteral, Value: "-"},
-					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6}},
+					{Type: refid.SegmentTypeList, List: "office", Param: "officeCode"},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 3}},
 				},
 			}},
 		}},
 	}
-	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithClock(clockAt(&now)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generate := func(office string) string {
+		t.Helper()
+		id, err := reg.Generate(context.Background(), "TEST", "case_id", map[string]string{"officeCode": office})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	for _, step := range []struct {
+		at     time.Time
+		office string
+		want   string
+	}{
+		{now, "COL", "COL001"},
+		{now, "COL", "COL002"},
+		{now, "KAN", "KAN001"},
+		{utc(2026, time.March, 2, 0, 0, 0), "COL", "COL001"},
+		{utc(2026, time.March, 2, 0, 0, 0), "KAN", "KAN001"},
+		{utc(2026, time.March, 2, 0, 0, 1), "COL", "COL002"},
+	} {
+		now = step.at
+		if got := generate(step.office); got != step.want {
+			t.Errorf("%s at %s: got %q, want %q", step.office, step.at.Format(time.RFC3339), got, step.want)
+		}
+	}
+}
+
+// Every date segment of one ID, whatever its layout, renders from the one clock
+// value Generate reads, and a sequence scoped by year counts that year.
+func TestSegment_MultipleDateSegmentsShareOneClockValue(t *testing.T) {
+	now := utc(2026, time.September, 7, 10, 0, 0)
+	calls := 0
+	clock := func() time.Time {
+		calls++
+		return now
+	}
+	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "TEST",
+		Formats: []refid.FormatConfig{{
+			IDType: "dated",
+			Segments: []refid.SegmentConfig{
+				{Type: refid.SegmentTypeDate, Layout: "2006"},
+				{Type: refid.SegmentTypeLiteral, Value: "/"},
+				{Type: refid.SegmentTypeDate, Layout: "01"},
+				{Type: refid.SegmentTypeLiteral, Value: "/"},
+				{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyy}", Padding: 4}},
+			},
+		}},
+	}}}
+	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithClock(clock))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	params := map[string]string{"officeCode": "COL"}
+	for i, want := range []string{"2026/09/0001", "2026/09/0002"} {
+		got, err := reg.Generate(ctx, "TEST", "dated", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("ID %d: got %q, want %q", i, got, want)
+		}
+		if calls != i+1 {
+			t.Errorf("after ID %d the clock was read %d times, want one read per ID", i, calls)
+		}
+	}
 
-	id1, err := reg.Generate(ctx, "FCAU", "case_id", params)
+	// The month changes within the year: the date text follows it, the count continues.
+	now = utc(2026, time.October, 1, 0, 0, 0)
+	if got, _ := reg.Generate(ctx, "TEST", "dated", nil); got != "2026/10/0003" {
+		t.Errorf("next month: got %q, want 2026/10/0003", got)
+	}
+	// A new year restarts the count and changes the year text.
+	now = utc(2027, time.January, 1, 0, 0, 0)
+	if got, _ := reg.Generate(ctx, "TEST", "dated", nil); got != "2027/01/0001" {
+		t.Errorf("next year: got %q, want 2027/01/0001", got)
+	}
+}
+
+// A clock in another zone renders in UTC: 23:30 on 31 December at UTC-5 is
+// already 1 January in UTC.
+func TestWithClock_ConvertsToUTC(t *testing.T) {
+	zone := time.FixedZone("UTC-5", -5*60*60)
+	now := time.Date(2026, time.December, 31, 23, 30, 0, 0, zone)
+	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "TEST",
+		Formats: []refid.FormatConfig{{
+			IDType:   "dated",
+			Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: "20060102"}},
+		}},
+	}}}
+	reg, err := refid.NewRegistry(cfg, refid.WithClock(clockAt(&now)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := reg.Generate(ctx, "FCAU", "case_id", params)
+	got, err := reg.Generate(context.Background(), "TEST", "dated", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	suffix1 := id1[len(id1)-6:]
-	suffix2 := id2[len(id2)-6:]
-	if suffix1 != "000001" {
-		t.Errorf("first counter: expected 000001, got %q", suffix1)
+	if got != "20270101" {
+		t.Errorf("got %q, want 20270101", got)
 	}
-	if suffix2 != "000002" {
-		t.Errorf("second counter: expected 000002, got %q", suffix2)
-	}
+}
 
-	// The total number of scope keys used must be exactly 1 (same day).
-	if len(store.counters) != 1 {
-		t.Errorf("expected 1 scope key in store, got %d: %v", len(store.counters), store.counters)
+func TestWithClock_NilRejected(t *testing.T) {
+	_, err := refid.NewRegistry(refid.Config{}, refid.WithClock(nil))
+	if err == nil {
+		t.Fatal("expected an error for a nil clock")
 	}
 }
 
@@ -729,9 +903,8 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestSegment_Date_UsesUTC(t *testing.T) {
-	// Ensure the date segment always uses UTC regardless of local time zone.
-	// We can't inject time.Now directly from outside, but we can verify that
-	// the generated date component is a valid date string.
+	// Without WithClock the date segment renders the current UTC date, so the
+	// output parses as a valid date string.
 	cfg := refid.Config{
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "TEST",
