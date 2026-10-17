@@ -148,6 +148,18 @@ func (s *TaskStore) PersistSubmission(ctx context.Context, taskID, stepID string
 	})
 }
 
+func (s *TaskStore) WriteDraft(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error) {
+	encoded, err := jsonData(data)
+	if err != nil {
+		return 0, fmt.Errorf("encode task data: %w", err)
+	}
+	// Neither state nor seq moves: a draft does not advance the step, so it must not make the
+	// step's ID or the view's version stale.
+	return s.stepUpdate(ctx, taskID, "active_step_id = ? AND seq = ? AND state NOT IN ?",
+		[]any{stepID, seq, []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted}},
+		map[string]any{"data": encoded})
+}
+
 func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error) {
 	// No active_step_id check, for the same reason as ClaimStep: completion isn't about which step
 	// is active, only about whether a later step has already superseded this seq.

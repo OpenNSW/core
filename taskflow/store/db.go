@@ -112,7 +112,7 @@ type StepClaim struct {
 
 // TaskStore is an interface that any persistent or in-memory database used by the TaskManager should implement.
 //
-// The four step methods below are conditional writes. Each is one atomic statement whose guard is
+// The five step methods below are conditional writes. Each is one atomic statement whose guard is
 // part of the write, so a write from a step that is no longer current changes nothing. Each returns
 // the number of rows changed: 0 means the write was stale and was dropped, which is not an error.
 // InitTask must not write ActiveStepID or Seq.
@@ -144,6 +144,11 @@ type TaskStore interface {
 	// PersistSubmission stores the data submitted for the active step, sets StateAdvancing and
 	// advances seq to seq+1. Guard: the active step is stepID and the stored seq equals seq.
 	PersistSubmission(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
+	// WriteDraft stores the data of a draft saved for the active step, leaving state and seq as
+	// they are. Guard: the active step is stepID, the stored seq equals seq, and the state is none
+	// of StateStartingStep, StateAdvancing and StateCompleted, so a draft never lands on a step
+	// that is not yet showing, has been submitted, or has ended.
+	WriteDraft(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
 	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq.
 	CompleteTask(context context.Context, taskID string, seq int64) (int64, error)
 

@@ -180,6 +180,52 @@ func TestPersistSubmission(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateAdvancing)
 }
 
+func TestWriteDraft(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+
+	// Not yet showing: the plugin has not reported the render state.
+	n, err := s.WriteDraft(ctx, task1, stepA, 4, map[string]any{"draft": 1.0})
+	wantRows(t, n, err, 0)
+
+	_, _ = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", map[string]any{})
+	n, err = s.WriteDraft(ctx, task1, stepA, 4, map[string]any{"draft": 1.0})
+	wantRows(t, n, err, 1)
+	got := mustGet(t, s, ctx)
+	wantRow(t, got, stepA, 4, "PENDING_USER")
+	if want := map[string]any{"draft": 1.0}; !reflect.DeepEqual(got.Data, want) {
+		t.Errorf("Data = %v, want %v", got.Data, want)
+	}
+
+	// Another step, or another seq, does not match.
+	n, err = s.WriteDraft(ctx, task1, stepB, 4, map[string]any{})
+	wantRows(t, n, err, 0)
+	n, err = s.WriteDraft(ctx, task1, stepA, 3, map[string]any{})
+	wantRows(t, n, err, 0)
+
+	// Once submitted the seq moves on, and a draft for the old seq is dropped.
+	_, _ = s.PersistSubmission(ctx, task1, stepA, 4, map[string]any{"final": 1.0})
+	n, err = s.WriteDraft(ctx, task1, stepA, 4, map[string]any{"draft": 2.0})
+	wantRows(t, n, err, 0)
+	if want := map[string]any{"final": 1.0}; !reflect.DeepEqual(mustGet(t, s, ctx).Data, want) {
+		t.Errorf("a draft after the submission changed the data")
+	}
+}
+
+// The state guard alone turns a draft away: same step and seq, but the step is not showing.
+func TestWriteDraft_StateGuard(t *testing.T) {
+	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted} {
+		t.Run(state, func(t *testing.T) {
+			s, ctx := newTestStore(t)
+			_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+			_, _ = s.WriteRenderState(ctx, task1, stepA, 4, state, map[string]any{})
+
+			n, err := s.WriteDraft(ctx, task1, stepA, 4, map[string]any{"draft": 1.0})
+			wantRows(t, n, err, 0)
+		})
+	}
+}
+
 func TestCompleteTask(t *testing.T) {
 	s, ctx := newTestStore(t)
 	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
@@ -204,6 +250,8 @@ func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	n, err = s.WriteRenderState(ctx, "nope", stepA, 1, "S", nil)
 	wantRows(t, n, err, 0)
 	n, err = s.PersistSubmission(ctx, "nope", stepA, 1, nil)
+	wantRows(t, n, err, 0)
+	n, err = s.WriteDraft(ctx, "nope", stepA, 1, nil)
 	wantRows(t, n, err, 0)
 	n, err = s.CompleteTask(ctx, "nope", 1)
 	wantRows(t, n, err, 0)

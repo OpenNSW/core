@@ -185,6 +185,22 @@ func (s *safeMockTaskStore) PersistSubmission(_ context.Context, taskID, stepID 
 	return 1, nil
 }
 
+func (s *safeMockTaskStore) WriteDraft(_ context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.ActiveStepID != stepID || t.Seq != seq {
+		return 0, nil
+	}
+	switch t.State {
+	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted:
+		return 0, nil
+	}
+	t.Data = data
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
 func (s *safeMockTaskStore) CompleteTask(_ context.Context, taskID string, seq int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,6 +300,17 @@ func newTestRegistry() *artifact.Registry {
 				"external_url": "http://example.com"
 			}
 		}`),
+		"subtask_draft_user_input.json": []byte(`{
+			"id": "draft_user_input",
+			"task_type": "USER_INPUT",
+			"output_namespace": "userform",
+			"plugin_properties": {},
+			"draft": {"command": "save_as_draft"},
+			"extensions": [
+				{"id": "validator", "phase": "PRE_RESUME"},
+				{"id": "logger", "phase": "POST_RESUME"}
+			]
+		}`),
 	}
 	reg := artifact.NewRegistry(m)
 	reg.RegisterArtifact("test_template", "task_template", "", "task_test_template.json")
@@ -292,6 +319,7 @@ func newTestRegistry() *artifact.Registry {
 	reg.RegisterArtifact("generic_user_input", "subtask_template", "", "subtask_generic_user_input.json")
 	reg.RegisterArtifact("generic_user_input_with_extensions", "subtask_template", "", "subtask_generic_user_input_with_extensions.json")
 	reg.RegisterArtifact("generic_external_review", "subtask_template", "", "subtask_generic_external_review.json")
+	reg.RegisterArtifact("draft_user_input", "subtask_template", "", "subtask_draft_user_input.json")
 	return reg
 }
 
