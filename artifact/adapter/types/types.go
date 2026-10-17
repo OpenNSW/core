@@ -15,7 +15,8 @@ type TaskTemplate struct {
 }
 
 // ExecutionPhase identifies a point in the CompleteTaskStep lifecycle at which
-// an extension may be invoked.
+// an extension may be invoked. SaveDraft runs the PRE_RESUME extensions too, with
+// the step's draft command as the command, and never the POST_RESUME ones.
 type ExecutionPhase string
 
 const (
@@ -44,4 +45,14 @@ type StepTemplate struct {
 	PluginProperties json.RawMessage   `json:"plugin_properties"`          // plugin-specific config
 	OutputNamespace  string            `json:"output_namespace,omitempty"` // top-level slot in TaskRecord.Data where CompleteTaskStep payloads are written
 	Extensions       []ExtensionConfig `json:"extensions,omitempty"`       // list of extensions to run during CompleteTaskStep
+	// Draft, when set, lets SaveDraft store partial input for the step under OutputNamespace
+	// without completing it. A step without it does not accept drafts.
+	Draft *DraftConfig `json:"draft,omitempty"`
+}
+
+// DraftConfig turns on draft saving for a step.
+type DraftConfig struct {
+	// Command is the command a draft save is authorized as: the PRE_RESUME extensions see it as
+	// the payload's "__command", so an authz rule names it like any other command of the step.
+	Command string `json:"command"`
 }
