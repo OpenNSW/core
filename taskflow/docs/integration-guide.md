@@ -42,6 +42,7 @@ type TaskStore interface {
     ClaimStep(ctx context.Context, taskID string, claim StepClaim) (int64, error)
     WriteRenderState(ctx context.Context, taskID, stepID string, seq int64, state string, data map[string]any) (int64, error)
     PersistSubmission(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
+    WriteDraft(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
     CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error)
 
     // Guarded claim writes: the same kind of statement, on the claim columns only.
@@ -56,13 +57,14 @@ type TaskStore interface {
 - **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). Must return `(zero, false)` when absent, never panic.
 - **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
 - **`GetAllTasks`** returns every record if `parentWorkflowID == ""`, otherwise only records where `record.ParentWorkflowID == parentWorkflowID`. Used by the portal listing API.
-- **The four step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
+- **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
 
   | Method              | Guard                                | Sets                                                                        |
   |---------------------|--------------------------------------|-----------------------------------------------------------------------------|
   | `ClaimStep`         | stored `seq <= claim.Seq`            | `active_step_id`, `seq`, `active_task_template_id`, `state`, `data` (replaced, not merged) |
   | `WriteRenderState`  | `active_step_id = stepID AND seq = seq` | `state`, `data`                                                          |
   | `PersistSubmission` | `active_step_id = stepID AND seq = seq` | `data`, `state = ADVANCING`, `seq = seq + 1`                             |
+  | `WriteDraft`        | `active_step_id = stepID AND seq = seq AND state NOT IN (STARTING_STEP, ADVANCING, COMPLETED)` | `data` only                       |
   | `CompleteTask`      | stored `seq <= seq`                  | `state = COMPLETED`, `seq`                                                  |
 
   Return the number of rows changed. **0 rows means the write was stale and was dropped; it is not an error.** Return an error only when the store failed.

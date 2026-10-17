@@ -68,6 +68,8 @@ type StepTemplate struct {
     PluginType       string          `json:"task_type"` // plugin routing key; unrelated to TaskTemplate.Type
     PluginProperties json.RawMessage `json:"plugin_properties"`
     OutputNamespace  string          `json:"output_namespace,omitempty"`
+    Extensions       []ExtensionConfig `json:"extensions,omitempty"`
+    Draft            *DraftConfig    `json:"draft,omitempty"`
 }
 ```
 
@@ -77,6 +79,23 @@ type StepTemplate struct {
 | `task_type`         | yes                     | **Plugin lookup key.** Must match the string used in `pluginsReg.Register(taskType, plugin)`.                                                                                                         |
 | `plugin_properties` | varies                  | Free-form JSON passed verbatim to the plugin's `Execute`. Shape is owned by the plugin.                                                                                                               |
 | `output_namespace`  | for submission steps | Top-level slot in `TaskRecord.Data` where `CompleteTaskStep` payloads are written. Required for any step that accepts an external submission. Without it, submitted payloads are dropped (logged). |
+| `draft`             | no                      | `{"command": "save_as_draft"}` lets `SaveDraft` store partial input for the step without completing it (see below). Needs `output_namespace`; the template fails to load otherwise. |
+
+### Drafts
+
+A step with `draft` accepts `SaveDraft(ctx, taskID, stepID, payload)`. The payload replaces the step's `output_namespace` slot of the task data, as a submission does, but the step is not completed: the workflow is not called, and the step ID, state and version do not change. The next render shows the draft, a submission replaces it, and the next step starts from its mapped inputs, so a draft never reaches the workflow. Because the workflow never sees a draft, the step's `output_mapping` can mark its outputs required.
+
+`draft.command` is the command the draft is authorized as: the `PRE_RESUME` extensions run with it as `__command`, whatever the caller sent, so an authz rule names it like any other command (`"PENDING_USER": {"save_as_draft": [...]}`). `POST_RESUME` extensions do not run for a draft.
+
+```json
+{
+  "id": "apply--user-input",
+  "task_type": "USER_INPUT",
+  "output_namespace": "userform",
+  "plugin_properties": {},
+  "draft": { "command": "save_as_draft" }
+}
+```
 
 **Example** (`demo/templates/subtask_demo_generic_user_input.json`):
 
