@@ -138,13 +138,14 @@ type TaskRecord struct {
 
 ### Guarded writes
 
-`ActiveStepID` and `Seq` are written only by four conditional statements on `TaskStore`. Each is one atomic write whose guard is part of the statement, and each returns the rows it changed; **0 rows means the write was stale and was dropped, which is not an error.**
+`ActiveStepID` and `Seq` are written only by four conditional statements on `TaskStore`; a fifth, `WriteDraft`, writes only the data of the active step and moves neither. Each is one atomic write whose guard is part of the statement, and each returns the rows it changed; **0 rows means the write was stale and was dropped, which is not an error.**
 
 | Method               | Called by             | Guard                                   | Sets                                               |
 |----------------------|-----------------------|-----------------------------------------|----------------------------------------------------|
 | `ClaimStep`          | `StartTaskStep`        | stored `seq <= n`                       | active step, `seq = n`, template, `STARTING_STEP`, data from inputs |
 | `WriteRenderState`   | `StartTaskStep`        | active step is `A` and `seq = n`        | state and data the plugin produced                 |
 | `PersistSubmission`  | `CompleteTaskStep`    | active step is `A` and `seq = n`        | data, `ADVANCING`, `seq = n+1`                     |
+| `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING` or `COMPLETED`) | data only |
 | `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m`                       | `COMPLETED`, `seq = m`                             |
 
 `InitTask` still exists for creating the row and for coarse fields, but it never writes `ActiveStepID` or `Seq`, so a stale full-record save cannot move them.
