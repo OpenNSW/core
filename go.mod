@@ -15,7 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.12.1
 	go.temporal.io/api v1.63.7
-	go.temporal.io/sdk v1.49.0
+	go.temporal.io/sdk v1.50.0
 	gorm.io/gorm v1.31.2
 )
 
