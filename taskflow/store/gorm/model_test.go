@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
 )
@@ -21,6 +22,7 @@ import (
 // CreatedAt/UpdatedAt are intentionally excluded: GORM owns them via
 // autoCreateTime/autoUpdateTime, so FromDomain never copies them.
 func TestRoundTrip_PreservesFields(t *testing.T) {
+	claimedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	original := store.TaskRecord{
 		TaskID:               "task-1",
 		TaskType:             "TEST",
@@ -34,6 +36,8 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		ActiveStepID:         "0a0a0a0a-0000-4000-8000-00000000000a",
 		Seq:                  4,
 		Data:                 map[string]any{"userform": map[string]any{"name": "Alice"}},
+		ClaimedBy:            "user-1",
+		ClaimedAt:            &claimedAt,
 	}
 
 	got := FromDomain(original).ToDomain()
@@ -61,6 +65,20 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Data, original.Data) {
 		t.Errorf("Data not preserved: got %#v, want %#v", got.Data, original.Data)
+	}
+	if got.ClaimedBy != original.ClaimedBy || got.ClaimedAt == nil || !got.ClaimedAt.Equal(claimedAt) {
+		t.Errorf("claim columns: got (%q, %v), want (%q, %v)", got.ClaimedBy, got.ClaimedAt, original.ClaimedBy, claimedAt)
+	}
+}
+
+// An unclaimed task must reach the claim columns as NULL, not as "", so "IS NULL" matches it.
+func TestFromDomain_UnclaimedIsNull(t *testing.T) {
+	m := FromDomain(store.TaskRecord{TaskID: "task-1"})
+	if m.ClaimedBy != nil || m.ClaimedAt != nil {
+		t.Errorf("claim columns = (%v, %v), want (nil, nil)", m.ClaimedBy, m.ClaimedAt)
+	}
+	if got := m.ToDomain(); got.ClaimedBy != "" || got.ClaimedAt != nil {
+		t.Errorf("round trip claim = (%q, %v), want empty", got.ClaimedBy, got.ClaimedAt)
 	}
 }
 

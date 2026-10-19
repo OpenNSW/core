@@ -48,6 +48,8 @@ The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskMan
     "state": "PENDING_USER",
     "step_id": "0a0a0a0a-0000-4000-8000-00000000000a",
     "version": 4,
+    "claimed_by": "4c1d2e3f-0000-4000-8000-000000000001",
+    "claimed_at": "2026-05-18T09:20:02Z",
     "created_at": "2026-05-18T09:14:11Z",
     "updated_at": "2026-05-18T09:14:11Z"
   }
@@ -79,6 +81,10 @@ The `view` key is omitted (the JSON tag is `omitempty`). Listing is intentionall
 ```
 
 `step_id` is the step the task is on; send it back when you act on the view. `version` goes up every time the task moves on. It is read-only — never send it — and is there so you can keep the newest of several views you fetched.
+
+`claimed_by` and `claimed_at` say who is working the task and since when. Both are left out when nobody has claimed it. `claimed_by` is whatever your server recorded, usually an internal user ID, so don't show it as is or compare it with values from your login token. Show them so two people can avoid working the same task. Submitting a step does not require the claim. Your server will normally add a display name and whether the claim is yours.
+
+Claiming and releasing do not change `version`, so `version` cannot tell you whether the claim changed. Take the claim fields from the most recent response you received, not from the one with the higher `version`, and refetch the task after your own claim or release. If responses for the same task can arrive out of order, a stale response with the same `version` can still overwrite a newer claim. Treat that as a known limit: the robust fix is a revision that changes on every claim change, which core does not expose yet.
 
 ### `View` JSON structure
 

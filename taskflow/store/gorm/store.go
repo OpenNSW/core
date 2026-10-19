@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
 	"gorm.io/gorm"
@@ -21,20 +22,23 @@ type TaskStore struct {
 	db *gorm.DB
 }
 
+var _ store.TaskStore = (*TaskStore)(nil)
+
 func New(db *gorm.DB) *TaskStore {
 	return &TaskStore{db: db}
 }
 
 func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) error {
-	// active_step_id and seq are owned by the guarded step statements below. Omitting them keeps a
-	// full-record save from moving them, and lets this write work before the columns exist.
+	// active_step_id and seq are owned by the guarded step statements below, and claimed_by and
+	// claimed_at by ClaimTask and ReleaseTask. Omitting them keeps a full-record save from moving
+	// them, and lets this write work before the columns exist.
 	model := FromDomain(record)
 	// On conflict, do nothing rather than overwrite: TaskID is the parent's ActivationID, unique
 	// per invocation of the parent's node, so a conflict can only be a retry of this exact
 	// StartTask call (Temporal Activities can be retried) — never a different task. The existing
 	// row is already correct, and by the time a retry lands, guarded writes below (ClaimStep etc.)
 	// may have already moved it forward; overwriting state/data here would silently rewind it.
-	err := s.db.WithContext(ctx).Omit("active_step_id", "seq").Clauses(clause.OnConflict{
+	err := s.db.WithContext(ctx).Omit("active_step_id", "seq", "claimed_by", "claimed_at").Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "task_id"}},
 		DoNothing: true,
 	}).Create(&model).Error
@@ -150,5 +154,22 @@ func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) 
 	return s.stepUpdate(ctx, taskID, "seq <= ?", []any{seq}, map[string]any{
 		"state": store.StateCompleted,
 		"seq":   seq,
+	})
+}
+
+func (s *TaskStore) ClaimTask(ctx context.Context, taskID, holder string, at time.Time) (int64, error) {
+	// The holder matches the guard again on a repeat claim, which then succeeds without moving
+	// claimed_at: the CASE reads the row's value before this update, as SQL assignments do.
+	return s.stepUpdate(ctx, taskID, "(claimed_by IS NULL OR claimed_by = ?) AND state <> ?",
+		[]any{holder, store.StateCompleted}, map[string]any{
+			"claimed_by": holder,
+			"claimed_at": gorm.Expr("CASE WHEN claimed_by = ? THEN claimed_at ELSE ? END", holder, at),
+		})
+}
+
+func (s *TaskStore) ReleaseTask(ctx context.Context, taskID, holder string) (int64, error) {
+	return s.stepUpdate(ctx, taskID, "claimed_by = ?", []any{holder}, map[string]any{
+		"claimed_by": nil,
+		"claimed_at": nil,
 	})
 }
