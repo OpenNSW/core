@@ -381,3 +381,14 @@ func TestGetExplicitFindsAVersionInANewerManifest(t *testing.T) {
 		t.Errorf("an unpublished version: expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestManifestVersionContext(t *testing.T) {
+	ctx := context.Background()
+	if _, ok := artifact.ManifestVersionFrom(ctx); ok {
+		t.Fatal("an empty context should carry no version")
+	}
+	v, ok := artifact.ManifestVersionFrom(artifact.WithManifestVersion(ctx, 4))
+	if !ok || v != 4 {
+		t.Fatalf("got %d, %v; want 4, true", v, ok)
+	}
+}

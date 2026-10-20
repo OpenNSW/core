@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/OpenNSW/core/artifact"
 	"github.com/OpenNSW/core/artifact/adapter/steptemplate"
 	"github.com/OpenNSW/core/artifact/adapter/types"
 	"github.com/OpenNSW/core/shared/deepcopy"
@@ -63,7 +64,14 @@ func (tm *TaskManager) SaveDraft(ctx context.Context, taskID, stepID string, pay
 	}
 	seq := record.Seq
 
-	stepTemplate, err := steptemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
+	reg, err := tm.registryFor(ctx, record.ActiveTaskTemplateID, record.ManifestVersion)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", taskID, err)
+	}
+	// The draft's extensions (authz) resolve through the task's version.
+	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
+
+	stepTemplate, err := steptemplate.Load(ctx, reg, record.ActiveTaskTemplateID)
 	if err != nil {
 		return fmt.Errorf("failed to load active step template %q: %w", record.ActiveTaskTemplateID, err)
 	}
