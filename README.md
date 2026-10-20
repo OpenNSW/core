@@ -113,9 +113,13 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     }
 
     // 2. Artifacts — one loader is the single source of truth. LoadSet reads
-    //    configs/manifest_v1.json, manifest_v2.json, …
+    //    configs/manifest_v1.json, manifest_v2.json, …; Validate checks every
+    //    artifact the current manifest lists before anything runs.
     artifactLoader, _ := local.New(local.Config{Root: "configs"})
     artifacts, _ := artifact.LoadSet(ctx, artifactLoader)
+    if err := artifacts.Validate(ctx, artifacts.Current(), corechecks.Checks()); err != nil {
+        return nil, err
+    }
     registry := artifacts.CurrentRegistry()
 
     // 3. Payment

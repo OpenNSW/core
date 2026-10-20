@@ -77,3 +77,50 @@ func TestWorkflowDefAdapter(t *testing.T) {
 		}
 	})
 }
+
+func TestCheck(t *testing.T) {
+	t.Run("returns task and split references", func(t *testing.T) {
+		refs, err := workflowdef.Check([]byte(`{"id":"wf","nodes":[
+			{"id":"start","type":"START"},
+			{"id":"apply","type":"TASK","task_template_id":"apply-task"},
+			{"id":"fan","type":"SPLIT_TASK","task_template_id":"branch-flow","split_task":{"mode":"SAME_TEMPLATE"}},
+			{"id":"dyn","type":"SPLIT_TASK","task_template_id":"ignored","split_task":{"mode":"DIFFERENT_TEMPLATES"}},
+			{"id":"end","type":"END"}]}`))
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		if len(refs) != 2 {
+			t.Fatalf("expected 2 refs, got %+v", refs)
+		}
+		if refs[0].ID != "apply-task" || len(refs[0].Kinds) != 2 || refs[0].Kinds[0] != "task_template" || refs[0].Kinds[1] != "subtask_template" {
+			t.Errorf("unexpected TASK ref %+v", refs[0])
+		}
+		if refs[1].ID != "branch-flow" || len(refs[1].Kinds) != 1 || refs[1].Kinds[0] != workflowdef.Kind {
+			t.Errorf("unexpected SPLIT_TASK ref %+v", refs[1])
+		}
+	})
+
+	t.Run("rejects a same-template split without a template", func(t *testing.T) {
+		for _, node := range []string{
+			`{"id":"fan","type":"SPLIT_TASK","split_task":{"mode":"SAME_TEMPLATE"}}`,
+			`{"id":"fan","type":"SPLIT_TASK"}`,
+		} {
+			if _, err := workflowdef.Check([]byte(`{"id":"wf","nodes":[` + node + `]}`)); err == nil {
+				t.Errorf("expected an error for %s", node)
+			}
+		}
+	})
+
+	t.Run("rejects a TASK node without a template", func(t *testing.T) {
+		_, err := workflowdef.Check([]byte(`{"id":"wf","nodes":[{"id":"apply","type":"TASK"}]}`))
+		if err == nil {
+			t.Fatal("expected an error for a TASK node without task_template_id")
+		}
+	})
+
+	t.Run("rejects a definition without an id", func(t *testing.T) {
+		if _, err := workflowdef.Check([]byte(`{"nodes":[]}`)); err == nil {
+			t.Fatal("expected an error for a definition without an id")
+		}
+	})
+}

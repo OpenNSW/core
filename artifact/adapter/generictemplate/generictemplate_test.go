@@ -52,3 +52,29 @@ func TestGenericTemplateAdapter(t *testing.T) {
 		}
 	})
 }
+
+func TestCheck(t *testing.T) {
+	for _, raw := range []string{`{"a":1}`, `"a markdown body"`, `[1,2]`} {
+		if refs, err := generictemplate.Check([]byte(raw)); err != nil || refs != nil {
+			t.Fatalf("Check(%s) = %v, %v; want no refs and no error", raw, refs, err)
+		}
+	}
+	if _, err := generictemplate.Check([]byte(`{`)); err == nil {
+		t.Fatal("expected an error for invalid JSON")
+	}
+}
+
+func TestCheckRenderConfig(t *testing.T) {
+	refs, err := generictemplate.Check([]byte(`{"id":"x:render","sections":{
+		"workspace":{"templateId":"x-form","projector":"JSONFORMS"},
+		"status":{"templateId":"x-status","projector":"MARKDOWN"}}}`))
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(refs) != 2 || refs[0].ID != "x-status" || refs[1].ID != "x-form" || refs[0].Kinds[0] != generictemplate.Kind {
+		t.Errorf("refs = %+v, want x-status then x-form (sorted by zone)", refs)
+	}
+	if _, err := generictemplate.Check([]byte(`{"sections":{"workspace":{"projector":"JSONFORMS"}}}`)); err == nil {
+		t.Error("expected an error for a section without a templateId")
+	}
+}

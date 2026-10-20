@@ -93,6 +93,11 @@ loader, err := local.New(local.Config{Root: "/etc/configs"})
 // Load manifest_v1.json, manifest_v2.json, … and pick the current version.
 set, err := artifact.LoadSet(ctx, loader)                                // highest version
 set, err := artifact.LoadSet(ctx, loader, artifact.WithPinnedVersion(4)) // or a pinned one
+
+// Fetch and check every artifact of the current manifest before serving.
+checks := corechecks.Checks()
+checks["email_template"] = myEmailCheck
+if err := set.Validate(ctx, set.Current(), checks); err != nil { … }
 ```
 
 A bare `Registry` can still be built by hand, for tests:

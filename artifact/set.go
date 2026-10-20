@@ -84,7 +84,7 @@ func WithPinnedVersion(v int) SetOption {
 // ErrNotFound, or at the pinned version; any other load error fails the call, so a transient
 // fault never silently hides the newer manifests. Each manifest is checked as
 // RegisterFromConfig checks it, and explicitly versioned rows are checked for a consistent path
-// across manifests. Artifact files themselves are not fetched.
+// across manifests. Artifact files themselves are not fetched; see Validate.
 func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error) {
 	if loader == nil {
 		return nil, errors.New("artifact: nil loader passed to LoadSet")

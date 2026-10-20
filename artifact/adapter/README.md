@@ -49,6 +49,17 @@ To make a type `T` (from package `dom`) loadable via the artifact registry, crea
        return w.T, err
    }
    ```
+6. **Expose a Check** for `artifact.Set.Validate`: parse the bytes and return the IDs the artifact points at, so a manifest that lists it without them is rejected before any flow reaches it:
+   ```go
+   func Check(raw []byte) ([]artifact.Ref, error) {
+       var l loadable
+       if err := l.Parse(raw); err != nil {
+           return nil, err
+       }
+       return []artifact.Ref{{ID: l.T.TemplateID, Kinds: []artifact.Kind{"generic_template"}, Field: "template_id"}}, nil
+   }
+   ```
+   Core's own checks are collected in `corechecks.Checks()`; a host adds its kinds to that map.
 
 By following this pattern:
 - The registry remains 100% type-agnostic.

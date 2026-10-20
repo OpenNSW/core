@@ -41,3 +41,28 @@ func TestTaskTemplateAdapter(t *testing.T) {
 		}
 	})
 }
+
+func TestCheck(t *testing.T) {
+	t.Run("returns the workflow and render config", func(t *testing.T) {
+		refs, err := tasktemplate.Check([]byte(`{"id":"t","workflow_id":"wf","render_config_id":"rc"}`))
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		if len(refs) != 2 || refs[0].ID != "wf" || refs[0].Kinds[0] != "workflow" || refs[1].ID != "rc" || refs[1].Kinds[0] != "generic_template" {
+			t.Errorf("unexpected refs %+v", refs)
+		}
+	})
+
+	for name, raw := range map[string]string{
+		"missing workflow_id":      `{"id":"t","render_config_id":"rc"}`,
+		"missing render_config_id": `{"id":"t","workflow_id":"wf"}`,
+		"missing id":               `{"workflow_id":"wf","render_config_id":"rc"}`,
+		"malformed":                `{`,
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			if _, err := tasktemplate.Check([]byte(raw)); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}

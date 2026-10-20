@@ -304,6 +304,83 @@ func TestGetExplicit(t *testing.T) {
 	}
 }
 
+func TestValidate(t *testing.T) {
+	ctx := context.Background()
+	refsTo := func(kind artifact.Kind) artifact.Check {
+		return func(raw []byte) ([]artifact.Ref, error) {
+			s := strings.TrimSpace(string(raw))
+			if s == "bad" {
+				return nil, errors.New("cannot parse")
+			}
+			if s == "" {
+				return nil, nil
+			}
+			return []artifact.Ref{{ID: s, Kinds: []artifact.Kind{kind}, Field: "points_at"}}, nil
+		}
+	}
+	checks := artifact.Checks{"parent": refsTo("child")}
+
+	t.Run("passes when every file exists and every reference resolves", func(t *testing.T) {
+		set, err := artifact.LoadSet(ctx, testutil.MemLoader{
+			"manifest_v1.json": manifest(row("p", "parent", "", "p.txt"), row("c", "child", "", "c.txt"), row("other", "unchecked", "", "o.txt")),
+			"p.txt":            []byte("c"),
+			"c.txt":            []byte(""),
+			"o.txt":            []byte("anything"),
+		})
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		if err := set.Validate(ctx, 1, checks); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("reports every problem at once", func(t *testing.T) {
+		set, err := artifact.LoadSet(ctx, testutil.MemLoader{
+			"manifest_v1.json": manifest(
+				row("dangling", "parent", "", "dangling.txt"),
+				row("broken", "parent", "", "broken.txt"),
+				row("gone", "unchecked", "", "gone.txt"),
+				row("wrong-kind", "parent", "", "wrong.txt"),
+				row("c", "unchecked", "", "c.txt"),
+			),
+			"dangling.txt": []byte("nobody"),
+			"broken.txt":   []byte("bad"),
+			"wrong.txt":    []byte("c"),
+			"c.txt":        []byte(""),
+		})
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		err = set.Validate(ctx, 1, checks)
+		if err == nil {
+			t.Fatal("expected problems")
+		}
+		msg := err.Error()
+		for _, want := range []string{
+			"4 problem(s)",
+			`dangling/parent: points_at "nobody" is not listed as child`,
+			"broken/parent: \"broken.txt\": cannot parse",
+			"gone/unchecked: load \"gone.txt\"",
+			`wrong-kind/parent: points_at "c" is not listed as child`,
+		} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("report is missing %q:\n%s", want, msg)
+			}
+		}
+	})
+
+	t.Run("an unknown version fails", func(t *testing.T) {
+		set, err := artifact.LoadSet(ctx, twoVersions())
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		if err := set.Validate(ctx, 7, checks); !errors.Is(err, artifact.ErrUnknownManifestVersion) {
+			t.Fatalf("expected ErrUnknownManifestVersion, got %v", err)
+		}
+	})
+}
+
 func TestLatestPrefersTheUnversionedRow(t *testing.T) {
 	ctx := context.Background()
 	set, err := artifact.LoadSet(ctx, testutil.MemLoader{
