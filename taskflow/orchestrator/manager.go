@@ -90,6 +90,13 @@ var ErrStepIDRequired = errors.New("step ID is required")
 // ErrTaskNotFound means no task has the given ID. A caller serving HTTP should answer it with 404.
 var ErrTaskNotFound = errors.New("task not found")
 
+// ErrStepNotGuarded is returned by CompleteTaskStep and SaveDraft when the TaskManager was built
+// WithRequiredPreResumeExtensions and the active step's template does not declare one of them in
+// its PRE_RESUME phase, or there is no extensions registry to run them. Nothing is written. A
+// caller serving HTTP should answer it with 403: the step is open to no one until its template
+// says who may act on it.
+var ErrStepNotGuarded = errors.New("step template does not declare a required pre-resume extension")
+
 // TaskManager orchestrates decoupled tasks and interactions under parent workflows.
 // It bridges macro-level workflows and micro-level interactive tasks via a single DB entry per task.
 type TaskManager struct {
@@ -101,6 +108,10 @@ type TaskManager struct {
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
 	logger              *slog.Logger
+	// requiredPreResume are the extension ids every step template must declare in its
+	// PRE_RESUME phase before CompleteTaskStep or SaveDraft runs the step
+	// (WithRequiredPreResumeExtensions).
+	requiredPreResume []string
 }
 
 // NewTaskManager creates a TaskManager instance.
@@ -373,7 +384,8 @@ func (tm *TaskManager) CompleteTaskStepByToken(ctx context.Context, token string
 //  1. Pre-check, from the task row: the task is not completed and stepID is its active step.
 //     This only turns away obviously stale calls early; the authority is step 4.
 //  2. Pre-resume extensions (authz, validation) run on deep copies and can reject the call. They
-//     must have no side effects.
+//     must have no side effects. A TaskManager built WithRequiredPreResumeExtensions first refuses,
+//     with ErrStepNotGuarded, a step whose template does not declare every required one.
 //  3. The submission is prepared: it is confined to the step's OutputNamespace and stripped of
 //     system keys.
 //  4. The step's Temporal Activity is completed. Exactly one caller wins; a step that is not
@@ -407,6 +419,9 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	stepTemplate, err := steptemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
 	if err != nil {
 		return fmt.Errorf("failed to load active step template %q: %w", record.ActiveTaskTemplateID, err)
+	}
+	if err := tm.checkRequiredPreResume(stepTemplate); err != nil {
+		return err
 	}
 
 	// Pre-resume extensions (blocking, read-only) receive deep copies of the record and payload so
@@ -495,6 +510,38 @@ func (tm *TaskManager) submissionData(ctx context.Context, record store.TaskReco
 	}
 	data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
 	return data
+}
+
+// checkRequiredPreResume returns ErrStepNotGuarded unless step declares, in its PRE_RESUME phase,
+// every extension the TaskManager requires (WithRequiredPreResumeExtensions). With none required it
+// allows everything, as before. With some required and no extensions registry, it refuses every
+// step: runExtensions would skip the extensions, so nothing would check the caller.
+//
+// That an id is declared is enough here. runExtensions refuses a declared PRE_RESUME extension the
+// registry does not know, so a required extension that was never registered still fails closed.
+func (tm *TaskManager) checkRequiredPreResume(step types.StepTemplate) error {
+	if len(tm.requiredPreResume) == 0 {
+		return nil
+	}
+	if tm.extensionsRegistry == nil {
+		return fmt.Errorf("%w: step template %q: no extensions registry is configured to run them", ErrStepNotGuarded, step.ID)
+	}
+	for _, id := range tm.requiredPreResume {
+		if !declaresExtension(step.Extensions, id, types.PhasePreResume) {
+			return fmt.Errorf("%w: step template %q does not declare %q in phase %s", ErrStepNotGuarded, step.ID, id, types.PhasePreResume)
+		}
+	}
+	return nil
+}
+
+// declaresExtension reports whether extensions lists id in phase.
+func declaresExtension(extensions []types.ExtensionConfig, id string, phase types.ExecutionPhase) bool {
+	for _, ext := range extensions {
+		if ext.ID == id && ext.Phase == phase {
+			return true
+		}
+	}
+	return false
 }
 
 // runExtensions executes the configured extensions matching phase against the

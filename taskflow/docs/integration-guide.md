@@ -283,7 +283,7 @@ What your host needs to do:
 
 ## Error semantics
 
-`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
+`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrStepNotGuarded` (see [Requiring an authorization extension](#requiring-an-authorization-extension)) maps to 403. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
 
 The orchestrator uses two sentinel errors to signal "this isn't really an error, the workflow should park":
 
@@ -333,7 +333,8 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID string, payload map[string]any) error {
     // 0. stepID is required (ErrStepIDRequired → 400)
     // 1. Pre-check the row: task not completed and stepID is the active step (else ErrStaleStep → 409)
-    // 2. Pre-resume extensions on copies of the record and payload (authz, validation)
+    // 2. Pre-resume extensions on copies of the record and payload (authz, validation). With
+    //    WithRequiredPreResumeExtensions, a template missing a required one is refused first (ErrStepNotGuarded → 403)
     // 3. TemporalManager.CompleteActivation(TaskWorkflowID, stepID, payload). Exactly one caller wins;
     //    a step that is not pending fails with ErrStaleStep and nothing is written
     // 4. PersistSubmission (state ADVANCING, seq+1), guarded; 0 rows is success
@@ -344,6 +345,17 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 The portal calls this with the `step_id` its task view reported and whatever payload makes sense for the current step. The shape is typed by your step templates and plugins, not by the orchestrator. A nil return means the workflow **accepted** the step; the row shows `ADVANCING` (or the next step) from then on, so clients refetch instead of assuming the state. Map `ErrStepIDRequired` to 400 and `ErrStaleStep` to 409.
 
 An external system that calls back is addressed by the **callback token** the dispatch carried in `X-Task-ID` (see `plugins.CallbackToken`): call `CompleteTaskStepByToken(ctx, token, payload)`. A malformed token returns an error wrapping `callbacktoken.ErrInvalid` (400). The receiver should also use the token as its idempotency key: it is the same on every retry of one step's dispatch and different for every step.
+
+### Requiring an authorization extension
+
+`CompleteTaskStep` and `SaveDraft` run the `PRE_RESUME` extensions the active step's template declares, and only those. A template that declares none resumes for any caller who reaches these methods, and with no extensions registry no extension runs at all. If an extension of yours decides who may act, require it:
+
+```go
+tm := orchestrator.NewTaskManager(db, registry, pluginsRegistry, extensionsRegistry, wf, onTaskCompleted, renderer,
+    orchestrator.WithRequiredPreResumeExtensions("authz"))
+```
+
+Both methods then refuse, with `ErrStepNotGuarded` and before anything runs or is written, a step whose template does not declare every required id in its `PRE_RESUME` phase, and every step when the extensions registry is nil. A required extension that is declared but not registered is refused too, as any unregistered `PRE_RESUME` extension is. It is off by default. Turn it on once every template that parks declares the extension; any that doesn't can no longer be completed.
 
 ## What `HandleTaskCompletion` does
 
@@ -368,7 +380,7 @@ Things the demo cuts corners on, that you'll want for a real deployment:
 - **Observability.** Plugins log via `log.Printf`. Replace with your structured logger; surface task state transitions, plugin errors, and callback failures to your observability stack.
 - **Schema.** Add `active_step_id` and `seq` to your task table (section 1) before deploying a version that uses the guarded writes, and `claimed_by` and `claimed_at` before using task claims.
 - **Plugin error handling.** Decide what should retry vs. fail-fast. The orchestrator currently surfaces non-`ErrSuspended` plugin errors to Temporal, which will retry per the activity's retry policy.
-- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task. Add authn/authz at your HTTP layer. A task claim is not part of that check (see [Task claims](#7-task-claims)).
+- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task unless a `PRE_RESUME` extension refuses it. Authenticate at your HTTP layer, authorize in an extension, and require that extension with `WithRequiredPreResumeExtensions` so a template that forgets it fails closed. A task claim is not part of that check (see [Task claims](#7-task-claims)).
 
 ---
 
