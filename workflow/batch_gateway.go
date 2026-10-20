@@ -72,13 +72,16 @@ func (g *graphInterpreter) handleBatchSplitGateway(ctx workflow.Context, nodeInf
 		return g.skipToJoinOutEdge(ctx, joinNodeID)
 	}
 
-	// 3. Validate that each item has a unique, non-empty ID field.
+	// 3. Validate that each item has a unique, non-empty string ID field.
 	seenIDs := make(map[string]int, len(items))
 	for i, item := range items {
 		idVal := getItemID(item, idField)
-		idStr := fmt.Sprintf("%v", idVal)
-		if idVal == nil || idVal == "" || idStr == "" {
-			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: item at index %d is missing required ID field %q", node.ID, i, idField))
+		if idVal == nil || idVal == "" {
+			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: item at index %d has a missing or empty required ID field %q", node.ID, i, idField))
+		}
+		idStr, ok := idVal.(string)
+		if !ok {
+			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: item at index %d has ID field %q of type %T; item IDs must be strings", node.ID, i, idField, idVal))
 		}
 		if firstIdx, exists := seenIDs[idStr]; exists {
 			return withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q found at index %d (first seen at index %d)", node.ID, idStr, i, firstIdx))
@@ -290,10 +293,14 @@ func collectAndMergeBatchResults(
 		}
 		for _, item := range childSlice {
 			idVal := getItemID(item, idField)
-			idStr := fmt.Sprintf("%v", idVal)
-			if idVal == nil || idVal == "" || idStr == "" {
-				return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item missing required ID field %q",
+			if idVal == nil || idVal == "" {
+				return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item with a missing or empty required ID field %q",
 					nodeID, child.EdgeID, idField))
+			}
+			idStr, ok := idVal.(string)
+			if !ok {
+				return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: child workflow for partition edge %q returned item with ID field %q of type %T; item IDs must be strings",
+					nodeID, child.EdgeID, idField, idVal))
 			}
 			if _, alreadySeen := mergedItems[idStr]; alreadySeen {
 				return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: duplicate item ID %q returned across child partitions (from edge %q)",
@@ -305,7 +312,10 @@ func collectAndMergeBatchResults(
 
 	result := make([]any, 0, len(originalItems))
 	for _, originalItem := range originalItems {
-		id := fmt.Sprintf("%v", getItemID(originalItem, idField))
+		id, ok := getItemID(originalItem, idField).(string)
+		if !ok {
+			return nil, nil, withCategory(ParkCategorySplitData, fmt.Errorf("BATCH_SPLIT node %s: original item has a non-string ID field %q", nodeID, idField))
+		}
 		if merged, ok := mergedItems[id]; ok {
 			result = append(result, merged)
 		} else {

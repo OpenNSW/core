@@ -77,6 +77,8 @@ type BatchJoinConfig struct {
 }
 ```
 
+**Item ID requirement:** each item's `id_field` (default `id`) must be a unique, non-empty string.
+
 #### What partitions see and hand back
 
 Each partition runs as a child workflow, and the join merges its items back by ID. The
