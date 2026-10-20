@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -429,6 +430,28 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 	return nil
 }
 
+// manifestVersion returns the artifact manifest version this execution resolves templates
+// through (see VarManifestVersion), or 0 if the host set none. The variable passes through
+// Temporal's JSON payloads, so a whole number arrives as a float64; a value that is not a
+// positive whole number counts as none.
+func (g *graphInterpreter) manifestVersion() int {
+	switch v := g.instance.WorkflowVariables[VarManifestVersion].(type) {
+	case int:
+		return max(v, 0)
+	case int64:
+		return int(max(v, 0))
+	case float64:
+		if v > 0 && v == float64(int(v)) {
+			return int(v)
+		}
+	case json.Number:
+		if n, err := v.Int64(); err == nil && n > 0 {
+			return int(n)
+		}
+	}
+	return 0
+}
+
 // caseID returns the case this execution belongs to (see VarCaseID).
 func (g *graphInterpreter) caseID() string {
 	if v, ok := g.instance.WorkflowVariables[VarCaseID].(string); ok && v != "" {
@@ -454,7 +477,7 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 	})
 
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
-		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq}).Get(ctx, &result)
+		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq, ManifestVersion: g.manifestVersion()}).Get(ctx, &result)
 	if err != nil {
 		return withCategory(ParkCategoryTaskFailure, err)
 	}
