@@ -62,15 +62,18 @@ func do(t *testing.T, method, rawURL, contentType string, body []byte) *http.Res
 
 func TestLocalContentRoutes_RoundTrip(t *testing.T) {
 	tests := []struct {
-		name        string
-		key         string
-		contentType string
-		opts        []drivers.LocalOption
-		wantPrefix  string
+		name            string
+		key             string
+		contentType     string
+		opts            []drivers.LocalOption
+		wantPrefix      string
+		wantDisposition string
 	}{
-		{name: "pdf", key: routeTestKey, contentType: "application/pdf", wantPrefix: "/api/v1/storage/"},
-		{name: "html", key: "550e8400-e29b-41d4-a716-446655440000.html", contentType: "text/html", wantPrefix: "/api/v1/storage/"},
-		{name: "custom route prefix", key: routeTestKey, contentType: "application/pdf", opts: []drivers.LocalOption{drivers.WithRoutePrefix("/files")}, wantPrefix: "/files/"},
+		{name: "pdf", key: routeTestKey, contentType: "application/pdf", wantPrefix: "/api/v1/storage/", wantDisposition: "inline"},
+		{name: "html", key: "550e8400-e29b-41d4-a716-446655440000.html", contentType: "text/html", wantPrefix: "/api/v1/storage/", wantDisposition: "inline"},
+		{name: "xml", key: "550e8400-e29b-41d4-a716-446655440000.xml", contentType: "text/xml", wantPrefix: "/api/v1/storage/", wantDisposition: "attachment"},
+		{name: "application xml", key: "550e8400-e29b-41d4-a716-446655440000.xml", contentType: "application/xml", wantPrefix: "/api/v1/storage/", wantDisposition: "attachment"},
+		{name: "custom route prefix", key: routeTestKey, contentType: "application/pdf", opts: []drivers.LocalOption{drivers.WithRoutePrefix("/files")}, wantPrefix: "/files/", wantDisposition: "inline"},
 	}
 
 	for _, tt := range tests {
@@ -106,6 +109,9 @@ func TestLocalContentRoutes_RoundTrip(t *testing.T) {
 			}
 			if got := resp.Header.Get("Content-Security-Policy"); got != "sandbox" {
 				t.Errorf("Content-Security-Policy = %q, want sandbox", got)
+			}
+			if got := resp.Header.Get("Content-Disposition"); got != tt.wantDisposition {
+				t.Errorf("Content-Disposition = %q, want %q", got, tt.wantDisposition)
 			}
 			got, _ := io.ReadAll(resp.Body)
 			if !bytes.Equal(got, content) {

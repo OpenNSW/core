@@ -5,12 +5,14 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // S3Driver implements StorageDriver for S3-compatible storage.
@@ -83,19 +85,43 @@ func (d *S3Driver) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// presignGet returns a presigned GET URL for the key; used by both GenerateURL and GetDownloadURL.
+// presignGet returns a presigned GET URL for the key.
+//
+// It looks the object up first. A file ForcesDownload names has the URL signed
+// to come back as an attachment, so the browser saves it instead of rendering
+// it on the bucket's origin. A file that is not there yet gets no URL at all:
+// it could be uploaded afterwards and opened through a URL signed without
+// that override.
 func (d *S3Driver) presignGet(ctx context.Context, key string) (string, error) {
-	ttl := d.presignTTL
-	presignedReq, err := d.PresignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+	head, err := d.Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(d.Bucket),
 		Key:    aws.String(key),
-	}, s3.WithPresignExpires(ttl))
+	})
+	if err != nil {
+		var notFound *types.NotFound
+		var noSuchKey *types.NoSuchKey
+		if errors.As(err, &notFound) || errors.As(err, &noSuchKey) {
+			return "", fmt.Errorf("%w: %s", ErrNotFound, key)
+		}
+		return "", fmt.Errorf("failed to look up %s in S3: %w", key, err)
+	}
+
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(d.Bucket),
+		Key:    aws.String(key),
+	}
+	if ForcesDownload(aws.ToString(head.ContentType)) {
+		input.ResponseContentDisposition = aws.String("attachment")
+	}
+	presignedReq, err := d.PresignClient.PresignGetObject(ctx, input, s3.WithPresignExpires(d.presignTTL))
 	if err != nil {
 		return "", fmt.Errorf("failed to presign URL: %w", err)
 	}
 	return presignedReq.URL, nil
 }
 
+// GetDownloadURL returns a presigned URL for downloading the file. It returns
+// ErrNotFound for a file the bucket does not hold.
 func (d *S3Driver) GetDownloadURL(ctx context.Context, key string) (string, error) {
 	return d.presignGet(ctx, key)
 }

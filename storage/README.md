@@ -82,6 +82,10 @@ url, err := svc.GetDownloadURL(ctx, fileKey)
 // url — presigned GET URL, valid for PresignTTLSeconds
 ```
 
+A file a browser would interpret as a document is served as a download, not opened: XML, including `+xml` types such as SVG and XHTML (`drivers.ForcesDownload`). XML with an XHTML body or an XSLT stylesheet can run script from the origin it is served on. The S3 driver signs `response-content-disposition=attachment` into those URLs, and the local route sends `Content-Disposition: attachment`; any other file is opened inline. `text/html` is not covered, so keep it off `WithAllowedUploadTypes`.
+
+The S3 driver looks the file up to find its type, so `GetDownloadURL` returns an error wrapping `storage.ErrNotFound` for a file the bucket does not hold. `storage.NewHTTPHandler(svc)` answers that with 404. The lookup is a `HeadObject`, which needs the same permission as a `GetObject`.
+
 ### Delete
 
 ```go
