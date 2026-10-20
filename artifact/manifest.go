@@ -7,55 +7,74 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 )
 
-// ManifestFilename is the fixed name of the manifest, resolved at the loader's
-// root. The manifest lives alongside the artifacts it catalogs, so a single
-// loader resolves both; consumers do not choose its location. Point the loader's
-// base (Root/Bucket/Repo) at wherever the manifest and artifacts reside.
-const ManifestFilename = "manifest.json"
+// ManifestPath returns the path of manifest version v, resolved at the loader's root:
+// manifest_v1.json, manifest_v2.json, and so on. Manifests live alongside the artifacts they
+// catalog, so one loader resolves both; consumers do not choose their location. Point the
+// loader's base (Root/Bucket/Repo) at the directory that holds them.
+//
+// A manifest is immutable once published. A change to any artifact is a new file, listed by a
+// new manifest with the next version number; see Set.
+func ManifestPath(v int) string {
+	return fmt.Sprintf("manifest_v%d.json", v)
+}
 
 type ManifestConfig struct {
 	Artifacts []ManifestRow `json:"artifacts"`
 }
 
+// ManifestRow names the file one artifact resolves to in a manifest.
+//
+// Version is optional. A row without one is the artifact for that manifest: the manifest
+// itself is the version. A row with one is an artifact requested by explicit version (static
+// data a form fetches by ID and version, for example); such a row must point at the same path
+// in every manifest that lists it, so the version alone identifies the content.
 type ManifestRow struct {
 	ID      string `json:"id"`
 	Kind    Kind   `json:"kind"`
-	Version string `json:"version"` // "" allowed for unversioned
+	Version string `json:"version"`
 	Path    string `json:"path"`
 }
 
-// RegisterFromConfig applies every row via RegisterArtifact. Rows are validated
-// so misconfiguration is caught at startup rather than at first access: id, kind,
-// and path are all required (version may be "" for unversioned artifacts). There
-// is no per-row loader — the registry has a single loader, so a row only names
-// what to fetch, never how.
+// RegisterFromConfig applies every row via RegisterArtifact. Rows are validated so
+// misconfiguration is caught at startup rather than at first access: id, kind, and path are all
+// required, and no two rows may share an id, kind and version. There is no per-row loader — the
+// registry has a single loader, so a row only names what to fetch, never how.
 func RegisterFromConfig(r *Registry, cfg ManifestConfig) error {
+	seen := make(map[Key]int, len(cfg.Artifacts))
 	for i, row := range cfg.Artifacts {
 		if row.ID == "" || row.Kind == "" || row.Path == "" {
 			return fmt.Errorf("manifest row %d (%q/%q): id, kind, and path are all required", i, row.ID, row.Kind)
 		}
+		k := Key{ID: row.ID, Kind: row.Kind, Version: row.Version}
+		if first, dup := seen[k]; dup {
+			return fmt.Errorf("manifest rows %d and %d both list %s/%s version %q", first, i, row.ID, row.Kind, row.Version)
+		}
+		seen[k] = i
+	}
+	for _, row := range cfg.Artifacts {
 		r.RegisterArtifact(row.ID, row.Kind, row.Version, row.Path)
 	}
-	slog.Info("artifact manifest registered", "count", len(cfg.Artifacts))
 	return nil
 }
 
-// LoadManifest fetches and unmarshals the manifest from the artifact source
-// itself, through the same loader that fetches the artifacts — so the catalog
-// and its artifacts share one origin. The manifest always lives at
-// ManifestFilename ("manifest.json") relative to the loader's root; its location
-// is a fixed convention, not a parameter.
-func LoadManifest(ctx context.Context, l Loader) (ManifestConfig, error) {
+// LoadManifest fetches and unmarshals manifest version v from the artifact source itself,
+// through the same loader that fetches the artifacts, so the catalog and its artifacts share
+// one origin. A missing manifest returns an error matching ErrNotFound.
+func LoadManifest(ctx context.Context, l Loader, v int) (ManifestConfig, error) {
 	var cfg ManifestConfig
-	data, err := l.Load(ctx, ManifestFilename)
+	data, err := l.Load(ctx, ManifestPath(v))
 	if err != nil {
-		return cfg, fmt.Errorf("load manifest %q: %w", ManifestFilename, err)
+		return cfg, fmt.Errorf("load manifest %q: %w", ManifestPath(v), err)
 	}
+	return parseManifest(v, data)
+}
+
+func parseManifest(v int, data []byte) (ManifestConfig, error) {
+	var cfg ManifestConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return cfg, fmt.Errorf("unmarshal manifest %q: %w", ManifestFilename, err)
+		return ManifestConfig{}, fmt.Errorf("unmarshal manifest %q: %w", ManifestPath(v), err)
 	}
 	return cfg, nil
 }
