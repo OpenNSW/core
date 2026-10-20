@@ -148,6 +148,8 @@ The rules that make a manifest version a stable snapshot:
 - **Newer manifests load on demand.** Replicas load their sets at different times. `Set.Registry` loads a version above the highest it has, so a flow pinned by a newer replica still runs on an older one. It fetches only up to the version asked for, holds no lock that lookups wait on while it fetches, and after a probe that fails or finds nothing it waits 10s before probing again. `Current` does not move until the set is reloaded.
 - **Within a manifest, the unversioned row wins.** `Latest` returns the row without a version when there is one, even if the manifest also lists explicit versions of the same ID.
 
+`artifact/cmd/manifestcheck` checks bundles on disk for an artifacts repository's CI: contiguous versions, every row loads and parses, references resolve, and with `-base` that no published manifest or artifact was changed or deleted.
+
 ---
 
 ## Built-in loaders
