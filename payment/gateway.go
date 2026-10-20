@@ -67,9 +67,13 @@ type SessionRequest struct {
 	SuccessRedirectURL string          `json:"success_redirect_url"`
 	CancelRedirectURL  string          `json:"cancel_redirect_url"`
 
-	// Metadata is the checkout request's pass-through metadata, forwarded
-	// verbatim so a gateway can read whatever it declared as required in
-	// ValidateMetadata. It is the same map persisted on the transaction as
+	// Payee is who the checkout pays, and PayeeMapping this gateway's ids for
+	// it, as resolved from the method's "payees" config.
+	Payee        Payee           `json:"payee"`
+	PayeeMapping json.RawMessage `json:"payee_mapping"`
+
+	// Metadata is the checkout request's optional pass-through metadata,
+	// forwarded verbatim. It is the same map persisted on the transaction as
 	// GatewayMetadata, so anything readable here is recoverable later by
 	// reference number.
 	Metadata map[string]string `json:"metadata,omitempty"`
@@ -103,6 +107,11 @@ type ValidationTransaction struct {
 	Status          string            `json:"status"`
 	ExpiryDate      time.Time         `json:"expiry_date"`
 	Metadata        map[string]string `json:"metadata"`
+
+	// Payee is who the transaction pays, and PayeeMapping this gateway's ids
+	// for it, resolved from the method's current "payees" config.
+	Payee        Payee           `json:"payee"`
+	PayeeMapping json.RawMessage `json:"payee_mapping"`
 }
 
 // ValidationResponse represents a structured response for a validation request.
@@ -129,24 +138,19 @@ type PaymentGateway interface {
 	// GetFlowType returns the flow type of the gateway (REDIRECT or INSTRUCTION).
 	GetFlowType() InteractionType
 
-	// ValidateMetadata checks that a checkout request's pass-through metadata
-	// carries whatever this gateway cannot operate without.
+	// ValidatePayeeMapping checks one of this gateway's payee mappings: the
+	// object a payee resolves to in the method's "payees" config, a service's
+	// entry merged over its org's defaults. The registry calls it for every
+	// mapping when it starts, so a mapping missing an id this gateway needs
+	// fails startup instead of a payer's checkout.
 	//
-	// It is called once per checkout, before a reference number is generated
-	// and before anything is persisted, so a caller that omitted a required
-	// key fails immediately — while the configuration responsible is still
-	// nameable in the error — instead of surfacing much later as an opaque
-	// callback failure against a transaction nobody can trace back.
+	// This is a well-formedness check on the mapping only; it must not perform
+	// I/O. Whether the ids are the *correct* ones is answered on the callback
+	// paths, against what the gateway actually posts.
 	//
-	// This is a presence/well-formedness check on the request only; it must
-	// not perform I/O and must not depend on any state outside metadata.
-	// Deciding whether the declared values are the *correct* ones for a given
-	// transaction belongs on the callback paths, not here.
-	//
-	// A gateway with no metadata requirements returns nil. The method is
-	// required rather than optional so that every gateway author has to make
-	// that choice deliberately instead of silently forgetting to opt in.
-	ValidateMetadata(metadata map[string]string) error
+	// A gateway that needs no ids returns nil; core still only lets it collect
+	// for the payees its config lists.
+	ValidatePayeeMapping(mapping json.RawMessage) error
 
 	// CreateSession initializes a payment session with the gateway.
 	CreateSession(ctx context.Context, req SessionRequest) (*SessionResponse, error)
@@ -198,5 +202,10 @@ type PaymentGateway interface {
 	// ParseWebhook processes raw gateway notifications into a domain-neutral
 	// payload (for the service to act on) together with the gateway-specific
 	// acknowledgement to relay back once the notification has been accepted.
-	ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*WebhookPayload, *WebhookResponse, error)
+	//
+	// payees resolves this gateway's mapping for the payee a reference was
+	// issued for, so a gateway whose notifications name the account paid into
+	// can reject one aimed at the wrong payee. A gateway with nothing to check
+	// ignores it.
+	ParseWebhook(ctx context.Context, body []byte, headers map[string][]string, payees PayeeLookup) (*WebhookPayload, *WebhookResponse, error)
 }

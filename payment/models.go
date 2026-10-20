@@ -24,9 +24,14 @@ type PaymentTransaction struct {
 	ReferenceNumber string `json:"reference_number" gorm:"uniqueIndex"` // From the service's ReferenceGenerator
 	// CallbackToken is the opaque address of the workflow step this payment completes
 	// (CreateCheckoutRequest.CallbackToken), handed back to the TaskCompleter on settlement.
-	CallbackToken   string            `json:"-" gorm:"column:callback_token"`
-	GatewayID       string            `json:"gateway_id" gorm:"index"` // e.g., "lankapay"
-	SessionID       string            `json:"session_id"`              // Gateway-specific session identifier
+	CallbackToken string `json:"-" gorm:"column:callback_token"`
+	GatewayID     string `json:"gateway_id" gorm:"index"` // e.g., "lankapay"
+	// OrgID and ServiceID are the payee the transaction pays (CreateCheckoutRequest.Payee).
+	// Gateway ids are never stored: callbacks resolve them from the payee through the
+	// method's current "payees" config.
+	OrgID           string            `json:"org_id" gorm:"column:org_id;not null;index:idx_payment_tx_payee,priority:1"`
+	ServiceID       string            `json:"service_id" gorm:"column:service_id;not null;index:idx_payment_tx_payee,priority:2"`
+	SessionID       string            `json:"session_id"` // Gateway-specific session identifier
 	Amount          decimal.Decimal   `json:"amount"`
 	Currency        string            `json:"currency"`       // "LKR" or foreign currency
 	Status          PaymentStatus     `json:"status"`         // PENDING, SUCCESS, FAILED, EXPIRED
@@ -44,12 +49,13 @@ type PaymentTransaction struct {
 // CreateCheckoutRequest is the payload sent to initialize a session.
 type CreateCheckoutRequest struct {
 	GatewayID          string            `json:"gateway_id"`
+	Payee              Payee             `json:"payee"` // Who is paid; mapped to the gateway's ids by its "payees" config
 	Amount             decimal.Decimal   `json:"amount"`
 	Currency           string            `json:"currency"`
 	SuccessRedirectURL string            `json:"success_redirect_url,omitempty"` // Optional: User redirect on success
 	CancelRedirectURL  string            `json:"cancel_redirect_url,omitempty"`  // Optional: User redirect on cancel
 	ExpiresAt          time.Time         `json:"expires_at"`                     // Aligned with Task TTL
-	Metadata           map[string]string `json:"metadata"`                       // Pass-through data for the gateway
+	Metadata           map[string]string `json:"metadata"`                       // Optional pass-through data for the gateway
 	// CallbackToken is the opaque token naming the workflow step this payment completes, such
 	// as core taskflow's plugins.CallbackToken. It is stored with the transaction and handed back
 	// to the TaskCompleter when the payment settles, so a settlement that arrives after the task
@@ -62,6 +68,9 @@ type CreateCheckoutRequest struct {
 func (r CreateCheckoutRequest) validate(now time.Time) error {
 	if r.GatewayID == "" {
 		return errors.New("gateway_id is required")
+	}
+	if err := r.Payee.validate(); err != nil {
+		return err
 	}
 	if r.CallbackToken == "" {
 		return errors.New("callback_token is required")

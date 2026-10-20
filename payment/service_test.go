@@ -5,6 +5,7 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -78,12 +79,18 @@ func (m *mockRepo) RunInTransaction(ctx context.Context, fn func(repo PaymentRep
 
 func (m *mockRepo) WithTx(*gorm.DB) PaymentRepository { return m }
 
-// mockRegistry returns a single configured gateway.
+// mockRegistry returns a single configured gateway, which maps every payee
+// to testPayeeMapping unless unmapped is set.
 type mockRegistry struct {
-	gw     PaymentGateway
-	getErr error
-	infos  []GatewayInfo
+	gw       PaymentGateway
+	getErr   error
+	infos    []GatewayInfo
+	unmapped bool
+
+	listedFor []Payee
 }
+
+const testPayeeMapping = `{"account":"ACC-1"}`
 
 func (m *mockRegistry) Get(string) (PaymentGateway, error) {
 	if m.getErr != nil {
@@ -92,7 +99,17 @@ func (m *mockRegistry) Get(string) (PaymentGateway, error) {
 	return m.gw, nil
 }
 
-func (m *mockRegistry) ListInfo() []GatewayInfo { return m.infos }
+func (m *mockRegistry) ListInfo(payee Payee) []GatewayInfo {
+	m.listedFor = append(m.listedFor, payee)
+	return m.infos
+}
+
+func (m *mockRegistry) ResolvePayee(gatewayID string, payee Payee) (json.RawMessage, error) {
+	if m.unmapped {
+		return nil, fmt.Errorf("gateway %s, payee %s: %w", gatewayID, payee, ErrPayeeNotMapped)
+	}
+	return json.RawMessage(testPayeeMapping), nil
+}
 
 // fakeReferences issues REF-1, REF-2, … (or what issue returns, when set) and
 // records each request it receives.
@@ -127,6 +144,7 @@ func (m *mockTaskCompleter) CompleteTaskStepByToken(_ context.Context, token str
 func validCheckoutReq() CreateCheckoutRequest {
 	return CreateCheckoutRequest{
 		GatewayID: "govpay",
+		Payee:     Payee{OrgID: "org_a", ServiceID: "certificate_fee"},
 		Amount:    decimal.RequireFromString("1500.00"),
 		Currency:  "LKR",
 		ExpiresAt: time.Now().Add(time.Hour),
@@ -170,6 +188,9 @@ func TestCreateCheckoutSession_Success(t *testing.T) {
 	assert.Equal(t, PaymentStatusPending, stored.Status)
 	assert.Equal(t, "sess-1", stored.SessionID)
 	assert.Equal(t, "token-1", stored.CallbackToken)
+	assert.Equal(t, "org_a", stored.OrgID)
+	assert.Equal(t, "certificate_fee", stored.ServiceID)
+	assert.NotContains(t, stored.GatewayMetadata, "account", "the gateway's ids are not stored on the transaction")
 	gw.AssertExpectations(t)
 }
 
@@ -181,6 +202,8 @@ func TestCreateCheckoutSession_ValidationErrors(t *testing.T) {
 		"empty currency":         func(r *CreateCheckoutRequest) { r.Currency = "" },
 		"past expiry":            func(r *CreateCheckoutRequest) { r.ExpiresAt = time.Now().Add(-time.Hour) },
 		"empty gateway":          func(r *CreateCheckoutRequest) { r.GatewayID = "" },
+		"missing org_id":         func(r *CreateCheckoutRequest) { r.Payee.OrgID = "" },
+		"blank service_id":       func(r *CreateCheckoutRequest) { r.Payee.ServiceID = "  " },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -220,19 +243,34 @@ func TestCreateCheckoutSession_MetadataForwardedToGateway(t *testing.T) {
 	}
 }
 
-func TestCreateCheckoutSession_MetadataRejected_NothingPersisted(t *testing.T) {
+// The gateway gets the payee and its own ids for it, as the registry resolved
+// them.
+func TestCreateCheckoutSession_PayeeMappingForwardedToGateway(t *testing.T) {
 	repo := newMockRepo()
 	gw := new(MockGateway)
-	sentinel := errors.New("missing fee_scheme_id")
-	gw.ValidateMetadataFn = func(map[string]string) error { return sentinel }
-	// No CreateSession expectation: reaching the gateway at all is the failure.
-	refs := &fakeReferences{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, refs)
+	var seen SessionRequest
+	gw.On("CreateSession", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { seen = args.Get(1).(SessionRequest) }).
+		Return(&SessionResponse{}, nil)
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
-	require.ErrorIs(t, err, sentinel)
+	require.NoError(t, err)
+	assert.Equal(t, Payee{OrgID: "org_a", ServiceID: "certificate_fee"}, seen.Payee)
+	assert.JSONEq(t, testPayeeMapping, string(seen.PayeeMapping))
+}
+
+func TestCreateCheckoutSession_PayeeNotMapped_NothingPersisted(t *testing.T) {
+	repo := newMockRepo()
+	gw := new(MockGateway) // CreateSession must not be reached
+	refs := &fakeReferences{}
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw, unmapped: true}, refs)
+
+	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
+	require.ErrorIs(t, err, ErrPayeeNotMapped)
+	assert.ErrorContains(t, err, "org_a/certificate_fee", "the error names the payee to map")
 	assert.Empty(t, repo.txs, "a rejected checkout must not burn a reference or leave a row behind")
-	assert.Empty(t, refs.seen, "validation must run before reference generation")
+	assert.Empty(t, refs.seen, "the payee is resolved before reference generation")
 	gw.AssertNotCalled(t, "CreateSession", mock.Anything, mock.Anything)
 }
 
@@ -375,6 +413,8 @@ func TestValidateReference_PayablePending(t *testing.T) {
 	repo.txs["TNSW1"] = &PaymentTransaction{
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "govpay",
+		OrgID:           "org_a",
+		ServiceID:       "certificate_fee",
 		Status:          PaymentStatusPending,
 		Amount:          decimal.RequireFromString("100"),
 		Currency:        "LKR",
@@ -382,7 +422,11 @@ func TestValidateReference_PayablePending(t *testing.T) {
 	}
 	gw := validateGateway("TNSW1")
 	gw.On("HandleValidateReference", mock.Anything,
-		mock.MatchedBy(func(tx *ValidationTransaction) bool { return tx != nil && tx.ReferenceNumber == "TNSW1" }),
+		mock.MatchedBy(func(tx *ValidationTransaction) bool {
+			return tx != nil && tx.ReferenceNumber == "TNSW1" &&
+				tx.Payee == Payee{OrgID: "org_a", ServiceID: "certificate_fee"} &&
+				string(tx.PayeeMapping) == testPayeeMapping
+		}),
 		true, mock.Anything).
 		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
 	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
@@ -425,6 +469,19 @@ func TestValidateReference_GatewayMismatch(t *testing.T) {
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
 	gw.AssertExpectations(t)
+}
+
+// A reference whose payee the method no longer maps can't be presented: the
+// gateway has no ids to check the caller's against.
+func TestValidateReference_PayeeNoLongerMapped(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	gw := validateGateway("TNSW1")
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw, unmapped: true}, &fakeReferences{})
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.ErrorIs(t, err, ErrPayeeNotMapped)
+	gw.AssertNotCalled(t, "HandleValidateReference", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestValidateReference_ExpiredNotPayable(t *testing.T) {
@@ -477,6 +534,8 @@ func pendingTx() *PaymentTransaction {
 		ReferenceNumber: "TNSW1",
 		CallbackToken:   "token-9",
 		GatewayID:       "govpay",
+		OrgID:           "org_a",
+		ServiceID:       "certificate_fee",
 		Amount:          decimal.RequireFromString("1500.00"),
 		Currency:        "LKR",
 		Status:          PaymentStatusPending,
@@ -517,6 +576,41 @@ func TestProcessWebhook_SuccessAdvancesTask(t *testing.T) {
 	assert.Equal(t, "TNSW1", tc.calls[0].payload["reference_number"])
 	assert.Equal(t, "1500", tc.calls[0].payload["amount"])
 	assert.Equal(t, "LKR", tc.calls[0].payload["currency"])
+}
+
+// ParseWebhook gets a lookup that resolves the gateway's ids for the payee a
+// reference was issued for.
+func TestProcessWebhook_PayeeLookup(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: WebhookStatusPending})
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	require.NotNil(t, gw.Payees)
+
+	mapping, found, err := gw.Payees(context.Background(), "TNSW1")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.JSONEq(t, testPayeeMapping, string(mapping))
+
+	_, found, err = gw.Payees(context.Background(), "NOPE")
+	require.NoError(t, err)
+	assert.False(t, found, "an unknown reference is not found, not an error")
+}
+
+func TestProcessWebhook_PayeeLookup_NotMapped(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: WebhookStatusPending})
+	svc := NewPaymentService(repo, &mockRegistry{gw: gw, unmapped: true}, &fakeReferences{})
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+
+	_, _, err = gw.Payees(context.Background(), "TNSW1")
+	require.ErrorIs(t, err, ErrPayeeNotMapped)
 }
 
 func TestProcessWebhook_AmountMismatch(t *testing.T) {
@@ -673,11 +767,14 @@ func TestProcessWebhook_VerificationOperationalError_NotClassifiedAsAuthFailure(
 
 func TestListAvailableMethods(t *testing.T) {
 	infos := []GatewayInfo{{ID: "govpay", IsActive: true}}
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{infos: infos}, &fakeReferences{})
+	registry := &mockRegistry{infos: infos}
+	svc := NewPaymentService(newMockRepo(), registry, &fakeReferences{})
+	payee := Payee{OrgID: "org_a", ServiceID: "certificate_fee"}
 
-	got, err := svc.ListAvailableMethods(context.Background())
+	got, err := svc.ListAvailableMethods(context.Background(), payee)
 	require.NoError(t, err)
 	assert.Equal(t, infos, got)
+	assert.Equal(t, []Payee{payee}, registry.listedFor)
 }
 
 func TestCreateCheckoutSession_SessionIDPersistError(t *testing.T) {
