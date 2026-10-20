@@ -29,10 +29,8 @@ func (tm *TaskManager) CancelTask(ctx context.Context, taskID, reason string) er
 	// Terminated first: were the row marked first and the termination then failed, the workflow
 	// would carry on against a row that refuses it. A retry after a failed mark terminates again,
 	// which is harmless.
-	if record.TaskWorkflowID != "" {
-		if err := tm.taskWorkflowManager.TerminateWorkflow(ctx, record.TaskWorkflowID, reason); err != nil {
-			return fmt.Errorf("cancelling task %s: %w", taskID, err)
-		}
+	if err := tm.taskWorkflowManager.TerminateWorkflow(ctx, record.TaskWorkflowID, reason); err != nil {
+		return fmt.Errorf("cancelling task %s: %w", taskID, err)
 	}
 	if _, err := tm.db.CancelTask(ctx, taskID); err != nil {
 		return fmt.Errorf("cancelling task %s: %w", taskID, err)
