@@ -157,6 +157,10 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
         onMacroTaskActivation, onMacroCompletion,
     )
     macroRunner.StartWorker()
+    // Start each top-level workflow on the current manifest; the engine carries the version to
+    // every child workflow and task:
+    //   vars[workflow.VarManifestVersion] = artifacts.Current()
+    //   macroRunner.StartWorkflow(ctx, id, def, vars)
 
     // 7. Auth
     authnManager, _ := authn.NewManager(userProfileSvc, cfg.Authn)

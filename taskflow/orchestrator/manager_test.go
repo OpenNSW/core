@@ -81,7 +81,7 @@ func (m *mockTemporalManager) GetStatus(ctx context.Context, workflowID string) 
 	return nil, nil
 }
 
-func (m *mockTemporalManager) RegisterDefinitionHandler(_ func(templateID string) (engine.WorkflowDefinition, error)) {
+func (m *mockTemporalManager) RegisterDefinitionHandler(_ engine.DefinitionHandler) {
 }
 
 func (m *mockTemporalManager) RegisterAdminParkHandler(_ engine.AdminParkHandler) {
