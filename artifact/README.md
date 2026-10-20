@@ -140,6 +140,7 @@ The rules that make a manifest version a stable snapshot:
 - **Versions are contiguous from 1.** `LoadSet` probes upward until the loader reports `ErrNotFound`, so a gap hides every later manifest. Any other load error fails `LoadSet`; for S3 this means the reader needs `s3:ListBucket`, or a missing key is reported as access denied.
 - **An explicit `version` keeps its path.** A row with a `version` is fetched by that version outside any flow (`GetExplicit`), so every manifest that lists it must point at the same file. `LoadSet` rejects one that does not.
 - **The current version** is the highest one, unless `WithPinnedVersion` names an older one for a rollback. With a pin, `LoadSet` reads only manifests up to it, so a broken newer manifest cannot block the rollback.
+- **Newer manifests load on demand.** Replicas load their sets at different times. `Set.Registry` loads a version above the highest it has, so a flow pinned by a newer replica still runs on an older one. It fetches only up to the version asked for, holds no lock that lookups wait on while it fetches, and after a probe that fails or finds nothing it waits 10s before probing again. `Current` does not move until the set is reloaded.
 - **Within a manifest, the unversioned row wins.** `Latest` returns the row without a version when there is one, even if the manifest also lists explicit versions of the same ID.
 
 ---
