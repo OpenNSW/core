@@ -249,6 +249,7 @@ The demo maps these from `manager.CompleteTaskStep` error text. Expect to see th
 | `PENDING_PAYMENT`   | Payment step is awaiting confirmation  | Payment widget                                |
 | `DISPATCHED`        | Fire-and-forget completed (no resume)     | Status, possibly auto-advance                 |
 | `COMPLETED`         | Task workflow finished                    | Terminal screen, link back to parent workflow |
+| `CANCELLED`         | Ended by the host before it finished      | Terminal screen, no actions                   |
 
 These are not magic — they're strings written by plugins. Your application can define and use its own. The renderer is what gives them meaning.
 

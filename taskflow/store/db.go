@@ -94,6 +94,9 @@ const (
 	// StateAdvancing means the active step's submission was accepted by the workflow, which is now
 	// moving to the next node. Clients keep the view until the state moves on.
 	StateAdvancing = "ADVANCING"
+	// StateCancelled means the task was ended before its workflow finished (see
+	// TaskManager.CancelTask): it takes no further steps or submissions.
+	StateCancelled = "CANCELLED"
 )
 
 // StepClaim is the row change that makes a step the task's active step.
@@ -112,7 +115,7 @@ type StepClaim struct {
 
 // TaskStore is an interface that any persistent or in-memory database used by the TaskManager should implement.
 //
-// The five step methods below are conditional writes. Each is one atomic statement whose guard is
+// The six step methods below are conditional writes. Each is one atomic statement whose guard is
 // part of the write, so a write from a step that is no longer current changes nothing. Each returns
 // the number of rows changed: 0 means the write was stale and was dropped, which is not an error.
 // InitTask must not write ActiveStepID or Seq.
@@ -151,6 +154,10 @@ type TaskStore interface {
 	WriteDraft(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
 	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq.
 	CompleteTask(context context.Context, taskID string, seq int64) (int64, error)
+	// CancelTask sets StateCancelled and advances seq by one, so a step write still in flight for
+	// the task is stale and changes nothing. Guard: the state is neither StateCompleted nor
+	// StateCancelled, so a task that has ended keeps the way it ended.
+	CancelTask(context context.Context, taskID string) (int64, error)
 
 	// ClaimTask sets the claim to holder. Guard: the task is unclaimed or already claimed by
 	// holder, and its state is not StateCompleted. A repeat claim by the holder keeps the

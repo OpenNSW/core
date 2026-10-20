@@ -44,6 +44,24 @@ type mockTemporalManager struct {
 	taskDoneFunc      func(ctx context.Context, workflowID string, runID string, activityID string, result map[string]any) error
 	startWorkerFunc   func() error
 	stopWorkerFunc    func()
+	// terminated records the workflows TerminateWorkflow was asked to end, with the reason.
+	terminated   map[string]string
+	terminateErr error
+}
+
+func (m *mockTemporalManager) RootWorkflowID(_ context.Context, workflowID string) (string, error) {
+	return workflowID, nil
+}
+
+func (m *mockTemporalManager) TerminateWorkflow(_ context.Context, workflowID, reason string) error {
+	if m.terminateErr != nil {
+		return m.terminateErr
+	}
+	if m.terminated == nil {
+		m.terminated = map[string]string{}
+	}
+	m.terminated[workflowID] = reason
+	return nil
 }
 
 func (m *mockTemporalManager) StartWorkflow(ctx context.Context, workflowID string, def engine.WorkflowDefinition, initialVars map[string]any) error {
@@ -209,6 +227,18 @@ func (s *safeMockTaskStore) CompleteTask(_ context.Context, taskID string, seq i
 		return 0, nil
 	}
 	t.State, t.Seq = store.StateCompleted, seq
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) CancelTask(_ context.Context, taskID string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.State == store.StateCompleted || t.State == store.StateCancelled {
+		return 0, nil
+	}
+	t.State, t.Seq = store.StateCancelled, t.Seq+1
 	s.tasks[taskID] = t
 	return 1, nil
 }
