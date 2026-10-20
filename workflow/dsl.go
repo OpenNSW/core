@@ -75,11 +75,14 @@ const (
 	VarSplitNodeID = "_split_node_id"
 	// VarParentWorkflowID contains the workflow ID of the parent/orchestrator workflow.
 	VarParentWorkflowID = "_parent_workflow_id"
-	// VarRootWorkflowID contains the workflow ID of the top-level (root) execution. It is seeded
-	// once when the root GraphInterpreterWorkflow starts and carried unchanged through every
-	// level of nesting, so a descendant at any depth can read it directly without walking a
-	// parent-to-parent chain.
-	VarRootWorkflowID = "_root_workflow_id"
+	// VarCaseID holds the case a workflow belongs to: the key the task store groups tasks by
+	// (store.TaskRecord.CaseID) and the prefix of every child workflow ID. A host that runs
+	// several top-level workflows for one real-world matter (a consignment, an agency case)
+	// starts each with the same VarCaseID; a top-level workflow started without one is its own
+	// case, under its own workflow ID. It is carried unchanged through every level of nesting,
+	// so a descendant at any depth can read it directly without walking a parent-to-parent
+	// chain.
+	VarCaseID = "_case_id"
 	// VarBranchID contains the unique branch ID assigned to the specific child workflow branch.
 	VarBranchID = "_branch_id"
 
@@ -211,6 +214,21 @@ type BatchGatewayConfig struct {
 	// must be a unique, non-empty string.
 	IDField string `json:"id_field,omitempty"`
 }
+
+// A BATCH_SPLIT node's own input_mapping and output_mapping control what its partitions see
+// and what they hand back, besides the items:
+//
+//   - input_mapping (parent path -> child path): each partition starts with only the mapped
+//     variables, plus the engine's context variables (names starting with "_"). A missing
+//     required source parks the split, as it does for a TASK. A split without an input_mapping
+//     gives its partitions no workflow variables besides their items.
+//   - output_mapping (child path -> parent path): the parent path receives a flat list of the
+//     unique values the partitions hold at the child path, in partition order. A partition
+//     without the value contributes nothing; a list value contributes its elements. The parent
+//     path is replaced, and is an empty list when no partition contributes. A trailing "?" is
+//     accepted and changes nothing.
+//
+// The items variable is always merged back by ID and cannot appear in either mapping.
 
 // BatchJoinConfig configures how a BATCH_JOIN gateway merges child partition results.
 type BatchJoinConfig struct {

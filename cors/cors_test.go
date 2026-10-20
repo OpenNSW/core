@@ -31,70 +31,71 @@ func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     Config
-		wantErr bool
+		wantErr string // the exact error; empty for none
 	}{
 		{
-			name:    "valid config with specific origin",
-			cfg:     Config{AllowedOrigins: []string{"http://localhost:3000"}},
-			wantErr: false,
+			name: "valid config with specific origin",
+			cfg:  Config{AllowedOrigins: []string{"http://localhost:3000"}},
 		},
 		{
-			name:    "valid config with wildcard",
-			cfg:     Config{AllowedOrigins: []string{"*"}},
-			wantErr: false,
+			name: "valid config with wildcard",
+			cfg:  Config{AllowedOrigins: []string{"*"}},
 		},
 		{
-			name:    "valid config with multiple origins",
-			cfg:     Config{AllowedOrigins: []string{"http://localhost:3000", "https://example.com"}},
-			wantErr: false,
+			name: "valid config with multiple origins",
+			cfg:  Config{AllowedOrigins: []string{"http://localhost:3000", "https://example.com"}},
 		},
 		{
 			name:    "empty origins",
 			cfg:     Config{AllowedOrigins: []string{}},
-			wantErr: true,
+			wantErr: "allowedOrigins is required",
 		},
 		{
 			name:    "nil origins",
 			cfg:     Config{},
-			wantErr: true,
+			wantErr: "allowedOrigins is required",
 		},
 		{
 			name:    "invalid origin URL",
 			cfg:     Config{AllowedOrigins: []string{"not-a-url"}},
-			wantErr: true,
+			wantErr: "allowedOrigins must be a valid absolute URL",
 		},
 		{
 			name:    "ftp scheme rejected",
 			cfg:     Config{AllowedOrigins: []string{"ftp://example.com"}},
-			wantErr: true,
+			wantErr: "allowedOrigins must use http or https",
 		},
 		{
-			name:    "wildcard mixed with valid origin",
-			cfg:     Config{AllowedOrigins: []string{"*", "https://example.com"}},
-			wantErr: false,
+			name: "wildcard mixed with valid origin",
+			cfg:  Config{AllowedOrigins: []string{"*", "https://example.com"}},
 		},
 		{
 			name:    "wildcard origin with AllowCredentials=true rejected",
 			cfg:     Config{AllowedOrigins: []string{"*"}, AllowCredentials: true},
-			wantErr: true,
+			wantErr: "allowedOrigins cannot contain the wildcard '*' when allowCredentials is true",
 		},
 		{
-			name:    "wildcard origin with AllowCredentials=false accepted",
-			cfg:     Config{AllowedOrigins: []string{"*"}, AllowCredentials: false},
-			wantErr: false,
+			name: "wildcard origin with AllowCredentials=false accepted",
+			cfg:  Config{AllowedOrigins: []string{"*"}, AllowCredentials: false},
 		},
 		{
 			name:    "wildcard mixed with valid origin and AllowCredentials=true rejected",
 			cfg:     Config{AllowedOrigins: []string{"https://example.com", "*"}, AllowCredentials: true},
-			wantErr: true,
+			wantErr: "allowedOrigins cannot contain the wildcard '*' when allowCredentials is true",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.cfg.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantErr {
+				t.Errorf("Validate() = %v, want %q", err, tt.wantErr)
 			}
 		})
 	}

@@ -26,6 +26,12 @@ import (
 // types, so they stay agnostic to whatever engine backs the Manager.
 var ErrWorkflowNotFound = errors.New("workflow execution not found")
 
+// ErrActivationNotPending is returned by Manager.CompleteActivation when the addressed step is not waiting to be
+// completed: it already completed, or the workflow ended, or no such step ever existed. Nothing was
+// changed. It is how a caller learns its call was late or a duplicate, for example one for an
+// earlier run of a node the workflow has since moved past. Check for it with errors.Is.
+var ErrActivationNotPending = errors.New("step is not pending: it already completed or does not exist")
+
 // ExecutionStatus defines the allowed states for a workflow instance.
 type ExecutionStatus string
 
@@ -37,24 +43,34 @@ const (
 )
 
 // TaskPayload represents the contextual data sent to the task executor
-// when the workflow engine reaches a "Task" node. It contains the necessary coordinates
+// when the workflow engine reaches a "TASK" node. It contains the necessary coordinates
 // for the task executor to identify the work and eventually report back.
 type TaskPayload struct {
 	// WorkflowID is the unique identifier for the overall business process instance.
 	WorkflowID string
 	// RunID is the unique identifier for this specific execution attempt.
 	RunID string
-	// NodeID is the ID of the graph node currently being executed. This should be
-	// unique for each node in the workflow.
+	// NodeID is the ID of the graph node in the workflow definition (Node.ID). It names the
+	// definition, not one run: a node revisited by a loop has the same NodeID each time. Use
+	// ActivationID to address one run.
 	NodeID string
+	// ActivationID identifies this run of the node. It is unique within the workflow, is the ID of the
+	// Temporal Activity, and is what Manager.CompleteActivation takes to complete this run. It is derived
+	// deterministically from the workflow ID, NodeID and Seq (a UUIDv5), so it is a valid UUID.
+	ActivationID string
+	// Seq is the workflow-wide step counter value for this run. Every node run (not just TASK)
+	// consumes the next value, so a TASK node's Seq need not be contiguous with the previous TASK
+	// node's, but it never repeats or goes backwards. Hosts use it to order writes so a late write
+	// from an earlier step can be told apart from the current one.
+	Seq int64
 	// TaskTemplateID identifies the specific type of external work/script the task executor should run.
 	TaskTemplateID string
 	// Inputs contains the specific subset of WorkflowVariables mapped to this task's requirements.
 	Inputs map[string]any
-	// RootWorkflowID is the workflow ID of the top-level execution. WorkflowID alone doesn't
-	// identify the root for a deeply nested child, so the engine propagates this explicitly from
-	// the root through every level of nesting (see VarRootWorkflowID).
-	RootWorkflowID string
+	// CaseID is the case the workflow belongs to (see VarCaseID). It is the same at every level
+	// of nesting, so it names the case of a task in a deeply nested child, which WorkflowID
+	// alone does not.
+	CaseID string
 }
 
 // AdminParkPayload carries the context of a node parking in NodeStatusAwaitingAdmin, delivered
@@ -66,10 +82,16 @@ type AdminParkPayload struct {
 	WorkflowID string
 	// RunID is the unique identifier for this specific execution attempt.
 	RunID string
-	// RootWorkflowID is the workflow ID of the top-level execution (see TaskPayload.RootWorkflowID).
-	RootWorkflowID string
-	// NodeID is the ID of the graph node that parked.
+	// CaseID is the case the parked workflow belongs to (see VarCaseID).
+	CaseID string
+	// NodeID is the ID of the graph node that parked. It names the definition, not this one run of
+	// it; see ActivationID for a run.
 	NodeID string
+	// ActivationID identifies this specific run of the node — the same value NodeInfo.ActivationID
+	// held at the moment it parked. A resolution must echo it back (AdminResolutionSignal.ActivationID)
+	// to be matched to this parking rather than some other one, including an earlier parking of the
+	// same NodeID (a retry or loop revisit mints a new ActivationID each time it parks).
+	ActivationID string
 	// NodeType is the type of the node that parked (TASK, GATEWAY, etc.).
 	NodeType string
 	// TaskTemplateID identifies the task template the parked node was running. Empty for
@@ -77,6 +99,13 @@ type AdminParkPayload struct {
 	TaskTemplateID string
 	// Cause is the error message that caused the node to park (NodeInfo.LastError).
 	Cause string
+	// ParkCategory says why the node parked (see NodeInfo.ParkCategory).
+	ParkCategory ParkCategory
+	// InputMapping and OutputMapping are the node's mappings from its definition, carried over
+	// from NodeInfo.InputMapping/OutputMapping so a handler can report which workflow variable a
+	// RETRY reads and which a COMPLETE patch should write, without querying the workflow itself.
+	InputMapping  map[string]string
+	OutputMapping map[string]string
 	// CachedTaskResult holds the Activity's raw result if it had already completed before the
 	// node parked (see NodeInfo.CachedTaskResult) — nil if execution never reached that point.
 	CachedTaskResult map[string]any
@@ -96,6 +125,8 @@ const (
 
 // NodeInfo holds information about the state of one of the nodes in the workflow.
 type NodeInfo struct {
+	// ID is the node's ID in the workflow definition (Node.ID). It names the definition, not one
+	// run of it; see ActivationID for a run.
 	ID             string      `json:"id"`
 	CreatedAt      time.Time   `json:"createdAt"`                  // Timestamp of node creation
 	UpdatedAt      time.Time   `json:"updatedAt"`                  // Timestamp of last node update
@@ -104,9 +135,28 @@ type NodeInfo struct {
 	TaskTemplateID string      `json:"task_template_id,omitempty"` // Identifier for the task template to run
 	Status         NodeStatus  `json:"status"`                     // Status of the node
 
+	// ActivationID and Seq identify the most recent run of this node, of any type (see
+	// TaskPayload.ActivationID and TaskPayload.Seq, which name the same values for a TASK node
+	// specifically). Empty and zero until the node first runs. A node that is revisited gets a new
+	// ActivationID and a higher Seq each time; these always describe the latest run.
+	ActivationID string `json:"step_id,omitempty"`
+	Seq          int64  `json:"seq,omitempty"`
+
+	// TODO: LastError, ParkCategory, InputMapping, OutputMapping and CachedTaskResult are all
+	// context for a parked node. Group them into one nested struct (e.g. NodeInfo.Park) instead of
+	// growing NodeInfo with flat fields.
+
 	// LastError holds the error that caused the node to enter NodeStatusAwaitingAdmin
 	// (or the terminal error if it was ultimately aborted). Cleared on successful resolution.
 	LastError string `json:"last_error,omitempty"`
+	// ParkCategory says why the node is parked. Set together with LastError; cleared on resolution.
+	ParkCategory ParkCategory `json:"park_category,omitempty"`
+	// InputMapping and OutputMapping are the node's mappings from its definition (workflow variable
+	// -> task input, task result -> workflow variable), so an admin can see which variables a
+	// RETRY reads and which a COMPLETE should write. Set together with LastError, only while the
+	// node is parked (not on every node); cleared on resolution.
+	InputMapping  map[string]string `json:"input_mapping,omitempty"`
+	OutputMapping map[string]string `json:"output_mapping,omitempty"`
 	// CachedTaskResult holds the most recent raw Activity result for a TASK node, set right
 	// after the Activity succeeds and cleared once the node fully completes. It is purely
 	// informational: if a node parks with this populated, the Activity has already run, so
@@ -150,7 +200,7 @@ type UpdateEvent struct {
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
-// TaskActivationHandler is invoked by the engine whenever the workflow reaches a "Task" node.
+// TaskActivationHandler is invoked by the engine whenever the workflow reaches a "TASK" node.
 // The handler must support two execution paths:
 //
 // 1. Synchronous Execution:
@@ -161,12 +211,25 @@ type UpdateEvent struct {
 //   - If the work is long-running (e.g. awaits external API callback, human UI interaction, etc.),
 //     return a nil map and an ErrResultPending error.
 //   - The workflow activity pauses and awaits completion. The host application must eventually resume
-//     it by calling Manager.TaskDone() with the matching workflow, run, and node IDs.
+//     it by calling Manager.CompleteActivation() with the matching workflow, run, and step IDs.
 type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
 
+// WorkflowCompletion is what the engine reports when a top-level workflow reaches its END node.
+type WorkflowCompletion struct {
+	// WorkflowID is the ID of the workflow that completed.
+	WorkflowID string
+	// Seq is the workflow's step counter taken for the END node's own run, so higher than every
+	// other node's Seq in this workflow. A host that orders its writes by Seq uses it to write the
+	// completion so a late write from any earlier step matches nothing.
+	Seq int64
+	// FinalVariables is the workflow's accumulated variables.
+	FinalVariables map[string]any
+}
+
 // WorkflowCompletionHandler is invoked when the generic DAG workflow successfully reaches an "End" node,
-// providing the final, accumulated state of the workflow variables.
-type WorkflowCompletionHandler func(workflowID string, finalWorkflowVariables map[string]any) error
+// providing the final, accumulated state of the workflow variables. It may be invoked more than once
+// for the same workflow (Temporal retries the Activity), so it must be idempotent.
+type WorkflowCompletionHandler func(WorkflowCompletion) error
 
 // AdminParkHandler is invoked once every time a node parks in NodeStatusAwaitingAdmin —
 // including a re-park after a failed AdminActionRetry, since that's newly actionable
@@ -187,10 +250,13 @@ type Manager interface {
 	// data payload. Returns an error if submission fails.
 	StartWorkflow(ctx context.Context, ID string, def WorkflowDefinition, initialWorkflowVariables map[string]any) error
 
-	// TaskDone is called by the external system to resume a paused workflow node.
-	// It routes the output data back into the specific workflow's WorkflowVariables using the provided
-	// IDs (workflowID, runID, nodeID) that were originally emitted via the TaskActivationHandler.
-	TaskDone(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error
+	// CompleteActivation is called by the external system to resume a paused workflow node.
+	// It routes the output data back into the specific workflow's WorkflowVariables using the
+	// workflowID and activationID (TaskPayload.ActivationID) that were originally emitted via the
+	// TaskActivationHandler. runID may be empty to address the workflow's current run. It fails if
+	// that step is not pending, so a call for a step that has already completed, or that never
+	// existed, is rejected rather than applied to whichever step is active now.
+	CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error
 
 	// TaskUpdate is used to send an update about the task to the workflow.
 	// This is typically used to append messages to the workflow's internal state or update
@@ -210,7 +276,11 @@ type Manager interface {
 // capability can type-assert: if r, ok := mgr.(AdminInterventionResolver); ok { ... }.
 type AdminInterventionResolver interface {
 	// ResolveAdminIntervention sends an admin's resolution decision to a node that is
-	// currently parked in NodeStatusAwaitingAdmin, identified by workflowID/runID/nodeID.
+	// currently parked in NodeStatusAwaitingAdmin. workflowID/runID address the execution, and
+	// resolution.ActivationID picks the parking within it: it must echo AdminParkPayload.ActivationID
+	// (or NodeInfo.ActivationID from GetStatus) for the current park, or the signal is dropped.
+	// resolution.NodeID is for display only. A nil return means the signal was delivered, not that
+	// it matched a parked node.
 	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
 }
 
@@ -238,22 +308,31 @@ type TemporalManager interface {
 type temporalManagerImpl struct {
 	temporalClient client.Client
 	worker         worker.Worker
+	namespace      string
 	taskQueue      string
 	activities     *Activities
 }
 
 // NewTemporalManager creates a new instance of TemporalManager.
+//
+// namespace must be the namespace c was dialed with. client.Client does not expose it, and
+// some calls (e.g. CompleteActivityByID) require it explicitly.
 func NewTemporalManager(
 	c client.Client,
+	namespace string,
 	taskQueue string,
 	taskHandler TaskActivationHandler,
 	completionHandler WorkflowCompletionHandler) TemporalManager {
+	if strings.TrimSpace(namespace) == "" {
+		panic("namespace must not be empty")
+	}
 	if strings.TrimSpace(taskQueue) == "" {
 		panic("taskQueue must not be empty")
 	}
 
 	m := &temporalManagerImpl{
 		temporalClient: c,
+		namespace:      namespace,
 		taskQueue:      taskQueue,
 	}
 
@@ -272,7 +351,7 @@ func NewTemporalManager(
 
 	m.worker = w
 	m.activities = acts
-	slog.Info("temporal manager initialized", "task_queue", taskQueue)
+	slog.Info("temporal manager initialized", "namespace", namespace, "task_queue", taskQueue)
 	return m
 }
 
@@ -288,6 +367,11 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 	opts := client.StartWorkflowOptions{
 		ID:        ID,
 		TaskQueue: m.taskQueue,
+		// A caller that retries starting a workflow (e.g. a Temporal Activity retrying StartWorkflow
+		// for a child that already started) attaches to the existing run instead of erroring. This
+		// is already the SDK's default (the zero value); set explicitly so that's a documented
+		// choice here, not an unstated default a future change could flip by accident.
+		WorkflowExecutionErrorWhenAlreadyStarted: false,
 	}
 
 	_, err := m.temporalClient.ExecuteWorkflow(ctx, opts, "GraphInterpreterWorkflow", def, initialWorkflowVariables)
@@ -298,13 +382,18 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 	return nil
 }
 
-// TaskDone is invoked by the external application to complete a dormant asynchronous Temporal Activity.
+// CompleteActivation is invoked by the external application to complete a dormant asynchronous Temporal Activity.
 // WorkflowID is the ID of the workflow
 // runID is the ID of the run
-// nodeID is the ID of the node
+// activationID is the ID of the step (TaskPayload.ActivationID), which is the Activity's ID
 // output is the key valye pairs that should be added to the global context
-func (m *temporalManagerImpl) TaskDone(ctx context.Context, workflowID, runID, nodeID string, output map[string]any) error {
-	return m.temporalClient.CompleteActivityByID(ctx, "default", workflowID, runID, nodeID, output, nil)
+func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error {
+	err := m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, activationID, output, nil)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return fmt.Errorf("%w: %w", ErrActivationNotPending, err)
+	}
+	return err
 }
 
 func (m *temporalManagerImpl) TaskUpdate(ctx context.Context, workflowID, runID string, event UpdateEvent) error {

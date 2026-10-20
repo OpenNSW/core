@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,6 @@ func TestRepository_Create(t *testing.T) {
 	tx := &PaymentTransaction{
 		ID:              "uuid-1",
 		ReferenceNumber: "TNSW1",
-		TaskID:          "task-1",
 		GatewayID:       "govpay",
 		Amount:          decimal.NewFromInt(1500),
 		Currency:        "LKR",
@@ -51,6 +51,63 @@ func TestRepository_Create(t *testing.T) {
 
 	require.NoError(t, repo.Create(context.Background(), tx))
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A unique violation on insert comes back as ErrDuplicateReference when another
+// transaction holds the reference, translated by the dialector even with
+// TranslateError unset. A unique violation on another key, such as an existing
+// ID, and other errors pass through.
+func TestRepository_Create_DuplicateReference(t *testing.T) {
+	uniqueViolation := &pgconn.PgError{Code: "23505"}
+	holderRows := func(id string) *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"id", "reference_number"}).AddRow(id, "REF-1")
+	}
+	for name, tc := range map[string]struct {
+		dbErr     error
+		lookup    func(sqlmock.Sqlmock) // the reference lookup after the failed insert
+		duplicate bool
+	}{
+		"reference held by another transaction": {
+			dbErr: uniqueViolation,
+			lookup: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE reference_number = \$1`).WillReturnRows(holderRows("uuid-other"))
+			},
+			duplicate: true,
+		},
+		"existing ID with a new reference": {
+			dbErr: uniqueViolation,
+			lookup: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE reference_number = \$1`).WillReturnError(gorm.ErrRecordNotFound)
+			},
+		},
+		"same transaction inserted again": {
+			dbErr: uniqueViolation,
+			lookup: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE reference_number = \$1`).WillReturnRows(holderRows("uuid-1"))
+			},
+		},
+		"other error": {dbErr: errors.New("connection reset")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, mock := setupTestDB(t)
+			repo := NewPaymentRepository(db)
+
+			mock.ExpectBegin()
+			mock.ExpectExec(`INSERT INTO "payment_transactions"`).WillReturnError(tc.dbErr)
+			mock.ExpectRollback()
+			if tc.lookup != nil {
+				tc.lookup(mock)
+			}
+
+			err := repo.Create(context.Background(), &PaymentTransaction{ID: "uuid-1", ReferenceNumber: "REF-1"})
+			require.Error(t, err)
+			assert.Equal(t, tc.duplicate, errors.Is(err, ErrDuplicateReference), "err = %v", err)
+			if !tc.duplicate {
+				assert.ErrorIs(t, err, tc.dbErr, "the driver's error passes through")
+			}
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestRepository_GetByReferenceNumber(t *testing.T) {
@@ -111,34 +168,6 @@ func TestRepository_GetByReferenceNumberForUpdate(t *testing.T) {
 			WillReturnError(gorm.ErrRecordNotFound)
 
 		res, err := repo.GetByReferenceNumberForUpdate(context.Background(), "UNKNOWN")
-		require.NoError(t, err)
-		assert.Nil(t, res)
-	})
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestRepository_GetByTaskID(t *testing.T) {
-	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
-
-	t.Run("found", func(t *testing.T) {
-		rows := sqlmock.NewRows([]string{"id", "task_id", "status"}).
-			AddRow("uuid-1", "task-1", PaymentStatusPending)
-		mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE task_id = \$1`).
-			WillReturnRows(rows)
-
-		res, err := repo.GetByTaskID(context.Background(), "task-1")
-		require.NoError(t, err)
-		require.NotNil(t, res)
-		assert.Equal(t, "task-1", res.TaskID)
-	})
-
-	t.Run("not found returns nil,nil", func(t *testing.T) {
-		mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE task_id = \$1`).
-			WillReturnError(gorm.ErrRecordNotFound)
-
-		res, err := repo.GetByTaskID(context.Background(), "UNKNOWN")
 		require.NoError(t, err)
 		assert.Nil(t, res)
 	})
@@ -222,18 +251,6 @@ func TestRepository_GetByReferenceNumberForUpdate_DBError(t *testing.T) {
 		WillReturnError(errors.New("connection reset"))
 
 	_, err := repo.GetByReferenceNumberForUpdate(context.Background(), "TNSW1")
-	require.Error(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestRepository_GetByTaskID_DBError(t *testing.T) {
-	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
-
-	mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE task_id = \$1`).
-		WillReturnError(errors.New("connection reset"))
-
-	_, err := repo.GetByTaskID(context.Background(), "task-1")
 	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

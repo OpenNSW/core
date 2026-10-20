@@ -10,10 +10,12 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ErrInvalidPath is returned when a key or resolved path is invalid (e.g. path traversal).
@@ -25,27 +27,93 @@ var (
 	errPathOutside = errors.New("path outside base directory")
 )
 
+// DefaultLocalRoutePrefix is the path the local driver's content routes sit
+// under unless WithRoutePrefix sets another.
+const DefaultLocalRoutePrefix = "/api/v1/storage"
+
 // LocalFSDriver implements StorageDriver for local disk with directory hashing
 type LocalFSDriver struct {
-	BaseDir    string
-	PublicURL  string
-	secretKey  string
-	presignTTL time.Duration
+	BaseDir     string
+	PublicURL   string
+	secretKey   string
+	presignTTL  time.Duration
+	routePrefix string
+}
+
+// LocalOption configures a LocalFSDriver.
+type LocalOption func(*LocalFSDriver)
+
+// WithRoutePrefix sets the path the driver's content routes sit under, e.g.
+// "/files" for routes at /files/{key}/content. It must start with "/", must
+// not end with one, and must not contain {, }, ?, #, whitespace, or empty,
+// "." or ".." segments; NewLocalFSDriver returns an error naming the rule a
+// bad prefix breaks. Without it the prefix is DefaultLocalRoutePrefix.
+func WithRoutePrefix(prefix string) LocalOption {
+	return func(d *LocalFSDriver) {
+		d.routePrefix = prefix
+	}
 }
 
 // NewLocalFSDriver creates a new LocalFSDriver.
 // baseDir is where files will be stored.
-// publicURL is the base URL used to generate public links (e.g., /api/storage).
+// publicURL is the origin of the server that serves ContentPattern (e.g.
+// http://localhost:8080), using storage.LocalContentHandler.
 // secretKey is the secret used for HMAC signing of local-put upload URLs.
 // presignTTL is the default time-to-live for presigned URLs.
-func NewLocalFSDriver(baseDir, publicURL, secretKey string, presignTTL time.Duration) (*LocalFSDriver, error) {
-	if err := os.MkdirAll(baseDir, 0750); err != nil {
-		return nil, fmt.Errorf("failed to create base directory: %w", err)
-	}
+func NewLocalFSDriver(baseDir, publicURL, secretKey string, presignTTL time.Duration, opts ...LocalOption) (*LocalFSDriver, error) {
 	if presignTTL == 0 {
 		presignTTL = DefaultPresignTTL
 	}
-	return &LocalFSDriver{BaseDir: baseDir, PublicURL: publicURL, secretKey: secretKey, presignTTL: presignTTL}, nil
+	d := &LocalFSDriver{BaseDir: baseDir, PublicURL: publicURL, secretKey: secretKey, presignTTL: presignTTL, routePrefix: DefaultLocalRoutePrefix}
+	for _, opt := range opts {
+		opt(d)
+	}
+	if err := validateRoutePrefix(d.routePrefix); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(baseDir, 0750); err != nil {
+		return nil, fmt.Errorf("failed to create base directory: %w", err)
+	}
+	return d, nil
+}
+
+// validateRoutePrefix rejects a prefix that would not make a clean ServeMux
+// pattern once "/{key}/content" is appended, naming the rule it breaks.
+func validateRoutePrefix(prefix string) error {
+	var reason string
+	switch {
+	case !strings.HasPrefix(prefix, "/"):
+		reason = `must start with "/"`
+	case strings.HasSuffix(prefix, "/"):
+		reason = `must not end with "/"`
+	case strings.ContainsAny(prefix, "{}?#"):
+		reason = "must not contain {, }, ? or #"
+	case strings.IndexFunc(prefix, unicode.IsSpace) >= 0:
+		reason = "must not contain whitespace"
+	case path.Clean(prefix) != prefix:
+		reason = `must not contain empty, "." or ".." segments`
+	default:
+		return nil
+	}
+	return fmt.Errorf("invalid route prefix %q: %s", prefix, reason)
+}
+
+// ContentPattern is the ServeMux path pattern of the driver's content routes,
+// the route prefix followed by "/{key}/content". Upload and download URLs
+// point at it on PublicURL, and storage.LocalContentHandler serves it.
+func (d *LocalFSDriver) ContentPattern() string {
+	return d.routePrefix + "/{key}/content"
+}
+
+// contentURL is the URL of key's content route, carrying query.
+func (d *LocalFSDriver) contentURL(key string, query url.Values) string {
+	route := strings.Replace(d.ContentPattern(), "{key}", url.PathEscape(key), 1)
+	return strings.TrimSuffix(d.PublicURL, "/") + route + "?" + query.Encode()
+}
+
+// PresignTTL reports how long the driver's presigned URLs stay valid.
+func (d *LocalFSDriver) PresignTTL() time.Duration {
+	return d.presignTTL
 }
 
 // getHashedPath generates a two-level deep path for a key to avoid flat directory issues.
@@ -149,7 +217,7 @@ func (d *LocalFSDriver) Delete(ctx context.Context, key string) error {
 
 func (d *LocalFSDriver) GetDownloadURL(_ context.Context, key string) (string, error) {
 	if d.PublicURL == "" {
-		return key, nil
+		return "", fmt.Errorf("public URL not configured for local storage")
 	}
 
 	ttl := d.presignTTL
@@ -161,7 +229,7 @@ func (d *LocalFSDriver) GetDownloadURL(_ context.Context, key string) (string, e
 	v.Set("token", token)
 	v.Set("expiresAt", strconv.FormatInt(expiresAt, 10))
 
-	return fmt.Sprintf("%s/api/v1/storage/%s/content?%s", d.PublicURL, key, v.Encode()), nil
+	return d.contentURL(key, v), nil
 }
 
 // VerifyDownloadToken checks if a provided download token is valid and not expired.
@@ -169,7 +237,7 @@ func (d *LocalFSDriver) VerifyDownloadToken(key, token string, expiresAt int64) 
 	return VerifyDownloadToken(key, token, d.secretKey, expiresAt)
 }
 
-// GetUploadURL returns a presigned URL pointing to a local PUT handler.
+// GetUploadURL returns a presigned URL pointing to the PUT route on ContentPattern.
 // Note: This method does NOT create the file on disk. It only signs the security constraints
 // (key, expiration, size limit). The actual resource allocation (file creation) happens in
 // Save() when the PUT request is eventually processed, matching S3's deferred behavior.
@@ -182,15 +250,14 @@ func (d *LocalFSDriver) GetUploadURL(_ context.Context, key string, contentType 
 	expiresAt := time.Now().Add(ttl).Unix()
 	token := GenerateToken(key, d.secretKey, expiresAt, contentType, maxSizeBytes)
 
-	// Returns a URL pointing back to our local PUT handler with security constraints encoded
+	// Returns a URL pointing back to the PUT route with security constraints encoded
 	v := url.Values{}
 	v.Set("token", token)
 	v.Set("expiresAt", strconv.FormatInt(expiresAt, 10))
 	v.Set("contentType", contentType)
 	v.Set("maxSizeBytes", strconv.FormatInt(maxSizeBytes, 10))
 
-	return fmt.Sprintf("%s/api/v1/storage/%s/content?%s",
-		d.PublicURL, key, v.Encode()), nil
+	return d.contentURL(key, v), nil
 }
 
 // VerifyToken checks if a token is valid for a given key and constraints using the driver's secret.

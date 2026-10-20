@@ -33,6 +33,6 @@ func (p *UserInputPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) 
 	}
 
 	ctx.Record.State = status
-	slog.DebugContext(ctx.Context, "user_input: awaiting submission", "task_id", ctx.Record.TaskID, "node_id", ctx.Record.SubTaskNodeID)
+	slog.DebugContext(ctx.Context, "user_input: awaiting submission", "task_id", ctx.Record.TaskID, "step_id", ctx.Record.ActiveStepID)
 	return ErrSuspended
 }

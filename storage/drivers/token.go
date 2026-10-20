@@ -36,22 +36,30 @@ func verify(token, secret string, parts ...any) bool {
 	return hmac.Equal([]byte(token), []byte(expected))
 }
 
+// Upload and download tokens share a secret, so each signs the operation it
+// is for first. Without it, an upload token's payload (key, expiry, type,
+// size) is also a valid download payload for a crafted key and expiry.
+const (
+	opUpload   = "put"
+	opDownload = "get"
+)
+
 // GenerateToken creates an HMAC-SHA256 token signing multiple constraints.
 func GenerateToken(key, secret string, expiresAt int64, contentType string, maxSizeBytes int64) string {
-	return sign(secret, key, expiresAt, contentType, maxSizeBytes)
+	return sign(secret, opUpload, key, expiresAt, contentType, maxSizeBytes)
 }
 
 // VerifyToken checks if a provided token matches the expected signature for given constraints.
 func VerifyToken(key, token, secret string, expiresAt int64, contentType string, maxSizeBytes int64) bool {
-	return verify(token, secret, key, expiresAt, contentType, maxSizeBytes)
+	return verify(token, secret, opUpload, key, expiresAt, contentType, maxSizeBytes)
 }
 
 // GenerateDownloadToken creates an HMAC-SHA256 token specifically for download links (only signs key and expiration).
 func GenerateDownloadToken(key, secret string, expiresAt int64) string {
-	return sign(secret, key, expiresAt)
+	return sign(secret, opDownload, key, expiresAt)
 }
 
 // VerifyDownloadToken checks if a provided download token matches the expected signature.
 func VerifyDownloadToken(key, token, secret string, expiresAt int64) bool {
-	return verify(token, secret, key, expiresAt)
+	return verify(token, secret, opDownload, key, expiresAt)
 }

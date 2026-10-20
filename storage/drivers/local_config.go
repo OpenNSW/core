@@ -17,8 +17,15 @@ import (
 type LocalConfig struct {
 	// BaseDir is the directory files are stored under (created if absent).
 	BaseDir string `yaml:"baseDir"`
-	// PublicURL is the base URL files are served from.
+	// PublicURL is the origin of the server that serves the driver's
+	// content routes (e.g. http://localhost:8080). See
+	// storage.LocalContentHandler.
 	PublicURL string `yaml:"publicURL"`
+	// RoutePrefix is the path the content routes sit under on that server,
+	// e.g. "/files" for routes at /files/{key}/content. Empty means
+	// DefaultLocalRoutePrefix ("/api/v1/storage"). Otherwise it follows the
+	// rules of WithRoutePrefix.
+	RoutePrefix string `yaml:"routePrefix"`
 	// PutSecret signs presigned upload URLs for the local driver.
 	PutSecret string `yaml:"putSecret"`
 }
@@ -36,6 +43,11 @@ func (c LocalConfig) Validate() error {
 	}
 	if c.PutSecret == "" {
 		return fmt.Errorf("local storage: PutSecret is required")
+	}
+	if c.RoutePrefix != "" {
+		if err := validateRoutePrefix(c.RoutePrefix); err != nil {
+			return fmt.Errorf("local storage: %w", err)
+		}
 	}
 	return nil
 }

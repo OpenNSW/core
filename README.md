@@ -16,34 +16,35 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 
 ## Packages
 
-| Package                                  | Purpose                                                                                                                                                                                       |
-|------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [`artifact`](artifact/README.md)         | Versioned configuration registry — load workflow definitions, form schemas, and templates by ID (includes [`artifact/adapter`](artifact/adapter/README.md), bridge adapters for domain types) |
-| [`authn`](authn/README.md)               | JWT validation, identity context injection, and HTTP middleware                                                                                                                               |
-| [`authz`](authz/README.md)               | Scope-based authorization middleware and predicates, decoupled from authn                                                                                                                     |
-| [`configyaml`](configyaml/README.md)     | Loads a YAML config file into a Go struct, resolving `{{env:NAME}}` / `{{file:/path}}` placeholders via `secret.SecretRef`                                                                    |
-| [`cors`](cors/README.md)                 | CORS HTTP middleware                                                                                                                                                                          |
-| [`database`](database/README.md)         | GORM/PostgreSQL connection factory with pooling and health checks                                                                                                                             |
-| [`httputil`](httputil/README.md)         | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
-| [`json`](json/README.md)                 | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
-| [`notification`](notification/README.md) | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
-| [`pagination`](pagination/README.md)     | Standard pagination envelope and query parameter parsing                                                                                                                                      |
-| [`payment`](payment/README.md)           | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
-| [`remote`](remote/README.md)             | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
-| [`secret`](secret/README.md)             | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources                                                                                                        |
-| [`shared`](shared/README.md)             | Small, dependency-free helpers (deep copy, nested map access, config validation) used across other modules                                                                                    |
-| [`storage`](storage/README.md)           | File storage abstraction (local filesystem and AWS S3) with presigned URLs                                                                                                                    |
-| [`taskflow`](taskflow/README.md)         | Micro-interactive task orchestration — the core engine for human-in-the-loop steps                                                                                                            |
-| [`temporal`](temporal/README.md)         | Temporal client factory                                                                                                                                                                       |
-| [`trace`](trace/README.md)               | HTTP request trace propagation and context-based trace ID correlation                                                                                                                         |
-| [`uiprojector`](uiprojector/README.md)   | Zone-based, metadata-driven UI rendering from workflow state and business data                                                                                                                |
-| [`workflow`](workflow/README.md)         | JSON DSL-driven Temporal workflow graph interpreter                                                                                                                                           |
-| [`xmlgen`](xmlgen/README.md)             | XML document generation from a static template and structured data, with automatic escaping                                                                                                   |
+| Package                                    | Purpose                                                                                                                                                                                       |
+|--------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`artifact`](artifact/README.md)           | Versioned configuration registry — load workflow definitions, form schemas, and templates by ID (includes [`artifact/adapter`](artifact/adapter/README.md), bridge adapters for domain types) |
+| [`authn`](authn/README.md)                 | JWT validation, identity context injection, and HTTP middleware                                                                                                                               |
+| [`authz`](authz/README.md)                 | Scope-based authorization middleware and predicates, decoupled from authn                                                                                                                     |
+| [`configyaml`](configyaml/README.md)       | Loads a YAML config file into a Go struct, resolving `{{env:NAME}}` / `{{file:/path}}` placeholders via `secret.SecretRef`                                                                    |
+| [`cors`](cors/README.md)                   | CORS HTTP middleware                                                                                                                                                                          |
+| [`database`](database/README.md)           | `database/sql` connection factory (PostgreSQL, MySQL, SQLite) with pooling and health checks                                                                                                  |
+| [`htmlgen`](htmlgen/README.md)             | Print-ready HTML document generation from a static template and structured data, with contextual escaping                                                                                     |
+| [`httputil`](httputil/README.md)           | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
+| [`json`](json/README.md)                   | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
+| [`notifications`](notifications/README.md) | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
+| [`pagination`](pagination/README.md)       | Standard pagination envelope and query parameter parsing                                                                                                                                      |
+| [`payment`](payment/README.md)             | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
+| [`remote`](remote/README.md)               | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
+| [`secret`](secret/README.md)               | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources                                                                                                        |
+| [`shared`](shared/README.md)               | Small, dependency-free helpers (deep copy, nested map access, config validation) used across other modules                                                                                    |
+| [`storage`](storage/README.md)             | File storage abstraction (local filesystem and AWS S3) with presigned URLs                                                                                                                    |
+| [`taskflow`](taskflow/README.md)           | Micro-interactive task orchestration — the core engine for human-in-the-loop steps                                                                                                            |
+| [`temporal`](temporal/README.md)           | Temporal client factory                                                                                                                                                                       |
+| [`trace`](trace/README.md)                 | HTTP request trace propagation and context-based trace ID correlation                                                                                                                         |
+| [`uiprojector`](uiprojector/README.md)     | Zone-based, metadata-driven UI rendering from workflow state and business data                                                                                                                |
+| [`workflow`](workflow/README.md)           | JSON DSL-driven Temporal workflow graph interpreter                                                                                                                                           |
+| [`xmlgen`](xmlgen/README.md)               | XML document generation from a static template and structured data, with automatic escaping                                                                                                   |
 
 ## Requirements
 
 - Go 1.26+
-- PostgreSQL (via GORM)
+- PostgreSQL, MySQL, or SQLite
 - [Temporal](https://temporal.io/) server (for workflow and task orchestration)
 
 ## Installation
@@ -71,11 +72,11 @@ flowchart TD
         TM["micro workflows · human-in-the-loop steps"]
     end
 
-    subgraph pluginset["Subtask Plugins"]
+    subgraph pluginset["Step Plugins"]
         P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · API_CALL · custom"]
     end
 
-    SS["payment · remote · notification · storage"]
+    SS["payment · remote · notifications · storage"]
     AR[("artifact registry<br>workflow defs · task templates<br>form schemas · render templates")]
 
     Portal -->|HTTP| server
@@ -100,9 +101,16 @@ The two-tier workflow design is central to single window systems:
 The following shows how to assemble the components into a working application (condensed from the reference implementation pattern):
 
 ```go
-func Build(cfg *Config) (*App, error) {
-    // 1. Database
-    db, err := database.New(cfg.Database)
+func Build(ctx context.Context, cfg *Config) (*App, error) {
+    // 1. Database — wrap the *sql.DB with GORM for the GORM-backed stores
+    sqlDB, err := database.New(ctx, cfg.Database)
+    if err != nil {
+        return nil, err
+    }
+    db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
+    if err != nil {
+        return nil, err
+    }
 
     // 2. Artifact registry — one loader is the single source of truth
     artifactLoader, _ := local.New(local.Config{Root: "configs"})
@@ -133,19 +141,19 @@ func Build(cfg *Config) (*App, error) {
 
     var tm *orchestrator.TaskManager
     microRunner := workflow.NewTemporalManager(
-        temporalClient, "MICRO_WORKFLOW_QUEUE",
-        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartSubTask(ctx, p) },
-        func(wfID string, vars map[string]any) error { return tm.HandleTaskCompletion(ctx, wfID, vars) },
+        temporalClient, cfg.Temporal.Namespace, "MICRO_WORKFLOW_QUEUE",
+        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
+        func(c workflow.WorkflowCompletion) error { return tm.HandleTaskCompletion(ctx, c) },
     )
-    onTaskCompleted := func(parentWorkflowID, parentRunID, parentNodeID string, vars map[string]any) error {
-        return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentRunID, parentNodeID, vars)
+    onTaskCompleted := func(parentWorkflowID, parentStepID string, vars map[string]any) error {
+        return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentStepID, vars)
     }
     tm = orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, microRunner, onTaskCompleted, taskRenderer)
     microRunner.StartWorker()
 
     // 6. Macro workflow runner
     macroRunner := workflow.NewTemporalManager(
-        temporalClient, "INTERPRETER_TASK_QUEUE",
+        temporalClient, cfg.Temporal.Namespace, "INTERPRETER_TASK_QUEUE",
         onMacroTaskActivation, onMacroCompletion,
     )
     macroRunner.StartWorker()

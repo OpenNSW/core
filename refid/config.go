@@ -54,13 +54,15 @@ const (
 	SegmentTypeDate     = "date"
 	SegmentTypeSequence = "sequence"
 	SegmentTypeRandom   = "random"
+	SegmentTypeParam    = "param"
 )
 
 // SegmentConfig is the raw configuration for a single segment. Fields are
 // interpreted according to Type; unused fields are ignored.
 type SegmentConfig struct {
 	// Type is one of the SegmentType* constants: SegmentTypeLiteral,
-	// SegmentTypeList, SegmentTypeDate, SegmentTypeSequence, SegmentTypeRandom.
+	// SegmentTypeList, SegmentTypeDate, SegmentTypeSequence, SegmentTypeRandom,
+	// SegmentTypeParam.
 	Type string `yaml:"type"`
 
 	// Value is the fixed text for a literal segment.
@@ -70,8 +72,13 @@ type SegmentConfig struct {
 	List string `yaml:"list,omitempty"`
 
 	// Param is the key the caller must supply in their params map, used by list
-	// segments to look up the caller-provided value.
+	// and param segments to look up the caller-provided value.
 	Param string `yaml:"param,omitempty"`
+
+	// Pattern is the RE2 regular expression a param segment's value must match
+	// in full; it is anchored at both ends, so "^" and "$" are not needed.
+	// Required by param segments; ".+" accepts any non-empty value.
+	Pattern string `yaml:"pattern,omitempty"`
 
 	// Layout is a Go reference-date format string (e.g. "20060102"), used by
 	// date segments.

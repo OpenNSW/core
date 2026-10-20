@@ -5,6 +5,8 @@ package engine
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,8 +26,12 @@ type graphInterpreter struct {
 	outEdges map[string][]Edge
 	inEdges  map[string][]Edge
 
+	// seq is the workflow-wide step counter: it is advanced each time any node starts a run, and
+	// its value identifies that run (see mintActivation). It only ever grows.
+	seq int64
+
 	// pendingAdminResolutions holds a Settable for each node currently parked in
-	// NodeStatusAwaitingAdmin, keyed by node template ID. See admin_recovery.go.
+	// NodeStatusAwaitingAdmin, keyed by that park's ActivationID. See admin_recovery.go.
 	pendingAdminResolutions map[string]workflow.Settable
 }
 
@@ -53,30 +59,19 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		Edges:             make([]Edge, len(def.Edges)),
 	}
 
-	// Only the root execution reaches this with VarRootWorkflowID unset — every nested child is
-	// started with it already present in initialWorkflowVariables (copied through wholesale by
-	// BATCH_SPLIT/PARALLEL_SPLIT, or set explicitly by SPLIT_TASK), so this seeds it exactly once
-	// per workflow tree, at the true root.
-	if _, ok := instance.WorkflowVariables[VarRootWorkflowID]; !ok {
-		instance.WorkflowVariables[VarRootWorkflowID] = instance.ID
-	}
-
-	// Generate UUIDs deterministically
-	var generatedUUIDs map[string]string
-	if err := workflow.SideEffect(ctx, func(_ workflow.Context) interface{} {
-		uuids := make(map[string]string)
-		for _, node := range def.Nodes {
-			uuids[node.ID] = uuid.NewString()
-		}
-		return uuids
-	}).Get(&generatedUUIDs); err != nil {
-		return nil, fmt.Errorf("failed to generate UUIDs via SideEffect: %w", err)
+	// Only a top-level execution can reach this without a case — every nested child is started
+	// with one already present in initialWorkflowVariables (copied through wholesale by
+	// BATCH_SPLIT/PARALLEL_SPLIT, or set explicitly by SPLIT_TASK) — so a top-level workflow the
+	// host started without a case, or with an empty one, is its own case. The check matches
+	// caseID()'s, and the ID is stored rather than only returned, so every child copies a
+	// non-empty case ID instead of falling back to its own workflow ID.
+	if v, _ := instance.WorkflowVariables[VarCaseID].(string); v == "" {
+		instance.WorkflowVariables[VarCaseID] = instance.ID
 	}
 
 	for _, node := range def.Nodes {
 		instance.NodeInfo[node.ID] = &NodeInfo{
-			// Create a unique ID for the node. node.ID is the ID in our template.
-			ID:             node.ID + ":" + generatedUUIDs[node.ID],
+			ID:             node.ID,
 			Type:           node.Type,
 			GatewayType:    node.GatewayType,
 			TaskTemplateID: node.TaskTemplateID,
@@ -86,22 +81,14 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		}
 	}
 
-	// Resolve Source and Target IDs in edges to the generated node instance IDs
 	for i, edge := range def.Edges {
-		sourceNodeInfo, sourceExists := instance.NodeInfo[edge.SourceID]
-		if !sourceExists {
+		if _, ok := instance.NodeInfo[edge.SourceID]; !ok {
 			return nil, fmt.Errorf("invalid edge definition: source node '%s' not found for edge '%s'", edge.SourceID, edge.ID)
 		}
-		targetNodeInfo, targetExists := instance.NodeInfo[edge.TargetID]
-		if !targetExists {
+		if _, ok := instance.NodeInfo[edge.TargetID]; !ok {
 			return nil, fmt.Errorf("invalid edge definition: target node '%s' not found for edge '%s'", edge.TargetID, edge.ID)
 		}
-		instance.Edges[i] = Edge{
-			ID:        edge.ID,
-			SourceID:  sourceNodeInfo.ID,
-			TargetID:  targetNodeInfo.ID,
-			Condition: edge.Condition,
-		}
+		instance.Edges[i] = edge
 	}
 
 	// Initialize our interpreter struct
@@ -210,7 +197,7 @@ func (g *graphInterpreter) dispatchNodeHandler(ctx workflow.Context, nodeInfo *N
 	case NodeTypeEnd:
 		return g.handleEndNode(ctx, nodeInfo)
 	default:
-		return fmt.Errorf("unknown node type: %v", node.Type)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("unknown node type: %v", node.Type))
 	}
 }
 
@@ -232,6 +219,7 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 
 	outEdges := g.outEdges[node.ID]
 
+	g.mintActivation(nodeInfo, node)
 	err := g.dispatchNodeHandler(ctx, nodeInfo, node, outEdges)
 	if err == nil {
 		return nil
@@ -247,7 +235,7 @@ func (g *graphInterpreter) executeNode(ctx workflow.Context, nodeID string) erro
 // handleStartNode transitions to the single outgoing edge and marks itself Completed.
 func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeInfo, outEdges []Edge) error {
 	if len(outEdges) == 0 {
-		return fmt.Errorf("START node has no outgoing edges")
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("START node has no outgoing edges"))
 	}
 	nodeInfo.Status = NodeStatusCompleted
 	nodeInfo.UpdatedAt = workflow.Now(ctx)
@@ -271,18 +259,18 @@ func (g *graphInterpreter) handleStartNode(ctx workflow.Context, nodeInfo *NodeI
 // account for the attempt it was on rather than lagging one behind.
 func (g *graphInterpreter) handleTimerNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	if node.Timer == nil || node.Timer.Duration == "" {
-		return fmt.Errorf("TIMER node %s: timer.duration is required", node.ID)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: timer.duration is required", node.ID))
 	}
 	d, err := time.ParseDuration(node.Timer.Duration)
 	if err != nil {
-		return fmt.Errorf("TIMER node %s: invalid timer.duration %q: %w", node.ID, node.Timer.Duration, err)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: invalid timer.duration %q: %w", node.ID, node.Timer.Duration, err))
 	}
 	if d <= 0 {
-		return fmt.Errorf("TIMER node %s: timer.duration must be positive, got %s", node.ID, d)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: timer.duration must be positive, got %s", node.ID, d))
 	}
 	// A TIMER is a pure delay on a single path; branching belongs to a gateway.
 	if len(outEdges) != 1 {
-		return fmt.Errorf("TIMER node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges))
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("TIMER node %s: expected exactly 1 outgoing edge, got %d", node.ID, len(outEdges)))
 	}
 
 	counterKey := node.Timer.CounterKey
@@ -340,9 +328,11 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	// forever. The parent aggregates each branch's result and fires the hook once when its own END
 	// node is reached.
 	if workflow.GetInfo(ctx).ParentWorkflowExecution == nil {
-		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables).Get(ctx, nil)
+		// nodeInfo.Seq was minted by the caller (mintActivation) for this run of the END node, so the
+		// host can order its completion write after every other node's writes.
+		err := workflow.ExecuteActivity(ctx, "WorkflowCompletedActivity", g.instance.ID, g.instance.WorkflowVariables, nodeInfo.Seq).Get(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("unable to complete workflow: %w", err)
+			return withCategory(ParkCategoryTaskFailure, fmt.Errorf("unable to complete workflow: %w", err))
 		}
 	}
 	nodeInfo.Status = NodeStatusCompleted
@@ -350,50 +340,98 @@ func (g *graphInterpreter) handleEndNode(ctx workflow.Context, nodeInfo *NodeInf
 	return nil
 }
 
+// activationIDNamespace is the UUIDv5 namespace step IDs are derived in. It must never change: a step ID
+// has to come out the same on every replay of the workflow.
+var activationIDNamespace = uuid.MustParse("6f1c2c0e-5b58-4a55-9a4e-3d7a1f0c8b21")
+
+// newActivationID returns the ID of one run of a node. It is a pure function of its inputs, so it is
+// deterministic under Temporal replay without a side effect, and it is a valid UUID.
+func newActivationID(workflowID, nodeID string, seq int64) string {
+	return uuid.NewSHA1(activationIDNamespace, []byte(fmt.Sprintf("%s:%s:%d", workflowID, nodeID, seq))).String()
+}
+
+// mintActivation advances the workflow's step counter and records a fresh ActivationID on nodeInfo
+// for this run of node. It is called once per dispatch of a node's handler — both a fresh
+// execution and an admin retry — so a node revisited by a loop, or re-run by an admin action, is
+// addressed as a new run: anything addressed to an earlier run no longer matches and is rejected.
+func (g *graphInterpreter) mintActivation(nodeInfo *NodeInfo, node *Node) {
+	g.seq++
+	nodeInfo.ActivationID = newActivationID(g.instance.ID, node.ID, g.seq)
+	nodeInfo.Seq = g.seq
+}
+
+// mapTaskInputs builds the task's inputs from the workflow variables.
 func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[string]any, error) {
 	inputs := make(map[string]any, len(inputMapping))
-	if len(inputMapping) == 0 {
-		return inputs, nil
+	if err := g.applyInputMapping(inputs, inputMapping); err != nil {
+		return nil, err
 	}
-
-	for rawGlobalKey, localKey := range inputMapping {
-		globalKey, optional := parseMappingKey(rawGlobalKey)
-		val, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, globalKey)
-		if !exists {
-			if optional {
-				continue
-			}
-			return nil, fmt.Errorf("input mapping error: required global variable '%s' not found in workflow variables for task node", globalKey)
-		}
-		maputil.SetNestedKey(inputs, localKey, val)
-	}
-
 	return inputs, nil
 }
 
-func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMapping map[string]string, result map[string]any) error {
-	if len(outputMapping) == 0 || result == nil {
-		return nil
-	}
-
-	for rawTaskKey, globalKey := range outputMapping {
-		taskKey, optional := parseMappingKey(rawTaskKey)
-		val, exists := maputil.GetNestedKey(result, taskKey)
+// applyInputMapping writes each mapped workflow variable into dst under its mapped key, for every
+// node type that reads input_mapping. Keys are visited in sorted order and every missing required
+// variable is reported at once, so the error is the same on every run. If it returns an error dst
+// may be partly written, so the caller must discard it.
+func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping map[string]string) error {
+	var missing []string
+	for _, rawGlobalKey := range slices.Sorted(maps.Keys(inputMapping)) {
+		globalKey, optional := parseMappingKey(rawGlobalKey)
+		val, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, globalKey)
 		if !exists {
-			if optional {
-				continue
+			if !optional {
+				missing = append(missing, globalKey)
 			}
-			return fmt.Errorf("output mapping error: required task variable '%s' not found in task result", taskKey)
+			continue
 		}
-		maputil.SetNestedKey(workflowVars, globalKey, val)
+		maputil.SetNestedKey(dst, inputMapping[rawGlobalKey], val)
+	}
+	if len(missing) > 0 {
+		return withCategory(ParkCategoryInputMapping, fmt.Errorf(
+			"input mapping error: required global %s not found in workflow variables", describeVariables(missing)))
 	}
 	return nil
 }
 
-// rootWorkflowID returns this execution's root workflow ID, propagated from the top-level
-// execution via VarRootWorkflowID (see GraphInterpreterWorkflow).
-func (g *graphInterpreter) rootWorkflowID() string {
-	if v, ok := g.instance.WorkflowVariables[VarRootWorkflowID].(string); ok && v != "" {
+// mapTaskOutputs writes the task result into workflowVars per outputMapping. It is all-or-nothing:
+// if any required field is missing from result, every missing one is reported (sorted) and nothing
+// is written, so a failed mapping never leaves workflowVars half updated. A nil result is an empty
+// one, so it fails on every required field rather than silently skipping the mapping.
+func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMapping map[string]string, result map[string]any) error {
+	if len(outputMapping) == 0 {
+		return nil
+	}
+
+	type write struct {
+		globalKey string
+		val       any
+	}
+	var writes []write
+	var missing []string
+	for _, rawTaskKey := range slices.Sorted(maps.Keys(outputMapping)) {
+		taskKey, optional := parseMappingKey(rawTaskKey)
+		val, exists := maputil.GetNestedKey(result, taskKey)
+		if !exists {
+			if !optional {
+				missing = append(missing, taskKey)
+			}
+			continue
+		}
+		writes = append(writes, write{globalKey: outputMapping[rawTaskKey], val: val})
+	}
+	if len(missing) > 0 {
+		return withCategory(ParkCategoryOutputMapping, fmt.Errorf(
+			"output mapping error: required task %s not found in task result", describeVariables(missing)))
+	}
+	for _, w := range writes {
+		maputil.SetNestedKey(workflowVars, w.globalKey, w.val)
+	}
+	return nil
+}
+
+// caseID returns the case this execution belongs to (see VarCaseID).
+func (g *graphInterpreter) caseID() string {
+	if v, ok := g.instance.WorkflowVariables[VarCaseID].(string); ok && v != "" {
 		return v
 	}
 	return g.instance.ID
@@ -407,16 +445,25 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 
 	var result map[string]any
 
+	// nodeInfo.ActivationID was minted by the caller (mintActivation, via executeNode or an admin
+	// retry) before dispatching here; the Activity is addressed by that same ID so a stale
+	// completion from an earlier run of this node no longer matches.
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ActivityID:          nodeInfo.ID,
+		ActivityID:          nodeInfo.ActivationID,
 		StartToCloseTimeout: 24 * time.Hour * 365,
 	})
 
-	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.rootWorkflowID()).Get(ctx, &result)
+	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
+		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq}).Get(ctx, &result)
 	if err != nil {
-		return err
+		return withCategory(ParkCategoryTaskFailure, err)
 	}
 
+	// A nil result (the Activity returned nothing) becomes an empty one, so the cache below is
+	// non-nil and a park still shows the Activity already ran.
+	if result == nil {
+		result = map[string]any{}
+	}
 	// Cache the raw result so an admin reviewing a parked node (if mapTaskOutputs below
 	// fails) can see the Activity already ran and what it returned, rather than blindly
 	// retrying and re-invoking it.
@@ -445,7 +492,7 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		for _, e := range outEdges {
 			match, err := EvaluateCondition(e.Condition, g.instance.WorkflowVariables)
 			if err != nil {
-				return err
+				return withCategory(ParkCategoryGatewayCondition, err)
 			}
 			if match {
 				nodeInfo.Status = NodeStatusCompleted
@@ -453,7 +500,7 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 				return g.transitionTo(ctx, e)
 			}
 		}
-		return fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID)
+		return withCategory(ParkCategoryGatewayCondition, fmt.Errorf("no matching conditions found at exclusive gateway %s", node.ID))
 
 	case GatewayTypeParallelSplit:
 		return g.handleParallelSplitGateway(ctx, nodeInfo, node, outEdges)
@@ -471,10 +518,10 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 			}
 		}
 		if !consumed {
-			return fmt.Errorf("exclusive join %s reached with no incoming token — invalid workflow definition", node.ID)
+			return withCategory(ParkCategoryDefinitionError, fmt.Errorf("exclusive join %s reached with no incoming token — invalid workflow definition", node.ID))
 		}
 		if len(outEdges) != 1 {
-			return fmt.Errorf("exclusive join %s must have exactly one outgoing edge, got %d — invalid workflow definition", node.ID, len(outEdges))
+			return withCategory(ParkCategoryDefinitionError, fmt.Errorf("exclusive join %s must have exactly one outgoing edge, got %d — invalid workflow definition", node.ID, len(outEdges)))
 		}
 		nodeInfo.Status = NodeStatusCompleted
 		nodeInfo.UpdatedAt = workflow.Now(ctx)
@@ -487,6 +534,6 @@ func (g *graphInterpreter) handleGatewayNode(ctx workflow.Context, nodeInfo *Nod
 		return g.handleBatchJoinGateway(ctx, nodeInfo, node, outEdges)
 
 	default:
-		return fmt.Errorf("unknown gateway type: %v", node.GatewayType)
+		return withCategory(ParkCategoryDefinitionError, fmt.Errorf("unknown gateway type: %v", node.GatewayType))
 	}
 }

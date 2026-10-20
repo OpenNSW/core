@@ -18,6 +18,32 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
+// parkedActivationID queries the running workflow's GetStatus and returns nodeID's current
+// ActivationID, so a test can resolve a parked node without guessing it — ActivationID is the
+// routing key AdminResolutionSignal must supply. A query reflects the workflow's already-committed
+// deterministic state (NodeInfo.ActivationID is set as part of the same workflow task that parks
+// the node), so unlike reading AdminParkActivity's own payload, this isn't a race against that
+// Activity's real, asynchronous dispatch.
+func parkedActivationID(t *testing.T, env *testsuite.TestWorkflowEnvironment, nodeID string) string {
+	t.Helper()
+	val, err := env.QueryWorkflow("GetStatus")
+	require.NoError(t, err)
+	var instance WorkflowInstance
+	require.NoError(t, val.Get(&instance))
+	return instance.NodeInfo[nodeID].ActivationID
+}
+
+// An admin tool reads the ActivationID from GetStatus (NodeInfo) and sends it back in
+// AdminResolutionSignal, so both must use the same JSON name.
+func TestAdminResolutionSignalUsesNodeInfoJSONNameForActivationID(t *testing.T) {
+	info, err := json.Marshal(NodeInfo{ActivationID: "a1"})
+	require.NoError(t, err)
+	sig, err := json.Marshal(AdminResolutionSignal{ActivationID: "a1"})
+	require.NoError(t, err)
+	require.Contains(t, string(info), `"step_id":"a1"`)
+	require.Contains(t, string(sig), `"step_id":"a1"`)
+}
+
 func TestApplyVariablesPatchIsDeterministicForOverlappingKeys(t *testing.T) {
 	// "a" is written first and "a.y" inside it. Applied in sorted order the parent always goes
 	// first, so both survive on every run.
@@ -85,13 +111,14 @@ func TestAdminCompleteResolvesInputMappingError(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionComplete,
-			Reason: "supplying the missing value directly",
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionComplete,
+			Reason:       "supplying the missing value directly",
 		})
 	}, time.Millisecond)
 
@@ -109,7 +136,7 @@ func TestAdminCompleteResolvesInputMappingError(t *testing.T) {
 	require.Empty(t, instance.NodeInfo["task"].LastError)
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestAdminParkNotifiesHostAppOnFreshExecution pins that parking a node actually invokes
@@ -127,13 +154,14 @@ func TestAdminParkNotifiesHostAppOnFreshExecution(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionComplete,
-			Reason: "supplying the missing value directly",
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionComplete,
+			Reason:       "supplying the missing value directly",
 		})
 	}, time.Millisecond)
 
@@ -143,6 +171,54 @@ func TestAdminParkNotifiesHostAppOnFreshExecution(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+// TestAdminParkNotificationCarriesCategoryAndMappings pins that AdminParkPayload gives the host
+// app the same park context NodeInfo carries — ParkCategory, InputMapping and OutputMapping —
+// not just Cause, so a handler (paging, logging, persistence) doesn't have to re-derive them.
+func TestAdminParkNotificationCarriesCategoryAndMappings(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+
+	var captured AdminParkPayload
+	env.OnActivity("AdminParkActivity", mock.Anything, mock.Anything).Return(
+		func(_ context.Context, payload AdminParkPayload) error {
+			captured = payload
+			return nil
+		}).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	var parkedID string
+	env.RegisterDelayedCallback(func() {
+		parkedID = parkedActivationID(t, env, "task")
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "task",
+			ActivationID: parkedID,
+			Action:       AdminActionComplete,
+			Reason:       "supplying the missing value directly",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.Equal(t, ParkCategoryInputMapping, captured.ParkCategory)
+	require.Equal(t, map[string]string{"missing_global_var": "local_key"}, captured.InputMapping)
+	require.Empty(t, captured.OutputMapping)
+	require.Equal(t, parkedID, captured.ActivationID, "AdminParkPayload.ActivationID matches NodeInfo's")
 	env.AssertExpectations(t)
 }
 
@@ -171,13 +247,14 @@ func TestAdminParkNotificationFailureRecordedBeforeWorkflowCompletes(t *testing.
 			time.Sleep(300 * time.Millisecond)
 			return errors.New("notification sink unavailable")
 		}).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionComplete,
-			Reason: "racing the slow notification",
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionComplete,
+			Reason:       "racing the slow notification",
 		})
 	}, time.Millisecond)
 
@@ -216,13 +293,14 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "task",
+			ActivationID:           parkedActivationID(t, env, "task"),
 			Action:                 AdminActionRetry,
 			WorkflowVariablesPatch: map[string]any{"missing_global_var": "fixed-value"},
 		})
@@ -258,9 +336,9 @@ func TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Confirm the parked LastError explicitly warns that the Activity already ran, before
 	// resolving it. Because this node parks on an *output* mapping error, ExecuteTaskActivity
@@ -268,6 +346,7 @@ func TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	// actually complete in the test environment before we query — same timing characteristic
 	// seen elsewhere in this suite. (A 1ms query races the Activity and reads an empty
 	// LastError.)
+	var parkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
 		require.NoError(t, err)
@@ -275,11 +354,13 @@ func TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 		require.NoError(t, val.Get(&instance))
 		require.Contains(t, instance.NodeInfo["task"].LastError, "already completed successfully")
 		require.Contains(t, instance.NodeInfo["task"].LastError, "use COMPLETE instead of RETRY")
+		parkedID = instance.NodeInfo["task"].ActivationID
 	}, 100*time.Millisecond)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "task",
+			ActivationID:           parkedID,
 			Action:                 AdminActionComplete,
 			WorkflowVariablesPatch: map[string]any{"global_user_phone": "555-1234"},
 		})
@@ -317,23 +398,25 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "first"}, nil).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"attempt": "second"}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Retry without fixing anything — the Activity runs again, output mapping fails again.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionRetry,
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionRetry,
 		})
 	}, time.Millisecond)
 
 	// Confirm the re-park reflects this latest attempt, not a stale leftover from the first.
 	// (100ms gives the second Activity invocation time to actually complete in the test
 	// environment before we query — same timing characteristic seen elsewhere in this suite.)
+	var secondParkID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
 		require.NoError(t, err)
@@ -342,11 +425,13 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["task"].Status)
 		require.Equal(t, "second", instance.NodeInfo["task"].CachedTaskResult["attempt"])
 		require.Contains(t, instance.NodeInfo["task"].LastError, "already completed successfully")
+		secondParkID = instance.NodeInfo["task"].ActivationID
 	}, 100*time.Millisecond)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "task",
+			ActivationID:           secondParkID,
 			Action:                 AdminActionComplete,
 			WorkflowVariablesPatch: map[string]any{"global_user_phone": "555-1234"},
 		})
@@ -372,12 +457,13 @@ func TestAdminCompleteWithEmptyPatchContinuesPastParkedNode(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionComplete,
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionComplete,
 		})
 	}, time.Millisecond)
 
@@ -398,11 +484,11 @@ func TestAdminCompleteWithEmptyPatchContinuesPastParkedNode(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
-// TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps verifies that a resolution
-// signal targeting a NodeID nobody is waiting on, and a signal with a garbage Action, are
+// TestAdminResolutionUnknownActivationIDAndMalformedActionAreNoOps verifies that a resolution
+// signal targeting an ActivationID nobody is waiting on, and a signal with a garbage Action, are
 // both silently ignored rather than failing the node — only a deliberate, well-formed
 // resolution should ever move a parked node forward.
-func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
+func TestAdminResolutionUnknownActivationIDAndMalformedActionAreNoOps(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 
@@ -416,20 +502,23 @@ func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "no-such-node",
-			Action: AdminActionAbort,
+			NodeID:       "no-such-node",
+			ActivationID: "no-such-activation-id",
+			Action:       AdminActionAbort,
 		})
 	}, time.Millisecond)
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: "NOT_A_REAL_ACTION",
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       "NOT_A_REAL_ACTION",
 		})
 	}, 2*time.Millisecond)
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task",
-			Action: AdminActionAbort,
+			NodeID:       "task",
+			ActivationID: parkedActivationID(t, env, "task"),
+			Action:       AdminActionAbort,
 		})
 	}, 3*time.Millisecond)
 
@@ -440,6 +529,84 @@ func TestAdminResolutionUnknownNodeIDAndMalformedActionAreNoOps(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
 	require.Contains(t, env.GetWorkflowError().Error(), "input mapping error")
+}
+
+// TestStaleAdminResolutionSignalCannotResolveALaterParkOfTheSameNode is the regression test for
+// the bug ActivationID-based routing fixes: when resolution signals were matched by plain NodeID,
+// a signal meant for an earlier parking of a node could incorrectly resolve a later, unrelated
+// parking of that same node (e.g. after a Retry that fails again). A Retry mints a new
+// ActivationID before re-dispatching, so the node's second parking has a different ActivationID
+// than its first — proving a signal echoing the stale, first one is dropped rather than matched to
+// the second.
+func TestStaleAdminResolutionSignalCannotResolveALaterParkOfTheSameNode(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(missingInputMappingKeyWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	var firstParkID, secondParkID string
+
+	// Retry without fixing anything: the input mapping error recurs, so the node re-parks under a
+	// new ActivationID.
+	env.RegisterDelayedCallback(func() {
+		firstParkID = parkedActivationID(t, env, "task")
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "task",
+			ActivationID: firstParkID,
+			Action:       AdminActionRetry,
+		})
+	}, time.Millisecond)
+
+	// A stale signal echoing the FIRST park's ActivationID, arriving after the node has already
+	// re-parked under a second one, must be dropped rather than resolve the second parking.
+	env.RegisterDelayedCallback(func() {
+		secondParkID = parkedActivationID(t, env, "task")
+		require.NotEqual(t, firstParkID, secondParkID, "the retry's re-park must mint a new ActivationID")
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "task",
+			ActivationID: firstParkID,
+			Action:       AdminActionAbort,
+		})
+	}, 2*time.Millisecond)
+
+	// Confirm the stale signal changed nothing: the node is still parked, not aborted.
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["task"].Status,
+			"a stale signal for an earlier parking must not resolve the current one")
+	}, 3*time.Millisecond)
+
+	// The current ActivationID does resolve it.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "task",
+			ActivationID: secondParkID,
+			Action:       AdminActionComplete,
+			Reason:       "supplying the missing value directly",
+		})
+	}, 4*time.Millisecond)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"global_user_email": "user@example.com",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var instance WorkflowInstance
+	require.NoError(t, env.GetWorkflowResult(&instance))
+	require.Equal(t, StatusCompleted, instance.Status)
+	require.Equal(t, NodeStatusCompleted, instance.NodeInfo["task"].Status)
 }
 
 const gatewayParkWorkflowJSON = `
@@ -475,15 +642,21 @@ func TestAdminCompleteRejectedForParkedGatewayNode(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	// Rejecting a GATEWAY's Complete just continues parkNodeForAdmin's loop without re-minting, so
+	// the node re-parks under the same ActivationID each time — one query is enough for every signal.
+	var gatewayParkID string
 
 	// Complete without a patch: rejected, node stays parked.
 	env.RegisterDelayedCallback(func() {
+		gatewayParkID = parkedActivationID(t, env, "gateway")
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "gateway",
-			Action: AdminActionComplete,
+			NodeID:       "gateway",
+			ActivationID: gatewayParkID,
+			Action:       AdminActionComplete,
 		})
 	}, time.Millisecond)
 
@@ -491,6 +664,7 @@ func TestAdminCompleteRejectedForParkedGatewayNode(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "gateway",
+			ActivationID:           gatewayParkID,
 			Action:                 AdminActionComplete,
 			WorkflowVariablesPatch: map[string]any{"decision": "pass"},
 		})
@@ -510,6 +684,7 @@ func TestAdminCompleteRejectedForParkedGatewayNode(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "gateway",
+			ActivationID:           gatewayParkID,
 			Action:                 AdminActionRetry,
 			WorkflowVariablesPatch: map[string]any{"decision": "pass"},
 		})
@@ -550,13 +725,14 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil).Once()
 
 	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
 
+	var parkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(branchWorkflowID, "GetStatus")
 		require.NoError(t, err)
@@ -564,12 +740,14 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 		require.NoError(t, val.Get(&instance))
 
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["task_a"].Status)
+		parkedID = instance.NodeInfo["task_a"].ActivationID
 	}, time.Second)
 
 	env.RegisterDelayedCallback(func() {
 		require.NoError(t, env.SignalWorkflowByID(branchWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "task_a",
-			Action: AdminActionAbort,
+			NodeID:       "task_a",
+			ActivationID: parkedID,
+			Action:       AdminActionAbort,
 		}))
 	}, 2*time.Second)
 
@@ -580,7 +758,7 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	require.Contains(t, env.GetWorkflowError().Error(), "boom")
 
 	env.AssertExpectations(t)
-	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, "ExecuteTaskActivity", mock.Anything, "TASK_C", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestAdminCompleteResolvesWaitForSignalOutputMappingError verifies that when a
@@ -622,7 +800,7 @@ func TestAdminCompleteResolvesWaitForSignalOutputMappingError(t *testing.T) {
 	acts := &Activities{}
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// 1. Send the signal, but omit the "missing_key" key to trigger output mapping failure
 	env.RegisterDelayedCallback(func() {
@@ -632,6 +810,7 @@ func TestAdminCompleteResolvesWaitForSignalOutputMappingError(t *testing.T) {
 	}, time.Millisecond)
 
 	// 2. Query to verify status is parked and CachedTaskResult holds the signal payload
+	var parkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflow("GetStatus")
 		require.NoError(t, err)
@@ -640,12 +819,14 @@ func TestAdminCompleteResolvesWaitForSignalOutputMappingError(t *testing.T) {
 		require.Equal(t, NodeStatusAwaitingAdmin, instance.NodeInfo["wait"].Status)
 		require.Contains(t, instance.NodeInfo["wait"].LastError, "output mapping error")
 		require.Equal(t, "value", instance.NodeInfo["wait"].CachedTaskResult["incorrect_key"])
+		parkedID = instance.NodeInfo["wait"].ActivationID
 	}, 2*time.Millisecond)
 
 	// 3. Resolve the parked node with AdminActionComplete
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
 			NodeID:                 "wait",
+			ActivationID:           parkedID,
 			Action:                 AdminActionComplete,
 			WorkflowVariablesPatch: map[string]any{"global_target": "resolved-value"},
 		})

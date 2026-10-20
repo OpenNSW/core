@@ -8,26 +8,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
-	"github.com/OpenNSW/core/uiprojector"
 )
-
-// stubTemplates resolves every template id to the same markdown body, so the
-// tests below exercise visibility and handle merging rather than projection.
-type stubTemplates struct{}
-
-func (stubTemplates) GetTemplate(_ context.Context, _ string) ([]byte, error) {
-	return []byte(`{"template":"body"}`), nil
-}
 
 func newTestAssembler(t *testing.T) *ZoneViewAssembler {
 	t.Helper()
-	asm, err := uiprojector.NewAssembler(stubTemplates{}, uiprojector.DefaultProjectors())
-	if err != nil {
-		t.Fatalf("build uiprojector assembler: %v", err)
-	}
-	return NewZoneViewAssembler(NewTaskRenderer(asm))
+	return NewZoneViewAssembler(newTestRenderer(t))
 }
 
 // claimGatedConfig is the shape a per-role task template uses: one section per
@@ -37,11 +25,13 @@ const claimGatedConfig = `{
   "sections": {
     "status_message": {
       "templateId": "waiting",
+      "title": "Status",
       "projector": "MARKDOWN",
       "visibleWhen": { "states": ["PENDING_USER"], "requireClaim": "role:trader" }
     },
     "workspace": {
       "templateId": "form",
+      "title": "Workspace",
       "projector": "MARKDOWN",
       "visibleWhen": { "states": ["PENDING_USER"], "requireClaim": "role:cha" },
       "handles": [{ "command": "submit", "label": "Submit", "element": "primary_action" }]
@@ -59,39 +49,27 @@ func pendingRecord(config string) store.TaskRecord {
 	}
 }
 
-func decodeView(t *testing.T, zv ZoneView) map[string]EnrichedComponent {
-	t.Helper()
-	var view map[string]EnrichedComponent
-	if err := json.Unmarshal(zv.View, &view); err != nil {
-		t.Fatalf("decode view: %v", err)
-	}
-	return view
-}
-
 // A denied claim must hide the section *and* the handles it claims: the handles
-// only reach the wire through a slot the projector emitted.
+// only reach the wire through a section the projector emitted.
 func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 	a := newTestAssembler(t)
 
 	tests := []struct {
 		name        string
 		claims      map[string]bool
-		wantSlot    string
-		wantAbsent  string
+		wantID      string
 		wantHandles int
 	}{
 		{
 			name:        "cha sees the workspace with its submit handle",
 			claims:      map[string]bool{"role:trader": false, "role:cha": true},
-			wantSlot:    "workspace",
-			wantAbsent:  "status_message",
+			wantID:      "workspace",
 			wantHandles: 1,
 		},
 		{
 			name:        "trader sees only the notice, with no handles",
 			claims:      map[string]bool{"role:trader": true, "role:cha": false},
-			wantSlot:    "status_message",
-			wantAbsent:  "workspace",
+			wantID:      "status_message",
 			wantHandles: 0,
 		},
 	}
@@ -102,19 +80,15 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Assemble: %v", err)
 			}
-			view := decodeView(t, zv)
+			view := decodeView(t, zv.View)
 			if len(view) != 1 {
-				t.Fatalf("got %d slots %v, want exactly 1", len(view), view)
+				t.Fatalf("got %d components %v, want exactly 1", len(view), view)
 			}
-			got, ok := view[tt.wantSlot]
-			if !ok {
-				t.Fatalf("slot %q missing from view %v", tt.wantSlot, view)
+			if view[0].ID != tt.wantID {
+				t.Errorf("got component %q, want %q", view[0].ID, tt.wantID)
 			}
-			if _, ok := view[tt.wantAbsent]; ok {
-				t.Errorf("slot %q must not be rendered for these claims", tt.wantAbsent)
-			}
-			if len(got.Handles) != tt.wantHandles {
-				t.Errorf("got %d handles, want %d", len(got.Handles), tt.wantHandles)
+			if len(view[0].Handles) != tt.wantHandles {
+				t.Errorf("got %d handles, want %d", len(view[0].Handles), tt.wantHandles)
 			}
 		})
 	}
@@ -144,6 +118,7 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	  "sections": {
 	    "workspace": {
 	      "templateId": "form",
+	      "title": "Workspace",
 	      "projector": "MARKDOWN",
 	      "visibleWhen": { "states": ["PENDING_USER"] },
 	      "handles": [{ "command": "submit", "label": "Submit" }]
@@ -156,11 +131,72 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-	view := decodeView(t, zv)
-	if len(view) != 1 || len(view["workspace"].Handles) != 1 {
+	view := decodeView(t, zv.View)
+	if len(view) != 1 || len(view[0].Handles) != 1 {
 		t.Fatalf("got view %v, want workspace with 1 handle", view)
 	}
 	if zv.State != "PENDING_USER" || zv.TaskID != "task-1" {
 		t.Errorf("got %+v, want the record's task id and state carried through", zv)
+	}
+}
+
+// The view carries the step to act on and the version, and offers no action while the task is
+// ADVANCING: the submission was accepted and a second one would only be rejected as stale.
+func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testing.T) {
+	a := newTestAssembler(t)
+	claims := map[string]bool{"role:trader": false, "role:cha": true}
+
+	pending := pendingRecord(claimGatedConfig)
+	pending.ActiveStepID, pending.Seq = "0a0a0a0a-0000-4000-8000-00000000000a", 4
+	zv, err := a.Assemble(context.Background(), pending, claims)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if zv.StepID != pending.ActiveStepID || zv.Version != 4 {
+		t.Errorf("view step/version = (%q, %d), want (%q, 4)", zv.StepID, zv.Version, pending.ActiveStepID)
+	}
+
+	advancing := pending
+	advancing.State, advancing.Seq = store.StateAdvancing, 5
+	zv, err = a.Assemble(context.Background(), advancing, claims)
+	if err != nil {
+		t.Fatalf("Assemble while ADVANCING: %v", err)
+	}
+	if zv.State != store.StateAdvancing || zv.Version != 5 {
+		t.Errorf("view state/version = (%q, %d), want (ADVANCING, 5)", zv.State, zv.Version)
+	}
+	for _, c := range decodeView(t, zv.View) {
+		if len(c.Handles) != 0 {
+			t.Errorf("slot %q offers %d handles while ADVANCING, want none", c.ID, len(c.Handles))
+		}
+	}
+}
+
+// The view carries the claim the record holds, and leaves it out of the JSON when there is none.
+func TestAssemble_CarriesTheClaim(t *testing.T) {
+	a := newTestAssembler(t)
+	claims := map[string]bool{"role:trader": false, "role:cha": true}
+
+	zv, err := a.Assemble(context.Background(), pendingRecord(claimGatedConfig), claims)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	encoded, err := json.Marshal(zv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"claimed_by"`) || strings.Contains(string(encoded), `"claimed_at"`) {
+		t.Errorf("unclaimed view carries a claim: %s", encoded)
+	}
+
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	claimed := pendingRecord(claimGatedConfig)
+	claimed.ClaimedBy, claimed.ClaimedAt = "user-a", &at
+	zv, err = a.Assemble(context.Background(), claimed, claims)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if zv.ClaimedBy != "user-a" || zv.ClaimedAt == nil || !zv.ClaimedAt.Equal(at) {
+		t.Errorf("view claim = (%q, %v), want (user-a, %v)", zv.ClaimedBy, zv.ClaimedAt, at)
 	}
 }

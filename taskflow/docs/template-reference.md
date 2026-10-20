@@ -1,6 +1,6 @@
 # Template Reference
 
-JSON shapes for everything you register with the orchestrator: task templates, subtask templates, workflow definitions, and render configs.
+JSON shapes for everything you register with the orchestrator: task templates, step templates, workflow definitions, and render configs.
 
 > Prerequisite: read [`architecture.md`](architecture.md). This document is the schema reference; the architecture doc explains what each piece is *for*.
 
@@ -11,7 +11,7 @@ JSON shapes for everything you register with the orchestrator: task templates, s
 | Kind                | Go type                                                   | Resolves via                                         | Used at                                     |
 |---------------------|-----------------------------------------------------------|------------------------------------------------------|---------------------------------------------|
 | Task template       | `orchestrator.TaskTemplate`                               | `payload.TaskTemplateID` (from parent workflow node) | `StartTask`                                 |
-| SubTask template    | `orchestrator.SubTaskTemplate`                            | `payload.TaskTemplateID` (from task workflow node)   | `StartSubTask`                              |
+| Step template    | `orchestrator.StepTemplate`                            | `payload.TaskTemplateID` (from task workflow node)   | `StartTaskStep`                              |
 | Workflow definition | `engine.WorkflowDefinition` (from `go-temporal-workflow`) | `TaskTemplate.WorkflowID`                            | `StartTask`                                 |
 | Render config       | raw JSON                                                  | `TaskTemplate.RenderConfigID`                        | `StartTask` (snapshotted onto `TaskRecord`) |
 
@@ -58,16 +58,18 @@ The parent workflow refers to this task by `id`. When the parent hits a TASK nod
 
 ---
 
-## SubTask template
+## Step template
 
 The definition of a single interaction step *inside* a task workflow.
 
 ```go
-type SubTaskTemplate struct {
+type StepTemplate struct {
     ID               string          `json:"id"`
-    TaskType         string          `json:"task_type"`
+    PluginType       string          `json:"task_type"` // plugin routing key; unrelated to TaskTemplate.Type
     PluginProperties json.RawMessage `json:"plugin_properties"`
     OutputNamespace  string          `json:"output_namespace,omitempty"`
+    Extensions       []ExtensionConfig `json:"extensions,omitempty"`
+    Draft            *DraftConfig    `json:"draft,omitempty"`
 }
 ```
 
@@ -76,7 +78,24 @@ type SubTaskTemplate struct {
 | `id`                | yes                     | Unique within the registry. Matches `payload.TaskTemplateID` from the task workflow node.                                                                                                             |
 | `task_type`         | yes                     | **Plugin lookup key.** Must match the string used in `pluginsReg.Register(taskType, plugin)`.                                                                                                         |
 | `plugin_properties` | varies                  | Free-form JSON passed verbatim to the plugin's `Execute`. Shape is owned by the plugin.                                                                                                               |
-| `output_namespace`  | for submission subtasks | Top-level slot in `TaskRecord.Data` where `CompleteTaskStep` payloads are written. Required for any subtask that accepts an external submission. Without it, submitted payloads are dropped (logged). |
+| `output_namespace`  | for submission steps | Top-level slot in `TaskRecord.Data` where `CompleteTaskStep` payloads are written. Required for any step that accepts an external submission. Without it, submitted payloads are dropped (logged). |
+| `draft`             | no                      | `{"command": "save_as_draft"}` lets `SaveDraft` store partial input for the step without completing it (see below). Needs `output_namespace`; the template fails to load otherwise. |
+
+### Drafts
+
+A step with `draft` accepts `SaveDraft(ctx, taskID, stepID, payload)`. The payload replaces the step's `output_namespace` slot of the task data, as a submission does, but the step is not completed: the workflow is not called, and the step ID, state and version do not change. The next render shows the draft, a submission replaces it, and the next step starts from its mapped inputs, so a draft never reaches the workflow. Because the workflow never sees a draft, the step's `output_mapping` can mark its outputs required.
+
+`draft.command` is the command the draft is authorized as: the `PRE_RESUME` extensions run with it as `__command`, whatever the caller sent, so an authz rule names it like any other command (`"PENDING_USER": {"save_as_draft": [...]}`). `POST_RESUME` extensions do not run for a draft.
+
+```json
+{
+  "id": "apply--user-input",
+  "task_type": "USER_INPUT",
+  "output_namespace": "userform",
+  "plugin_properties": {},
+  "draft": { "command": "save_as_draft" }
+}
+```
 
 **Example** (`demo/templates/subtask_demo_generic_user_input.json`):
 
@@ -89,7 +108,7 @@ type SubTaskTemplate struct {
 }
 ```
 
-The plugin takes no configuration; `output_namespace` declares where submission payloads land — every `CompleteTaskStep` body for this subtask is written verbatim to `record.Data["userform"]`.
+The plugin takes no configuration; `output_namespace` declares where submission payloads land — every `CompleteTaskStep` body for this step is written verbatim to `record.Data["userform"]`.
 
 A more typical example:
 
@@ -104,19 +123,19 @@ A more typical example:
 }
 ```
 
-(No `output_namespace` here — this subtask runs synchronously inside the workflow and never receives a `CompleteTaskStep` call, so there's nothing to scope.)
+(No `output_namespace` here — this step runs synchronously inside the workflow and never receives a `CompleteTaskStep` call, so there's nothing to scope.)
 
 ### Why `output_namespace` exists
 
-`CompleteTaskStep` is the external entry point for resuming a parked subtask with a payload. Without a scoping rule, callers could write *any* top-level key to `record.Data` — including keys owned by previous subtasks or internal coordinates like `_task_id`. That's a data-integrity hazard.
+`CompleteTaskStep` is the external entry point for resuming a parked step with a payload. Without a scoping rule, callers could write *any* top-level key to `record.Data` — including keys owned by previous steps or internal coordinates like `_task_id`. That's a data-integrity hazard.
 
-So writes are confined: the active subtask's `output_namespace` is the *only* top-level key the payload may land in. The frontend submits the inner form object; the orchestrator stamps the slot. A misconfigured template (missing `output_namespace`) results in the payload being dropped with a warning log — the workflow still resumes, so a config mistake doesn't break a running task.
+So writes are confined: the active step's `output_namespace` is the *only* top-level key the payload may land in. The frontend submits the inner form object; the orchestrator stamps the slot. A misconfigured template (missing `output_namespace`) results in the payload being dropped with a warning log — the workflow still resumes, so a config mistake doesn't break a running task.
 
-The snapshot is stored on the `TaskRecord` (as `ActiveOutputNamespace`) at `StartSubTask` time, so subsequent `CompleteTaskStep` calls read it directly without re-resolving the registry.
+The snapshot is stored on the `TaskRecord` (as `ActiveOutputNamespace`) at `StartTaskStep` time, so subsequent `CompleteTaskStep` calls read it directly without re-resolving the registry.
 
 The plugin (`EMAIL` in this example) unmarshals `plugin_properties` into its own typed config — see [`plugin-author-guide.md`](plugin-author-guide.md) for that side.
 
-**Note** there is no `render_config_id` on a subtask template. Render configs are task-level — the same rendered view changes by `State`, and `State` is what plugins mutate.
+**Note** there is no `render_config_id` on a step template. Render configs are task-level — the same rendered view changes by `State`, and `State` is what plugins mutate.
 
 ---
 
@@ -127,8 +146,8 @@ Workflow definitions come from the [`go-temporal-workflow`](https://github.com/O
 A workflow is a graph of nodes connected by edges. Node types that matter for tasks:
 
 - **`START`** / **`END`** — entry / exit
-- **`TASK`** — in a *parent* workflow, this is what activates `StartTask`. In a *task* workflow, this is what activates `StartSubTask`. Carries a `task_template_id` referencing either a `TaskTemplate` or a `SubTaskTemplate`.
-- **`GATEWAY`** — branching. Several gateway types exist; **parallel and inclusive splits are rejected** by `StartTask` (see [`architecture.md`](architecture.md) on the no-parallel-subtasks constraint).
+- **`TASK`** — in a *parent* workflow, this is what activates `StartTask`. In a *task* workflow, this is what activates `StartTaskStep`. Carries a `task_template_id` referencing either a `TaskTemplate` or a `StepTemplate`.
+- **`GATEWAY`** — branching. Several gateway types exist; **parallel and inclusive splits are rejected** by `StartTask` (see [`architecture.md`](architecture.md) on the no-parallel-steps constraint).
 
 **Demo files:**
 
@@ -192,6 +211,50 @@ The `Type` strings (`"markdown"`, `"jsonforms"`, …) are conventions between yo
 
 The interface (`Renderer.Render(context.Context, json.RawMessage, Facts) (json.RawMessage, error)`) is deliberately open — write whatever fits your UI.
 
+### The `zoneview` renderer
+
+`renderer/zoneview.TaskRenderer` is a richer renderer backed by `uiprojector`. Its render config has three top-level blocks:
+
+```json
+{
+  "id": "cda-apply-coconut-cert-flow:render",
+  "sections": {
+    "feedback": {
+      "templateId": "cda-apply-coconut-cert--feedback",
+      "title": "Officer Feedback & Deficiencies",
+      "projector": "MARKDOWN",
+      "dataKey": "rejection_reason",
+      "visibleWhen": { "states": ["PENDING_USER"], "requireDataKey": "rejection_reason" }
+    },
+    "user_form": {
+      "templateId": "cda-apply-coconut-cert--user-form",
+      "title": "CDA Export Coconut Certificate Application",
+      "projector": "FORM",
+      "dataKey": "userform",
+      "handles": [
+        { "command": "submit", "label": "Submit Application", "element": "primary_action" }
+      ]
+    }
+  },
+  "layouts": {
+    "layout_1": ["feedback", "user_form"]
+  },
+  "states": {
+    "PENDING_USER": {
+      "order": { "$ref": "#/layouts/layout_1" },
+      "actions": [{ "command": "submit" }]
+    },
+    "COMPLETED": { "order": { "$ref": "#/layouts/layout_1" } }
+  }
+}
+```
+
+- **`sections`** — what can be shown. `visibleWhen` decides whether a section is visible for the current state, data and claims; `handles` are the buttons it offers.
+- **`layouts`** — named orderings. Each is a permutation of **all** section keys and expresses relative order only, never visibility. States that agree on the relative order of the sections they show can share one layout.
+- **`states`** — per state, `actions` lists the commands legal in it (a section's handle is sent only if its command is listed), and `order` references the layout to render in. The reference must have the form `#/layouts/<name>` and name a defined layout, or rendering fails.
+
+The rendered view is the layout filtered down to the visible sections. A visible section the layout doesn't list is rendered after the listed ones; a state without `order` renders its sections sorted by key. See the [frontend guide](frontend-guide.md#the-zoneview-convention) for the output shape.
+
 ### Snapshot semantics
 
 When `StartTask` runs, the render config's bytes are copied into `TaskRecord.RenderConfig`. **Subsequent edits to the registry don't affect existing tasks.** This is intentional:
@@ -199,7 +262,7 @@ When `StartTask` runs, the render config's bytes are copied into `TaskRecord.Ren
 - Audit: replaying a task months later renders the same view it did originally.
 - Migration safety: changing a render config doesn't break tasks already in flight.
 
-If you need to push a new config to existing tasks, you'd have to update `TaskRecord.RenderConfig` directly via `SaveTask` — there's no built-in API for that, and it's a deliberate friction.
+If you need to push a new config to existing tasks, you'd have to update `TaskRecord.RenderConfig` directly via `InitTask` — there's no built-in API for that, and it's a deliberate friction.
 
 ---
 
@@ -219,13 +282,13 @@ If you need to push a new config to existing tasks, you'd have to update `TaskRe
         │
         │ task_template_id: "demo_generic_user_input"
         ▼
-[SubTaskTemplate]
+[StepTemplate]
         ├── task_type: "USER_INPUT"                       ─► [Plugin registered as "USER_INPUT"]
         ├── plugin_properties: {...}                      ─► passed verbatim to plugin.Execute
         └── output_namespace: "userform"                  ─► CompleteTaskStep payload → record.Data["userform"]
 ```
 
-Two distinct "TaskTemplateID" namespaces — one for tasks, one for subtasks — both resolved through the same registry interface but via different methods (`GetTaskTemplate` vs `GetSubTaskTemplate`). Don't reuse an ID across the two; even though the registry stores them in separate maps, it'll trip up anyone reading the templates.
+Two distinct "TaskTemplateID" namespaces — one for tasks, one for steps — both resolved through the same registry interface but via different methods (`GetTaskTemplate` vs `GetStepTemplate`). Don't reuse an ID across the two; even though the registry stores them in separate maps, it'll trip up anyone reading the templates.
 
 ---
 
@@ -250,10 +313,10 @@ if err := loadTemplates(registry, "demo/templates"); err != nil {
 
 ## Validation tips
 
-The orchestrator does minimal validation — bad templates surface as runtime errors deep inside `StartTask`/`StartSubTask`. For a smoother authoring experience:
+The orchestrator does minimal validation — bad templates surface as runtime errors deep inside `StartTask`/`StartTaskStep`. For a smoother authoring experience:
 
 - **At load time**, verify every `TaskTemplate.WorkflowID` resolves, and every `RenderConfigID` resolves.
-- **At load time**, verify every `SubTaskTemplate.TaskType` has a registered plugin.
+- **At load time**, verify every `StepTemplate.PluginType` has a registered plugin.
 - **At test time**, run a smoke test that drives a happy-path workflow end-to-end (`demo/renderer_test.go` is an example).
 
 ---

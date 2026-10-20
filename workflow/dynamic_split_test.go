@@ -106,15 +106,15 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
 		"inspection_status": "APPROVED_PHYTO",
 	}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
 		"inspection_status": "APPROVED_HEALTH",
 	}, nil)
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -233,11 +233,11 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "simple_child_workflow").Return(childDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
 		"processed_status": "DONE_SUCCESS",
 	}, nil)
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -333,7 +333,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "failing_child_workflow").Return(childDef, nil)
 
 	// Mock Task Activity to fail
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything).Return(nil, errors.New("task failed intentionally"))
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("task failed intentionally"))
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -363,17 +363,23 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
 		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "m_fanout", branchID)
 		env.RegisterDelayedCallback(func() {
+			val, qerr := env.QueryWorkflowByID(childWorkflowID, "GetStatus")
+			s.Require().NoError(qerr)
+			var instance WorkflowInstance
+			s.Require().NoError(val.Get(&instance))
 			err := env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
-				NodeID: "c_task",
-				Action: AdminActionAbort,
+				NodeID:       "c_task",
+				ActivationID: instance.NodeInfo["c_task"].ActivationID,
+				Action:       AdminActionAbort,
 			})
 			s.NoError(err)
 		}, 15*time.Second)
 	}
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "m_fanout",
-			Action: AdminActionAbort,
+			NodeID:       "m_fanout",
+			ActivationID: parkedActivationID(s.T(), env, "m_fanout"),
+			Action:       AdminActionAbort,
 		})
 	}, 16*time.Second)
 
@@ -513,15 +519,15 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
 		"inspection_status": "APPROVED_CLEAN",
 	}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
 		"health_clearance": "PASSED_SECURE",
 	}, nil)
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -581,7 +587,7 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Reusable emit/wait template pair, parameterized per-branch via the iteration payload so
 	// the same two templates serve both concurrent groups.
@@ -787,8 +793,8 @@ func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
 	// Guard against concurrent appends under -race if multiple branches fire the hook concurrently.
 	var mu sync.Mutex
 	var completedIDs []string
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			mu.Lock()
 			completedIDs = append(completedIDs, workflowID)
 			mu.Unlock()
@@ -833,8 +839,8 @@ func (s *NSWEngineTestSuite) TestChildBranchCompletionHandlerErrorDoesNotHang() 
 
 	// The host recognizes only the top-level workflow; synthetic child IDs (which contain "--")
 	// return an error, as a real DB-backed completion handler keyed by workflow ID would.
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}

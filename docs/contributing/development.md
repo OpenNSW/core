@@ -108,7 +108,7 @@ core/
 ├── authn/                 # JWT validation and identity context injection
 ├── authz/                 # Scope-based authorization middleware
 ├── cors/                  # CORS HTTP middleware
-├── database/              # GORM/PostgreSQL connection factory
+├── database/              # database/sql connection factory
 ├── notification/          # Multi-channel notification router
 ├── pagination/            # Standard pagination querying
 ├── payment/               # Pluggable payment gateway orchestration

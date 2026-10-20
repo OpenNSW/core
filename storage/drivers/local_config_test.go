@@ -39,3 +39,22 @@ func TestLocalConfigValidateMissingPutSecret(t *testing.T) {
 		t.Fatalf("Validate() expected error for missing PutSecret")
 	}
 }
+
+func TestLocalConfigValidateRoutePrefix(t *testing.T) {
+	base := LocalConfig{BaseDir: "/tmp/uploads", PublicURL: "http://localhost:8080", PutSecret: "secret"}
+
+	for _, prefix := range []string{"", "/files", "/api/v2/storage"} {
+		cfg := base
+		cfg.RoutePrefix = prefix
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("RoutePrefix %q: unexpected error: %v", prefix, err)
+		}
+	}
+	for _, prefix := range []string{"files", "/files/", "/a//b", "/{key}"} {
+		cfg := base
+		cfg.RoutePrefix = prefix
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("RoutePrefix %q: expected an error", prefix)
+		}
+	}
+}

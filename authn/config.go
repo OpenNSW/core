@@ -13,11 +13,10 @@ import (
 // application config struct and populated generically (e.g. via
 // yaml.Unmarshal).
 type Config struct {
-	JWKSURL               string   `yaml:"jwksURL"`
-	Issuer                string   `yaml:"issuer"`
-	Audience              string   `yaml:"audience"`
-	ClientIDs             []string `yaml:"clientIDs"`
-	InsecureSkipTLSVerify bool     `yaml:"insecureSkipTLSVerify"`
+	JWKSURL               string `yaml:"jwksURL"`
+	Issuer                string `yaml:"issuer"`
+	Audience              string `yaml:"audience"`
+	InsecureSkipTLSVerify bool   `yaml:"insecureSkipTLSVerify"`
 
 	// UserClaims declares extra JWT claims (beyond authn's fixed schema, e.g.
 	// "email", "phone_number", "ouId", "ouHandle", "given_name") to extract
@@ -35,23 +34,19 @@ type Config struct {
 
 func (c Config) Validate() error {
 	if c.JWKSURL == "" {
-		return fmt.Errorf("AUTH_JWKS_URL is required")
+		return fmt.Errorf("jwksURL is required")
 	}
-	if err := validation.HTTPURL("AUTH_JWKS_URL", c.JWKSURL); err != nil {
+	if err := validation.HTTPURL("jwksURL", c.JWKSURL); err != nil {
 		return err
 	}
 	if c.Issuer == "" {
-		return fmt.Errorf("AUTH_ISSUER is required")
+		return fmt.Errorf("issuer is required")
 	}
-	if err := validation.HTTPURL("AUTH_ISSUER", c.Issuer); err != nil {
+	if err := validation.HTTPURL("issuer", c.Issuer); err != nil {
 		return err
 	}
 	if c.Audience == "" {
-		return fmt.Errorf("AUTH_AUDIENCE is required")
-	}
-
-	if len(c.ClientIDs) == 0 {
-		return fmt.Errorf("AUTH_CLIENT_IDS is required")
+		return fmt.Errorf("audience is required")
 	}
 
 	if err := validateRolesClaimName(c.rolesClaim()); err != nil {

@@ -42,7 +42,11 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 	ctx.Record.State = "QUEUED_EXTERNALLY"
 	slog.InfoContext(ctx.Context, "external_review: dispatching", "task_id", ctx.Record.TaskID, "url", cfg.ExternalURL)
 
-	if err := p.dispatcher(ctx.Context, cfg.ExternalURL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
+	token, err := CallbackToken(ctx.Record)
+	if err != nil {
+		return err
+	}
+	if err := p.dispatcher(ctx.Context, cfg.ExternalURL, token, ctx.Record.Data); err != nil {
 		return fmt.Errorf("external dispatch failed: %w", err)
 	}
 

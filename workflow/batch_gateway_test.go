@@ -69,8 +69,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 	}
 
 	// WorkflowCompletedActivity: top-level calls succeed, child calls (with "--") are ignored.
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -78,7 +78,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 		})
 
 	// load_items returns 3 items.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_ITEMS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"items": []any{
 				map[string]any{"commodity_id": "C1", "type": "food", "description": "Dried fish"},
@@ -88,15 +88,15 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Basic_TwoPartitions() {
 		}, nil).Once()
 
 	// food_inspect: called in the "food" child workflow, processes 2 items.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FOOD_INSPECTION", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FOOD_INSPECTION", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	// goods_inspect: called in the "goods" child workflow, processes 1 item.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "GOODS_INSPECTION", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "GOODS_INSPECTION", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	// issue_cert: called in the parent after join, sees all 3 items.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "ISSUE_CERTIFICATE", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "ISSUE_CERTIFICATE", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -155,15 +155,15 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_SingleItem() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
 			return nil
 		})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -223,10 +223,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_UnmatchedItemNoDefault_Fails() {
 	// Send an admin abort signal so the workflow fails instead of hanging in admin-park.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "unmatched-1"})
@@ -280,10 +281,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MissingItemID_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "missing-id-1"})
@@ -336,10 +338,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_NonStringItemID_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "non-string-id-1"})
@@ -391,10 +394,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_DuplicateItemID_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "dup-id-1"})
@@ -448,17 +452,17 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_DefaultEdgeCatchAll() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
 			return nil
 		})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FOOD_PROCESS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FOOD_PROCESS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "OTHER_PROCESS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "OTHER_PROCESS", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -518,8 +522,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_EmptyItems_SkipsToJoin() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FINAL", mock.Anything, mock.Anything).
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FINAL", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -903,8 +907,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -912,7 +916,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 		})
 
 	// load_consignment: 5 items — 3 visual, 2 lab.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_CONSIGNMENT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LOAD_CONSIGNMENT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"items": []any{
 				map[string]any{"id": "item-1", "requiresLabTest": false, "type": "visual"},
@@ -924,13 +928,13 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 		}, nil).Once()
 
 	// visual_inspection: runs for the 3 visual items.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_INSPECTION", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "VISUAL_INSPECTION", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	// lab_sampling: simulates a task that tests each item and writes labResult back.
 	// The activity returns "tested_items" which output_mapping writes to "_items".
 	// item-2 fails, item-4 passes.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_SAMPLING", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LAB_SAMPLING", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"tested_items": []any{
 				map[string]any{"id": "item-2", "requiresLabTest": true, "type": "lab", "labResult": "fail"},
@@ -939,9 +943,9 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 		}, nil)
 
 	// pass_through and supervisor_review at depth-2.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PASS_THROUGH", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PASS_THROUGH", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUPERVISOR_REVIEW", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "SUPERVISOR_REVIEW", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{
 			"reviewed_items": []any{
 				map[string]any{"id": "item-2", "requiresLabTest": true, "type": "lab", "labResult": "fail", "supervisorVerdict": "approved_with_conditions"},
@@ -949,7 +953,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_Depth2_PhytoConsignment() {
 		}, nil)
 
 	// issue_certificate: final step after all items merge.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "ISSUE_CERTIFICATE", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "ISSUE_CERTIFICATE", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -1033,17 +1037,17 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_EdgeConditionSeesWorkflowVars() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
 			return nil
 		})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "HEAVY", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "HEAVY", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LIGHT", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "LIGHT", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -1105,17 +1109,17 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ReplayDeterminism() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
 			return nil
 		})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -1141,15 +1145,15 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ReplayDeterminism() {
 	acts2 := &Activities{}
 	env2.RegisterActivityWithOptions(acts2.ExecuteTaskActivity, activity.RegisterOptions{Name: "ExecuteTaskActivity"})
 	env2.RegisterActivityWithOptions(acts2.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
-	env2.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env2.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found", workflowID)
 			}
 			return nil
 		})
-	env2.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_A", mock.Anything, mock.Anything).Return(map[string]any{}, nil)
-	env2.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_B", mock.Anything, mock.Anything).Return(map[string]any{}, nil)
+	env2.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_A", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{}, nil)
+	env2.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS_B", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{}, nil)
 	env2.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env2.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "replay-batch-2"})
 
@@ -1205,10 +1209,11 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_MaxDepthExceeded_Fails() {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
-	}, 0)
+	}, time.Millisecond)
 
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "max-depth-1"})
@@ -1260,8 +1265,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fail
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -1269,13 +1274,14 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsInvalidItemsType_Fail
 		})
 
 	// CORRUPT_TASK outputs a string instead of a slice for _items
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CORRUPT_TASK", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "CORRUPT_TASK", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"bad_items": "not-a-slice"}, nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1327,8 +1333,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -1336,13 +1342,14 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsItemMissingID_Fails()
 		})
 
 	// STRIP_ID_TASK outputs an item without an id field
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "STRIP_ID_TASK", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "STRIP_ID_TASK", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"items": []any{map[string]any{"name": "foo"}}}, nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1394,8 +1401,8 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsNonStringID_Fails() {
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
@@ -1403,13 +1410,14 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsNonStringID_Fails() {
 		})
 
 	// NUMERIC_ID_TASK rewrites the item with a numeric id.
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "NUMERIC_ID_TASK", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "NUMERIC_ID_TASK", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"items": []any{map[string]any{"id": 1000000, "name": "foo"}}}, nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1464,25 +1472,26 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildReturnsDuplicateItemIDAcross
 		},
 	}
 
-	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, workflowID string, _ map[string]any) error {
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, workflowID string, _ map[string]any, _ int64) error {
 			if strings.Contains(workflowID, "--") {
 				return fmt.Errorf("workflow %s not found in host registry", workflowID)
 			}
 			return nil
 		})
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{}, nil)
 
 	// TASK_B returns an item with id "item-a", which already belongs to partition A
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]any{"items": []any{map[string]any{"id": "item-a", "type": "b"}}}, nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow("AdminResolutionSignal", AdminResolutionSignal{
-			NodeID: "gw_split",
-			Action: AdminActionAbort,
+			NodeID:       "gw_split",
+			ActivationID: parkedActivationID(s.T(), env, "gw_split"),
+			Action:       AdminActionAbort,
 		})
 	}, time.Second)
 
@@ -1536,7 +1545,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 		},
 	}
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS", mock.Anything, mock.Anything).
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "PROCESS", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("inspection boom", "TaskFailure", nil)).Once()
 
 	parentWorkflowID := "batch-child-abort-1"
@@ -1546,6 +1555,7 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "gw_split", "e2")
 
 	// 1. Verify that the child's node is parked awaiting admin intervention
+	var childParkedID string
 	env.RegisterDelayedCallback(func() {
 		val, err := env.QueryWorkflowByID(childWorkflowID, "GetStatus")
 		s.Require().NoError(err)
@@ -1553,13 +1563,15 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 		s.Require().NoError(val.Get(&instance))
 		s.Require().NotNil(instance.NodeInfo["process"], "node 'process' must exist in child NodeInfo")
 		s.Equal(NodeStatusAwaitingAdmin, instance.NodeInfo["process"].Status)
+		childParkedID = instance.NodeInfo["process"].ActivationID
 	}, time.Second)
 
 	// 2. Resolve the child node with AdminActionAbort
 	env.RegisterDelayedCallback(func() {
 		s.NoError(env.SignalWorkflowByID(childWorkflowID, AdminResolutionSignalName, AdminResolutionSignal{
-			NodeID: "process",
-			Action: AdminActionAbort,
+			NodeID:       "process",
+			ActivationID: childParkedID,
+			Action:       AdminActionAbort,
 		}))
 	}, 2*time.Second)
 
@@ -1578,5 +1590,5 @@ func (s *BatchGatewayTestSuite) TestBatchSplit_ChildTaskAdminAbort_PropagatesWit
 	s.Contains(err.Error(), "inspection boom")
 
 	// Verify post_task was never invoked
-	env.AssertNotCalled(s.T(), "ExecuteTaskActivity", mock.Anything, "POST_TASK", mock.Anything, mock.Anything)
+	env.AssertNotCalled(s.T(), "ExecuteTaskActivity", mock.Anything, "POST_TASK", mock.Anything, mock.Anything, mock.Anything)
 }

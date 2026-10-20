@@ -7,10 +7,10 @@
 // # Overview
 //
 // Each ID format is defined as an ordered list of typed segments (literal, list,
-// date, sequence, random) that are concatenated at generation time. Formats are
-// grouped by issuer and identified by an idType, and are looked up from a
-// Registry by (issuer, idType). A format may contain at most one stateful
-// segment (sequence or random) — see "Stateful segment limit" below.
+// param, date, sequence, random) that are concatenated at generation time.
+// Formats are grouped by issuer and identified by an idType, and are looked up
+// from a Registry by (issuer, idType). A format may contain at most one
+// stateful segment (sequence or random) — see "Stateful segment limit" below.
 //
 // # Usage
 //
@@ -98,8 +98,8 @@ import (
 type Registry interface {
 	// Generate produces a new ID for the given issuer and idType.
 	//
-	// params supplies caller-provided values consumed by list, sequence, and
-	// random segments (e.g. map[string]string{"officeCode": "COL"}). Unused
+	// params supplies caller-provided values consumed by list, param, sequence,
+	// and random segments (e.g. map[string]string{"officeCode": "COL"}). Unused
 	// keys are silently ignored; missing required keys return ErrInvalidParam.
 	//
 	// Errors:
@@ -286,6 +286,9 @@ func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]
 		}
 		return newListSegment(sc, values)
 
+	case SegmentTypeParam:
+		return newParamSegment(sc)
+
 	case SegmentTypeDate:
 		return newDateSegment(sc)
 
@@ -296,7 +299,7 @@ func compileSegment(sc SegmentConfig, issuer, idType string, lists map[string][]
 		return newRandomSegment(sc, issuer, idType, randomStore)
 
 	default:
-		return nil, fmt.Errorf("unknown segment type %q; must be one of: %s, %s, %s, %s, %s",
-			sc.Type, SegmentTypeLiteral, SegmentTypeList, SegmentTypeDate, SegmentTypeSequence, SegmentTypeRandom)
+		return nil, fmt.Errorf("unknown segment type %q; must be one of: %s, %s, %s, %s, %s, %s",
+			sc.Type, SegmentTypeLiteral, SegmentTypeList, SegmentTypeParam, SegmentTypeDate, SegmentTypeSequence, SegmentTypeRandom)
 	}
 }
