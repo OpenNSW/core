@@ -68,7 +68,8 @@ type SessionRequest struct {
 	CancelRedirectURL  string          `json:"cancel_redirect_url"`
 
 	// Payee is who the checkout pays, and PayeeMapping this gateway's ids for
-	// it, as resolved from the method's "payees" config.
+	// it, as resolved from the method's "payees" config. PayeeMapping is always
+	// a JSON object, left raw for the gateway to decode into its own type.
 	Payee        Payee           `json:"payee"`
 	PayeeMapping json.RawMessage `json:"payee_mapping"`
 
@@ -109,7 +110,9 @@ type ValidationTransaction struct {
 	Metadata        map[string]string `json:"metadata"`
 
 	// Payee is who the transaction pays, and PayeeMapping this gateway's ids
-	// for it, resolved from the method's current "payees" config.
+	// for it, resolved from the method's current "payees" config. PayeeMapping
+	// is always a JSON object, left raw for the gateway to decode into its own
+	// type.
 	Payee        Payee           `json:"payee"`
 	PayeeMapping json.RawMessage `json:"payee_mapping"`
 }
