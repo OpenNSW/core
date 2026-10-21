@@ -31,7 +31,9 @@ var ErrDraftNotEnabled = errors.New("step does not accept drafts")
 //  1. Pre-check, from the task row: stepID is the active step, and the step is showing (its state
 //     is none of STARTING_STEP, ADVANCING, COMPLETED).
 //  2. Pre-resume extensions (authz) run on deep copies, with the step's draft command as
-//     CommandVar, whatever the payload carried. Post-resume extensions never run for a draft.
+//     CommandVar, whatever the payload carried. Post-resume extensions never run for a draft. A
+//     TaskManager built WithRequiredPreResumeExtensions first refuses, with ErrStepNotGuarded, a
+//     step whose template does not declare every required one.
 //  3. The payload, without system keys, replaces the step's OutputNamespace slot of the task data,
 //     and nothing else. The namespace comes from the step template, never from the caller, so a
 //     draft cannot write over another step's data or internal keys.
@@ -41,8 +43,8 @@ var ErrDraftNotEnabled = errors.New("step does not accept drafts")
 // A submission that follows replaces the slot with what it carries, and the next step starts from
 // its mapped inputs, so a draft never reaches the workflow.
 //
-// Errors: ErrStepIDRequired, ErrTaskNotFound, ErrStaleStep, ErrDraftNotEnabled, or an extension's
-// error.
+// Errors: ErrStepIDRequired, ErrTaskNotFound, ErrStaleStep, ErrDraftNotEnabled, ErrStepNotGuarded,
+// or an extension's error.
 func (tm *TaskManager) SaveDraft(ctx context.Context, taskID, stepID string, payload map[string]any) error {
 	if stepID == "" {
 		return ErrStepIDRequired
@@ -68,6 +70,9 @@ func (tm *TaskManager) SaveDraft(ctx context.Context, taskID, stepID string, pay
 	// The template's parser guarantees a draft has a command and an output namespace.
 	if stepTemplate.Draft == nil {
 		return fmt.Errorf("%w: step template %q", ErrDraftNotEnabled, stepTemplate.ID)
+	}
+	if err := tm.checkRequiredPreResume(stepTemplate); err != nil {
+		return err
 	}
 
 	extPayload := deepcopy.Map(payload)
