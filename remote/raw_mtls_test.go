@@ -12,7 +12,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -129,20 +128,12 @@ func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
 	return writeClientCertPairInto(t, t.TempDir(), "test-nppo")
 }
 
-// writeTLSServices writes a services.json with a single service carrying a tls
-// block, and returns its path.
-func writeTLSServices(t *testing.T, url, certFile, keyFile string) string {
-	t.Helper()
-	body := fmt.Sprintf(
-		`{"version":"1.0","services":[{"id":"svc","url":%q,"tls":{"client_cert_file":%q,"client_key_file":%q}}]}`,
-		url, certFile, keyFile,
-	)
-	path := filepath.Join(t.TempDir(), "services.json")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	return path
+// tlsService returns a single service carrying a tls block.
+func tlsService(url, certFile, keyFile string) ServiceConfig {
+	return ServiceConfig{ID: "svc", URL: url, TLS: &TLSSettings{ClientCertFile: certFile, ClientKeyFile: keyFile}}
 }
 
-func TestManager_LoadServices_MTLSPresentsClientCertificate(t *testing.T) {
+func TestManager_SetServices_MTLSPresentsClientCertificate(t *testing.T) {
 	var gotClientCert string
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
@@ -157,7 +148,7 @@ func TestManager_LoadServices_MTLSPresentsClientCertificate(t *testing.T) {
 
 	certFile, keyFile := writeClientCertPair(t)
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(writeTLSServices(t, server.URL, certFile, keyFile)))
+	require.NoError(t, manager.SetServices(tlsService(server.URL, certFile, keyFile)))
 
 	// The production tls.Config trusts only system roots, so teach this test
 	// client to trust the httptest server's self-signed certificate.
@@ -175,7 +166,7 @@ func TestManager_LoadServices_MTLSPresentsClientCertificate(t *testing.T) {
 
 func TestManager_MissingCertFileFailsPerCallNotAtBoot(t *testing.T) {
 	// mTLS material is operator-supplied and may be absent (e.g. dev setups):
-	// loading the services must still succeed, and the failure must surface on
+	// setting the services must still succeed, and the failure must surface on
 	// first use of this service — at the handshake — and only for this service.
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -184,9 +175,9 @@ func TestManager_MissingCertFileFailsPerCallNotAtBoot(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 
-	path := writeTLSServices(t, server.URL, "/nonexistent/client.crt", "/nonexistent/client.key")
+	svc := tlsService(server.URL, "/nonexistent/client.crt", "/nonexistent/client.key")
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(path))
+	require.NoError(t, manager.SetServices(svc))
 
 	client, err := manager.GetClient("svc")
 	require.NoError(t, err, "a missing PEM must not fail the client build")
@@ -218,7 +209,7 @@ func TestManager_CertRotationPickedUpWithoutRestart(t *testing.T) {
 	certFile, keyFile := writeClientCertPairInto(t, dir, "before-rotation")
 
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(writeTLSServices(t, server.URL, certFile, keyFile)))
+	require.NoError(t, manager.SetServices(tlsService(server.URL, certFile, keyFile)))
 	client, err := manager.GetClient("svc")
 	require.NoError(t, err)
 	pool := x509.NewCertPool()
@@ -276,13 +267,9 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestManager_LoadServices_TLSRequiresBothFiles(t *testing.T) {
-	body := `{"version":"1.0","services":[{"id":"svc","url":"http://local","tls":{"client_cert_file":"/some.crt"}}]}`
-	path := filepath.Join(t.TempDir(), "services.json")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-
+func TestManager_SetServices_TLSRequiresBothFiles(t *testing.T) {
 	manager := NewManager()
-	err := manager.LoadServices(path)
+	err := manager.SetServices(ServiceConfig{ID: "svc", URL: "http://local", TLS: &TLSSettings{ClientCertFile: "/some.crt"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires both client_cert_file and client_key_file")
 }

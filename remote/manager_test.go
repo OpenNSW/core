@@ -5,48 +5,24 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+
+	"github.com/OpenNSW/core/remote/auth"
 )
 
-func TestManager_LoadServices_Errors(t *testing.T) {
+func TestManager_SetServices_Replaces(t *testing.T) {
 	manager := NewManager()
 
-	t.Run("file not found", func(t *testing.T) {
-		err := manager.LoadServices("non-existent.json")
-		assert.Error(t, err)
-	})
-
-	t.Run("invalid json", func(t *testing.T) {
-		tmpFile, _ := os.CreateTemp("", "invalid-*.json")
-		defer os.Remove(tmpFile.Name())
-		_, _ = tmpFile.WriteString(`{ "invalid": "json" `)
-		_ = tmpFile.Close()
-
-		err := manager.LoadServices(tmpFile.Name())
-		assert.Error(t, err)
-	})
-}
-
-func TestManager_LoadServices_Reload(t *testing.T) {
-	manager := NewManager()
-
-	// 1. Initial Load
-	config1 := `{"version":"1.0","services":[{"id":"s1","url":"http://s1"}]}`
-	tmpFile, _ := os.CreateTemp("", "conf-*.json")
-	defer os.Remove(tmpFile.Name())
-	_, _ = tmpFile.WriteString(config1)
-	_ = tmpFile.Close()
-
-	err := manager.LoadServices(tmpFile.Name())
-	assert.NoError(t, err)
+	// 1. Initial set
+	require.NoError(t, manager.SetServices(ServiceConfig{ID: "s1", URL: "http://s1"}))
 	assert.Contains(t, manager.ListServices(), "s1")
 
 	// Warm up cache
@@ -55,12 +31,8 @@ func TestManager_LoadServices_Reload(t *testing.T) {
 	assert.Len(t, manager.clients, 1)
 	manager.mu.RUnlock()
 
-	// 2. Reload with different config
-	config2 := `{"version":"2.0","services":[{"id":"s2","url":"http://s2"}]}`
-	_ = os.WriteFile(tmpFile.Name(), []byte(config2), 0644)
-
-	err = manager.LoadServices(tmpFile.Name())
-	assert.NoError(t, err)
+	// 2. Replace with a different set
+	require.NoError(t, manager.SetServices(ServiceConfig{ID: "s2", URL: "http://s2"}))
 
 	// Verify old service is gone and cache is wiped
 	assert.NotContains(t, manager.ListServices(), "s1")
@@ -70,33 +42,71 @@ func TestManager_LoadServices_Reload(t *testing.T) {
 	manager.mu.RUnlock()
 }
 
-func TestManager_LoadServices_AttachesAuthenticator(t *testing.T) {
-	// A service with valid auth loads, and its authenticator is attached to the
+func TestManager_SetServices_AttachesAuthenticator(t *testing.T) {
+	// A service with valid auth is set, and its authenticator is attached to the
 	// client built by GetClient. (The auth-type matrix itself is covered by
 	// auth.Build's tests.)
-	body := `{"version":"1.0","services":[{"id":"svc","url":"http://local",` +
-		`"auth":{"type":"bearer","options":{"token":"my-token"}}}]}`
-	path := filepath.Join(t.TempDir(), "services.json")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(path))
+	require.NoError(t, manager.SetServices(ServiceConfig{
+		ID:   "svc",
+		URL:  "http://local",
+		Auth: &auth.Config{Type: auth.TypeBearer, Bearer: &auth.BearerConfig{Token: "my-token"}},
+	}))
 
 	client, err := manager.GetClient("svc")
 	require.NoError(t, err)
 	assert.NotNil(t, client.authenticator)
 }
 
-func TestManager_LoadServices_UnsupportedAuthType(t *testing.T) {
-	body := `{"version":"1.0","services":[{"id":"svc","url":"http://local",` +
-		`"auth":{"type":"biometric","options":{}}}]}`
-	path := filepath.Join(t.TempDir(), "services.json")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-
+func TestManager_SetServices_UnsupportedAuthType(t *testing.T) {
 	manager := NewManager()
-	err := manager.LoadServices(path)
+	err := manager.SetServices(ServiceConfig{ID: "svc", URL: "http://local", Auth: &auth.Config{Type: "biometric"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported auth type")
+}
+
+func TestServiceConfig_DecodesFromJSONAndYAML(t *testing.T) {
+	// The application owns where its configuration lives; the same services
+	// written in either format decode to the same []ServiceConfig.
+	const jsonDoc = `{"services": [{
+		"id": "npqs-api",
+		"url": "https://npqs.example/api",
+		"timeout": "30s",
+		"auth": {"type": "bearer", "bearer": {"token": "env:NPQS_TOKEN"}},
+		"tls": {"client_cert_file": "/certs/client.crt", "client_key_file": "/certs/client.key"}
+	}]}`
+	const yamlDoc = `
+services:
+  - id: npqs-api
+    url: https://npqs.example/api
+    timeout: 30s
+    auth:
+      type: bearer
+      bearer:
+        token: env:NPQS_TOKEN
+    tls:
+      clientCertFile: /certs/client.crt
+      clientKeyFile: /certs/client.key
+`
+	want := []ServiceConfig{{
+		ID:      "npqs-api",
+		URL:     "https://npqs.example/api",
+		Timeout: "30s",
+		Auth:    &auth.Config{Type: auth.TypeBearer, Bearer: &auth.BearerConfig{Token: "env:NPQS_TOKEN"}},
+		TLS:     &TLSSettings{ClientCertFile: "/certs/client.crt", ClientKeyFile: "/certs/client.key"},
+	}}
+
+	type appConfig struct {
+		Services []ServiceConfig `json:"services" yaml:"services"`
+	}
+
+	var fromJSON appConfig
+	require.NoError(t, json.Unmarshal([]byte(jsonDoc), &fromJSON))
+	assert.Equal(t, want, fromJSON.Services)
+
+	var fromYAML appConfig
+	require.NoError(t, yaml.Unmarshal([]byte(yamlDoc), &fromYAML))
+	assert.Equal(t, want, fromYAML.Services)
 }
 
 func TestManager_GetClient_NoAuth(t *testing.T) {

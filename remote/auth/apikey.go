@@ -11,8 +11,8 @@ import (
 )
 
 type APIKeyConfig struct {
-	Key   string           `json:"key"`
-	Value secret.SecretRef `json:"value"`
+	Key   string           `json:"key" yaml:"key"`
+	Value secret.SecretRef `json:"value" yaml:"value"`
 }
 
 // build resolves the configured value (failing loud on an unresolvable reference)

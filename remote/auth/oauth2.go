@@ -31,8 +31,8 @@ var reservedEndpointParams = []string{"grant_type", "scope", "client_id", "clien
 //
 // It is url.Values so it drops straight into the token request (and into
 // golang.org/x/oauth2/clientcredentials.Config.EndpointParams) without conversion, but its
-// JSON accepts either a string or an array of strings per key, since a single value is the
-// normal case:
+// JSON and YAML accept either a string or an array of strings per key, since a single value
+// is the normal case:
 //
 //	"endpoint_params": { "resource": "https://api.example" }
 //	"endpoint_params": { "resource": ["https://a.example", "https://b.example"] }
@@ -101,6 +101,56 @@ func decodeEndpointParamValue(value json.RawMessage) ([]string, error) {
 	return multiple, nil
 }
 
+// UnmarshalYAML accepts the same shapes as UnmarshalJSON: a string or a sequence of
+// strings for each key, with null rejected at both levels. It uses the callback form
+// of the YAML unmarshaler interface, which the common YAML decoders all honour, so
+// this package depends on no YAML library.
+func (p *EndpointParams) UnmarshalYAML(unmarshal func(any) error) error {
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return fmt.Errorf("endpoint_params: %w", err)
+	}
+
+	out := make(EndpointParams, len(raw))
+	for key, value := range raw {
+		values, err := endpointParamValues(value)
+		if err != nil {
+			return fmt.Errorf("endpoint_params: %q %w", key, err)
+		}
+		out[key] = values
+	}
+
+	*p = out
+	return nil
+}
+
+// endpointParamValues reads one decoded YAML endpoint parameter value: a string, or a
+// sequence of strings. Other scalars (numbers, booleans) are rejected rather than
+// stringified, matching the JSON form.
+func endpointParamValues(value any) ([]string, error) {
+	switch v := value.(type) {
+	case nil:
+		return nil, fmt.Errorf("%w, not null", errNotStringOrArray)
+	case string:
+		return []string{v}, nil
+	case []any:
+		multiple := make([]string, 0, len(v))
+		for _, element := range v {
+			switch s := element.(type) {
+			case nil:
+				return nil, fmt.Errorf("%w, not null", errNotStringOrArray)
+			case string:
+				multiple = append(multiple, s)
+			default:
+				return nil, errNotStringOrArray
+			}
+		}
+		return multiple, nil
+	default:
+		return nil, errNotStringOrArray
+	}
+}
+
 // isJSONNull reports whether raw is the JSON null literal.
 func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
@@ -117,12 +167,12 @@ func (p EndpointParams) validate() error {
 }
 
 type OAuth2Config struct {
-	TokenURL              string           `json:"token_url"`
-	ClientID              string           `json:"client_id"`
-	ClientSecret          secret.SecretRef `json:"client_secret"`
-	Scopes                []string         `json:"scopes,omitempty"`
-	InsecureSkipTLSVerify bool             `json:"insecure_skip_tls_verify,omitempty"`
-	EndpointParams        EndpointParams   `json:"endpoint_params,omitempty"`
+	TokenURL              string           `json:"token_url" yaml:"tokenURL"`
+	ClientID              string           `json:"client_id" yaml:"clientID"`
+	ClientSecret          secret.SecretRef `json:"client_secret" yaml:"clientSecret"`
+	Scopes                []string         `json:"scopes,omitempty" yaml:"scopes,omitempty"`
+	InsecureSkipTLSVerify bool             `json:"insecure_skip_tls_verify,omitempty" yaml:"insecureSkipTLSVerify,omitempty"`
+	EndpointParams        EndpointParams   `json:"endpoint_params,omitempty" yaml:"endpointParams,omitempty"`
 }
 
 // build resolves the configured client secret (failing loud on an unresolvable

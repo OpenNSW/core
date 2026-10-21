@@ -16,14 +16,21 @@ type Authenticator interface {
 
 There are two ways to build an authenticator:
 
-1. **From config** — `auth.Build(authType, options)` parses the JSON options for a
-   strategy, resolves any secret references (see [Secret References](#secret-references))
-   once, and returns the authenticator. This is what the `remote` Manager uses when
-   it loads `services.json`. A reference that cannot be resolved is a loud error.
+1. **From config** — `auth.Build(cfg)` takes an `auth.Config`, resolves any secret
+   references (see [Secret References](#secret-references)) once, and returns the
+   authenticator. This is what the `remote` Manager uses for each service's `auth`
+   block. A reference that cannot be resolved is a loud error.
 
    ```go
-   authn, err := auth.Build("oauth2", optionsJSON)
+   authn, err := auth.Build(auth.Config{
+       Type:   auth.TypeBearer,
+       Bearer: &auth.BearerConfig{Token: "env:API_TOKEN"},
+   })
    ```
+
+   `Type` names the strategy, and the settings block of the same name — and only
+   that block — must be set. A missing block, or a stray block for another
+   strategy, is rejected rather than silently ignored.
 
 2. **Directly** — the `New*` constructors take already-resolved plain values. They
    are pure: no I/O, no error.
@@ -33,6 +40,10 @@ There are two ways to build an authenticator:
    auth.NewBearer("my-jwt-token")
    auth.NewOAuth2("https://identity.example.com/oauth2/token", "my-client-id", "my-client-secret", []string{"read", "write"})
    ```
+
+`auth.Config` and the per-strategy settings structs carry `json` (snake_case) and
+`yaml` (camelCase) tags, so they decode from either format; the package itself reads
+no files.
 
 ## Supported Strategies
 
@@ -57,32 +68,34 @@ reference (`env:NAME`, `file:/path`) that is resolved to its concrete value. The
 type lives in the standalone [`secret`](../../secret/README.md) module; see its
 README for the full scheme table and how to add a source.
 
-In `services.json`, a reference is written per field:
+A reference is written per field:
 
-```json
-{
-  "auth": {
-    "type": "oauth2",
-    "options": {
-      "token_url": "https://identity.example.com/oauth2/token",
-      "client_id": "my-client",
-      "client_secret": "env:CLIENT_SECRET",
-      "scopes": ["read", "write"]
-    }
-  }
-}
+```yaml
+auth:
+  type: oauth2
+  oauth2:
+    tokenURL: https://identity.example.com/oauth2/token
+    clientID: my-client
+    clientSecret: env:CLIENT_SECRET
+    scopes: [read, write]
 ```
 
-References are resolved **once, at startup** — when `Manager.LoadServices` loads the
-file, or via `auth.Build`. A missing env var or an unreadable/empty file is a
+References are resolved **once, at startup** — when `Manager.SetServices` is called,
+or via `auth.Build`. A missing env var or an unreadable/empty file is a
 **loud error** — a reference never silently resolves to the empty string.
 Resolution is not repeated per request; if a referenced value changes, restart the
 process to pick it up.
 
+When loading with [`configyaml`](../../configyaml/README.md), write secret fields as
+references (`env:NAME`), not `{{env:NAME}}` placeholders. A placeholder is expanded
+before decoding, and the resulting value is then resolved again as a reference — so a
+secret whose value happens to begin with `env:`, `file:` or `literal:` would be
+misread.
+
 ## Strategy Configuration
 
 ### APIKeyConfig
-Used when the authentication type is `"api_key"`.
+Used when the authentication type is `"api_key"`; set under `api_key` (json) / `apiKey` (yaml).
 
 | Field   | Type        | Description                                                                             |
 |:--------|:------------|:----------------------------------------------------------------------------------------|
@@ -90,23 +103,23 @@ Used when the authentication type is `"api_key"`.
 | `value` | `SecretRef` | The key value — a literal or a reference (see [Secret References](#secret-references)). |
 
 ### BearerConfig
-Used when the authentication type is `"bearer"`.
+Used when the authentication type is `"bearer"`; set under `bearer`.
 
-| Field   | Type     | Description                                                                                |
-|:--------|:---------|:-------------------------------------------------------------------------------------------|
+| Field   | Type        | Description                                                                                |
+|:--------|:------------|:-------------------------------------------------------------------------------------------|
 | `token` | `SecretRef` | The bearer token — a literal or a reference (see [Secret References](#secret-references)). |
 
 ### OAuth2Config
-Used when the authentication type is `"oauth2"`.
+Used when the authentication type is `"oauth2"`; set under `oauth2`.
 
-| Field           | Type       | Description                                                                                 |
-|:----------------|:-----------|:--------------------------------------------------------------------------------------------|
-| `token_url`     | `string`   | The OAuth2 token endpoint URL.                                                              |
-| `client_id`     | `string`   | The client identifier.                                                                      |
-| `client_secret` | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)). |
-| `scopes`        | `[]string` | Optional list of requested scopes.                                                          |
-| `insecure_skip_tls_verify` | `bool` | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`. |
-| `endpoint_params` | `object` | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings; `null` is rejected rather than sent as an empty parameter. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
+| Field (json / yaml)                                  | Type        | Description                                                                                                                                                                                                                                                                                                                                                                                          |
+|:-----------------------------------------------------|:------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `token_url` / `tokenURL`                             | `string`    | The OAuth2 token endpoint URL.                                                                                                                                                                                                                                                                                                                                                                       |
+| `client_id` / `clientID`                             | `string`    | The client identifier.                                                                                                                                                                                                                                                                                                                                                                               |
+| `client_secret` / `clientSecret`                     | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)).                                                                                                                                                                                                                                                                                                          |
+| `scopes`                                             | `[]string`  | Optional list of requested scopes.                                                                                                                                                                                                                                                                                                                                                                   |
+| `insecure_skip_tls_verify` / `insecureSkipTLSVerify` | `bool`      | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`.                                                                                                                                                                                                     |
+| `endpoint_params` / `endpointParams`                 | `object`    | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings; `null` is rejected rather than sent as an empty parameter. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
 
 ```json
 {

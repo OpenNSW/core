@@ -11,7 +11,7 @@ import (
 )
 
 type BearerConfig struct {
-	Token secret.SecretRef `json:"token"`
+	Token secret.SecretRef `json:"token" yaml:"token"`
 }
 
 type Bearer struct {
