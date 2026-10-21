@@ -130,7 +130,7 @@ See [`template-reference.md`](template-reference.md) for the JSON shapes.
 pluginsReg := plugins.NewRegistry()
 pluginsReg.Register("USER_INPUT", plugins.NewUserInputPlugin())
 pluginsReg.Register("EXTERNAL_REVIEW", plugins.NewExternalReviewPlugin(dispatcher))
-pluginsReg.Register("PAYMENT", plugins.NewPaymentPlugin(dispatcher))
+pluginsReg.Register("PAYMENT", plugins.NewPaymentPlugin(paymentService))
 pluginsReg.Register("FIRE_AND_FORGET", plugins.NewAPICallPlugin(dispatcher))
 ```
 
@@ -138,7 +138,32 @@ The key — `"USER_INPUT"`, `"PAYMENT"`, etc. — is the `task_type` field in th
 
 `Register` returns an error if you double-register the same key. The registry is concurrency-safe.
 
-If you don't want HTTP dispatch, pass `nil` and the built-in plugins fall back to `plugins.DefaultHTTPDispatcher`. For tests or fully local demos, pass your own `Dispatcher` (`func(ctx, url, taskID, payload) error`).
+If you don't want HTTP dispatch, pass `nil` and the dispatching plugins fall back to `plugins.DefaultHTTPDispatcher`. For tests or fully local demos, pass your own `Dispatcher` (`func(ctx, url, taskID, payload) error`).
+
+### The PAYMENT plugin
+
+`plugins.NewPaymentPlugin` opens a checkout through a `core/payment` service (any `CheckoutService`; a `payment.PaymentService` satisfies it), records the payment facts in the step's output namespace, moves the record to `PENDING_PAYMENT` and suspends. The payment service completes the step through its `TaskCompleter` when the payment settles. A step configures it with:
+
+```json
+"plugin_properties": {
+  "org_id": "org_a",
+  "service_id": "certificate_fee",
+  "service_name": "Certificate Fee",
+  "amount": "2000.00",
+  "currency": "LKR",
+  "expires_in": "24h",
+  "metadata": { "channel": "portal" }
+}
+```
+
+- `org_id` and `service_id` name the payee. Each payment method maps payees to its own account ids in its `payees` config (see the `payment` README); the step never carries a gateway's ids.
+- `amount` is charged unless the step has an `amount` input, which takes precedence. Either must be positive.
+- `expires_in` (a Go duration, default `24h`) is how long the checkout stays payable. `service_name` defaults to `"Payment"`. `metadata` is optional pass-through data.
+- The method is the `selected_method` input, which must be one of the methods that map the payee. With no selection, the only such method is used; with several, the step fails asking for one.
+
+The output namespace receives `reference_number`, `session_id`, `amount`, `currency`, `selected_method`, `checkout_url`, `instructions`, `flow_type`, `service_name`, `org_id` and `service_id`.
+
+A host that keeps more per-step settings in `plugin_properties`, such as the format of its payment reference, passes `plugins.WithMetadata(fn)`: `fn` gets the step's context and raw config and returns metadata to add to the checkout. A key the step's own `metadata` also sets fails the step.
 
 To write your own plugin, see [`plugin-author-guide.md`](plugin-author-guide.md).
 

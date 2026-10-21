@@ -3,6 +3,7 @@ module github.com/OpenNSW/core
 go 1.26.0
 
 require (
+	github.com/OpenNSW/core/payment v0.4.0
 	github.com/OpenNSW/core/remote v0.8.0
 	github.com/OpenNSW/core/shared v0.3.0
 	github.com/OpenNSW/core/uiprojector v0.3.0
@@ -13,6 +14,7 @@ require (
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
+	github.com/shopspring/decimal v1.5.0
 	github.com/stretchr/testify v1.12.1
 	go.temporal.io/api v1.63.7
 	go.temporal.io/sdk v1.49.0
