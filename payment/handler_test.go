@@ -26,7 +26,9 @@ type mockService struct {
 	webhookErr   error
 }
 
-func (m *mockService) ListAvailableMethods(context.Context) ([]GatewayInfo, error) { return nil, nil }
+func (m *mockService) ListAvailableMethods(context.Context, Payee) ([]GatewayInfo, error) {
+	return nil, nil
+}
 func (m *mockService) CreateCheckoutSession(context.Context, CreateCheckoutRequest) (*CreateCheckoutResponse, error) {
 	return nil, nil
 }

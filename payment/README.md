@@ -40,22 +40,24 @@ func (g *MyGateway) GetFlowType() payment.InteractionType {
     return payment.FlowTypeRedirect
 }
 
-// ValidateMetadata declares what this gateway cannot operate without. It
-// runs before a reference number is generated and before anything is
-// persisted, so a caller that omitted a required key fails immediately
-// rather than at callback time, when the configuration responsible is out
-// of reach. Presence checks on the request only — no I/O, no outside state.
-// A gateway with no requirements returns nil.
-func (g *MyGateway) ValidateMetadata(metadata map[string]string) error {
-    if strings.TrimSpace(metadata["my_merchant_id"]) == "" {
-        return errors.New("my_merchant_id is required")
+// ValidatePayeeMapping checks one entry of this method's "payees" config:
+// the ids this gateway needs to collect for a payee. The registry calls it
+// for every mapping at startup, so a mapping missing an id fails startup
+// rather than a payer's checkout. Well-formedness only — no I/O. A gateway
+// that needs no ids returns nil.
+func (g *MyGateway) ValidatePayeeMapping(mapping json.RawMessage) error {
+    var ids struct {
+        MerchantID string `json:"merchant_id"`
+    }
+    if err := json.Unmarshal(mapping, &ids); err != nil || strings.TrimSpace(ids.MerchantID) == "" {
+        return errors.New("merchant_id is required")
     }
     return nil
 }
 
 func (g *MyGateway) CreateSession(ctx context.Context, req payment.SessionRequest) (*payment.SessionResponse, error) {
-    // Logic to initialize session with gateway. req.Metadata carries the
-    // checkout's pass-through metadata, already past ValidateMetadata.
+    // Logic to initialize session with gateway. req.PayeeMapping carries this
+    // gateway's ids for req.Payee, already past ValidatePayeeMapping.
     return &payment.SessionResponse{...}, nil
 }
 
@@ -93,9 +95,12 @@ func (g *MyGateway) HandleValidateReference(ctx context.Context, tx *payment.Val
     return &payment.ValidationResponse{...}, nil
 }
 
-func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*payment.WebhookPayload, *payment.WebhookResponse, error) {
+func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string, payees payment.PayeeLookup) (*payment.WebhookPayload, *payment.WebhookResponse, error) {
     // Logic to parse the gateway webhook into a domain-neutral payload,
-    // plus the gateway-specific acknowledgement to relay back.
+    // plus the gateway-specific acknowledgement to relay back. If the
+    // notification names the account paid into, check it against
+    // payees(ctx, reference), the mapping of the payee the reference was
+    // issued for.
     return &payment.WebhookPayload{...}, &payment.WebhookResponse{...}, nil
 }
 ```
@@ -118,11 +123,30 @@ The `payment_methods.json` file is the source of truth for available methods.
       },
       "config": {
         "base_url": "https://sandbox.govpay.lk"
+      },
+      "payees": {
+        "org_a": {
+          "defaults": { "merchant_id": "M-100" },
+          "services": {
+            "certificate_fee": {},
+            "lab_fee": { "merchant_id": "M-200" }
+          }
+        }
       }
     }
   ]
 }
 ```
+
+#### Payees
+
+A checkout names its **payee** in the host's own terms: an `org_id` and a `service_id` (`CreateCheckoutRequest.Payee`). It never carries a gateway's account ids. Each method maps the payees it can collect for to its own ids under `payees`:
+
+- `payees.<org_id>.services.<service_id>` lists a payee. Only listed services are mapped: an org's `defaults` alone map nothing.
+- A payee's mapping is its service entry merged over its org's `defaults`, keys in the service entry winning. Above, `org_a/certificate_fee` maps to `{"merchant_id":"M-100"}` and `org_a/lab_fee` to `{"merchant_id":"M-200"}`.
+- Both are JSON objects whose keys the method's gateway defines, as deep as its account structure needs. Core never reads them; the gateway checks each one in `ValidatePayeeMapping` at startup.
+
+A checkout with a method that does not map its payee fails with `ErrPayeeNotMapped` before a reference is issued or anything is persisted, and `ListInfo` / `ListAvailableMethods` only return the methods that map the payee they are asked about.
 
 ### 3. Instantiate the Registry
 
@@ -163,19 +187,25 @@ handler := payment.NewHTTPHandler(service)
 ## Key Flows
 
 ### Checkout Initialization
-The frontend calls `CreateCheckoutSession`. The Service takes a reference from its `ReferenceGenerator`, looks up the gateway implementation via the Registry, and delegates the session creation to that gateway.
+The frontend calls `CreateCheckoutSession` with the payee and the selected method. The Service looks up the gateway implementation and resolves its ids for the payee via the Registry, takes a reference from its `ReferenceGenerator`, persists the transaction with its `org_id` and `service_id`, and delegates the session creation to that gateway with the resolved mapping.
 
 ### Real-Time Validation
 When a user enters a reference in a bank app, the gateway calls NSW.
 1. The Service looks up the Gateway via the Registry, then calls **VerifyWebhook** to authenticate the caller. A failure here stops the flow immediately — no reference lookup happens, and no presentment info is disclosed.
 2. The Service uses the Gateway to **Extract** the reference number.
 3. The Service fetches the transaction from the **Database**.
-4. The Service passes the record back to the Gateway to **Validate** and format the protocol-specific response.
+4. The Service resolves the gateway's ids for the transaction's payee and passes the record, with them, back to the Gateway to **Validate** and format the protocol-specific response.
 
 ### Webhook Processing
-Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing, and then performs domain actions: updating status, persisting metadata, and firing internal events.
+Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing (handing the gateway a `PayeeLookup` to check the notification against the payee its reference was issued for), and then performs domain actions: updating status, persisting metadata, and firing internal events.
 
 Once a payment reaches SUCCESS or FAILED, the Service resumes the workflow step it was created for through its **TaskCompleter**, calling `CompleteTaskStepByToken` with the `CallbackToken` the checkout carried (`CreateCheckoutRequest.CallbackToken`, required). The token is opaque to this package and names one step, so a settlement that arrives after the task has moved on completes nothing. Core taskflow's `*orchestrator.TaskManager` satisfies `TaskCompleter`; build the token with `plugins.CallbackToken` when creating the checkout.
+
+## Schema
+
+`PaymentTransaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.
+
+A host upgrading an existing table adds both columns as nullable, backfills them (e.g. from each row's stored gateway metadata), then makes them `NOT NULL`. A pending transaction left without them cannot be presented or settled.
 
 ## Verification error classification
 
@@ -236,6 +266,8 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 
 ### Data Types
 
+- `Payee`: Who a checkout pays (`org_id`, `service_id`), mapped to each gateway's ids by its `payees` config
+- `PayeeLookup`: Resolves a gateway's mapping for the payee a reference was issued for, handed to `ParseWebhook`
 - `SessionRequest`: Checkout session initialization
 - `SessionResponse`: Session response with checkout details
 - `WebhookPayload`: Incoming webhook data
@@ -262,6 +294,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
 - `ErrDuplicateReference`: A transaction already holds the reference the `ReferenceGenerator` issued
+- `ErrPayeeNotMapped`: The selected method has no mapping for the checkout's payee
 - `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
 - `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
 
