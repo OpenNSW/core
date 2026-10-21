@@ -51,7 +51,7 @@ services:
     url: https://legacy.example.gov
     timeout: 10s
     auth:
-      type: api_key
+      type: apiKey
       apiKey:
         key: X-API-Key
         value: env:LEGACY_API_KEY
@@ -60,7 +60,7 @@ services:
       clientKeyFile: /etc/certs/client.key
 ```
 
-JSON uses snake_case keys:
+JSON uses the same keys:
 
 ```json
 {
@@ -72,9 +72,9 @@ JSON uses snake_case keys:
       "auth": {
         "type": "oauth2",
         "oauth2": {
-          "token_url": "https://idp.example.gov/token",
-          "client_id": "my-client",
-          "client_secret": "env:NPQS_CLIENT_SECRET",
+          "tokenURL": "https://idp.example.gov/token",
+          "clientID": "my-client",
+          "clientSecret": "env:NPQS_CLIENT_SECRET",
           "scopes": ["npqs:submit"]
         }
       }
@@ -105,11 +105,11 @@ manager.SetServices(remote.ServiceConfig{
 
 See [`remote/auth`](auth/README.md) for the full reference. Supported types:
 
-| `type`    | Settings block (json / yaml) | Description                                          |
-|-----------|------------------------------|------------------------------------------------------|
-| `api_key` | `api_key` / `apiKey`         | Static header (e.g. `X-API-Key: value`)              |
-| `bearer`  | `bearer`                     | `Authorization: Bearer <token>`                      |
-| `oauth2`  | `oauth2`                     | Client credentials flow with automatic token caching |
+| `type` / settings block | Description                                          |
+|-------------------------|------------------------------------------------------|
+| `apiKey`                | Static header (e.g. `X-API-Key: value`)              |
+| `bearer`                | `Authorization: Bearer <token>`                      |
+| `oauth2`                | Client credentials flow with automatic token caching |
 
 ## Request bodies
 

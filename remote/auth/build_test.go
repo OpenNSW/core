@@ -20,7 +20,7 @@ func TestBuild(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "api_key success",
+			name: "apiKey success",
 			cfg:  Config{Type: TypeAPIKey, APIKey: &APIKeyConfig{Key: "X-API", Value: "secret"}},
 		},
 		{
@@ -114,12 +114,12 @@ func TestConfig_DecodesFromJSONAndYAML(t *testing.T) {
 	const jsonDoc = `{
 		"type": "oauth2",
 		"oauth2": {
-			"token_url": "https://idp.example/token",
-			"client_id": "my-client",
-			"client_secret": "env:CLIENT_SECRET",
+			"tokenURL": "https://idp.example/token",
+			"clientID": "my-client",
+			"clientSecret": "env:CLIENT_SECRET",
 			"scopes": ["read"],
-			"insecure_skip_tls_verify": true,
-			"endpoint_params": {"resource": "https://api.example", "audience": ["a", "b"]}
+			"insecureSkipTLSVerify": true,
+			"endpointParams": {"resource": "https://api.example", "audience": ["a", "b"]}
 		}
 	}`
 	const yamlDoc = `

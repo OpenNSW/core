@@ -41,8 +41,8 @@ There are two ways to build an authenticator:
    auth.NewOAuth2("https://identity.example.com/oauth2/token", "my-client-id", "my-client-secret", []string{"read", "write"})
    ```
 
-`auth.Config` and the per-strategy settings structs carry `json` (snake_case) and
-`yaml` (camelCase) tags, so they decode from either format; the package itself reads
+`auth.Config` and the per-strategy settings structs carry `json` and `yaml` tags with
+the same camelCase keys, so they decode from either format; the package itself reads
 no files.
 
 ## Supported Strategies
@@ -62,7 +62,7 @@ Implements the OAuth2 Client Credentials flow with the following features:
 
 ## Secret References
 
-Secret-bearing config fields (`value`, `token`, `client_secret`) are a
+Secret-bearing config fields (`value`, `token`, `clientSecret`) are a
 [`secret.SecretRef`](../../secret/README.md) — a literal value or a scheme-prefixed
 reference (`env:NAME`, `file:/path`) that is resolved to its concrete value. The
 type lives in the standalone [`secret`](../../secret/README.md) module; see its
@@ -95,7 +95,7 @@ misread.
 ## Strategy Configuration
 
 ### APIKeyConfig
-Used when the authentication type is `"api_key"`; set under `api_key` (json) / `apiKey` (yaml).
+Used when the authentication type is `"apiKey"`; set under `apiKey`.
 
 | Field   | Type        | Description                                                                             |
 |:--------|:------------|:----------------------------------------------------------------------------------------|
@@ -112,22 +112,22 @@ Used when the authentication type is `"bearer"`; set under `bearer`.
 ### OAuth2Config
 Used when the authentication type is `"oauth2"`; set under `oauth2`.
 
-| Field (json / yaml)                                  | Type        | Description                                                                                                                                                                                                                                                                                                                                                                                          |
-|:-----------------------------------------------------|:------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `token_url` / `tokenURL`                             | `string`    | The OAuth2 token endpoint URL.                                                                                                                                                                                                                                                                                                                                                                       |
-| `client_id` / `clientID`                             | `string`    | The client identifier.                                                                                                                                                                                                                                                                                                                                                                               |
-| `client_secret` / `clientSecret`                     | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)).                                                                                                                                                                                                                                                                                                          |
-| `scopes`                                             | `[]string`  | Optional list of requested scopes.                                                                                                                                                                                                                                                                                                                                                                   |
-| `insecure_skip_tls_verify` / `insecureSkipTLSVerify` | `bool`      | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`.                                                                                                                                                                                                     |
-| `endpoint_params` / `endpointParams`                 | `object`    | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings; `null` is rejected rather than sent as an empty parameter. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
+| Field                   | Type        | Description                                                                                                                                                                                                                                                                                                                                                                                          |
+|:------------------------|:------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `tokenURL`              | `string`    | The OAuth2 token endpoint URL.                                                                                                                                                                                                                                                                                                                                                                       |
+| `clientID`              | `string`    | The client identifier.                                                                                                                                                                                                                                                                                                                                                                               |
+| `clientSecret`          | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)).                                                                                                                                                                                                                                                                                                          |
+| `scopes`                | `[]string`  | Optional list of requested scopes.                                                                                                                                                                                                                                                                                                                                                                   |
+| `insecureSkipTLSVerify` | `bool`      | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`.                                                                                                                                                                                                     |
+| `endpointParams`        | `object`    | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings; `null` is rejected rather than sent as an empty parameter. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
 
 ```json
 {
-  "token_url": "https://idp.example/oauth2/token",
-  "client_id": "my-client",
-  "client_secret": "env:MY_CLIENT_SECRET",
+  "tokenURL": "https://idp.example/oauth2/token",
+  "clientID": "my-client",
+  "clientSecret": "env:MY_CLIENT_SECRET",
   "scopes": ["api:read"],
-  "endpoint_params": { "resource": "https://api.example" }
+  "endpointParams": { "resource": "https://api.example" }
 }
 ```
 

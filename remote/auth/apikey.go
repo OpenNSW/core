@@ -20,7 +20,7 @@ type APIKeyConfig struct {
 func (c APIKeyConfig) build() (Authenticator, error) {
 	value, err := c.Value.Resolve()
 	if err != nil {
-		return nil, fmt.Errorf("api_key value: %w", err)
+		return nil, fmt.Errorf("apiKey value: %w", err)
 	}
 	return NewAPIKey(c.Key, value), nil
 }

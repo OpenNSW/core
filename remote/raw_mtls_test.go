@@ -271,7 +271,7 @@ func TestManager_SetServices_TLSRequiresBothFiles(t *testing.T) {
 	manager := NewManager()
 	err := manager.SetServices(ServiceConfig{ID: "svc", URL: "http://local", TLS: &TLSSettings{ClientCertFile: "/some.crt"}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "requires both client_cert_file and client_key_file")
+	assert.Contains(t, err.Error(), "requires both clientCertFile and clientKeyFile")
 }
 
 func TestManager_CallRaw_UnknownService(t *testing.T) {

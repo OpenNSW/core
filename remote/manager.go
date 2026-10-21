@@ -19,8 +19,8 @@ import (
 // references: certificate chains routinely exceed the 4 KB cap that
 // secret.SecretRef places on file-sourced secrets.
 type TLSSettings struct {
-	ClientCertFile string `json:"client_cert_file" yaml:"clientCertFile"`
-	ClientKeyFile  string `json:"client_key_file" yaml:"clientKeyFile"`
+	ClientCertFile string `json:"clientCertFile" yaml:"clientCertFile"`
+	ClientKeyFile  string `json:"clientKeyFile" yaml:"clientKeyFile"`
 }
 
 // ServiceConfig declares one remote service. It is plain data with json and yaml
@@ -79,7 +79,7 @@ func (m *Manager) SetServices(services ...ServiceConfig) error {
 		// and often absent in dev setups, and deferring lets it be provided
 		// after boot without failing startup for every other service.
 		if cfg.TLS != nil && (cfg.TLS.ClientCertFile == "" || cfg.TLS.ClientKeyFile == "") {
-			return fmt.Errorf("remote: service %q tls config requires both client_cert_file and client_key_file", cfg.ID)
+			return fmt.Errorf("remote: service %q tls config requires both clientCertFile and clientKeyFile", cfg.ID)
 		}
 	}
 

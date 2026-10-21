@@ -375,7 +375,7 @@ func TestEndpointParams_UnmarshalJSON(t *testing.T) {
 	// An explicitly null field is an absent field, not a malformed one.
 	t.Run("a null object is no parameters", func(t *testing.T) {
 		var c OAuth2Config
-		require.NoError(t, json.Unmarshal([]byte(`{"endpoint_params":null}`), &c))
+		require.NoError(t, json.Unmarshal([]byte(`{"endpointParams":null}`), &c))
 		assert.Empty(t, c.EndpointParams)
 	})
 }

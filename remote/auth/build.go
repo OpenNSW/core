@@ -12,7 +12,7 @@ import (
 type Type string
 
 const (
-	TypeAPIKey Type = "api_key"
+	TypeAPIKey Type = "apiKey"
 	TypeBearer Type = "bearer"
 	TypeOAuth2 Type = "oauth2"
 )
@@ -22,11 +22,11 @@ const (
 //
 //	{"type": "bearer", "bearer": {"token": "env:API_TOKEN"}}
 //
-// It is plain data with json and yaml tags, so it decodes from whichever format
-// the application keeps its configuration in.
+// It is plain data with json and yaml tags (the same camelCase keys in both), so it
+// decodes from whichever format the application keeps its configuration in.
 type Config struct {
 	Type   Type          `json:"type" yaml:"type"`
-	APIKey *APIKeyConfig `json:"api_key,omitempty" yaml:"apiKey,omitempty"`
+	APIKey *APIKeyConfig `json:"apiKey,omitempty" yaml:"apiKey,omitempty"`
 	Bearer *BearerConfig `json:"bearer,omitempty" yaml:"bearer,omitempty"`
 	OAuth2 *OAuth2Config `json:"oauth2,omitempty" yaml:"oauth2,omitempty"`
 }

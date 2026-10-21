@@ -73,7 +73,7 @@ func TestServiceConfig_DecodesFromJSONAndYAML(t *testing.T) {
 		"url": "https://npqs.example/api",
 		"timeout": "30s",
 		"auth": {"type": "bearer", "bearer": {"token": "env:NPQS_TOKEN"}},
-		"tls": {"client_cert_file": "/certs/client.crt", "client_key_file": "/certs/client.key"}
+		"tls": {"clientCertFile": "/certs/client.crt", "clientKeyFile": "/certs/client.key"}
 	}]}`
 	const yamlDoc = `
 services:
