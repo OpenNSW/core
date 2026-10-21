@@ -21,6 +21,7 @@ updates:
       - "/json"
       - "/xmlgen"
       - "/htmlgen"
+      - "/cors"
     schedule:
       interval: "weekly"
       day: "monday"
