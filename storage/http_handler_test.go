@@ -44,7 +44,7 @@ func TestDownload_MissingKey(t *testing.T) {
 }
 
 func TestDownload_Success(t *testing.T) {
-	mock := &MockDriver{}
+	mock := &MockDriver{StoredType: "application/pdf"}
 	handler := NewHTTPHandler(NewService(mock))
 
 	// Build request with auth context and path value.
@@ -80,6 +80,46 @@ func TestDownload_Success(t *testing.T) {
 	if url != "/test/download/550e8400-e29b-41d4-a716-446655440000.pdf" {
 		t.Errorf("unexpected download_url: %s", url)
 	}
+	if got := resp["mime_type"]; got != "application/pdf" {
+		t.Errorf("mime_type = %v, want application/pdf", got)
+	}
+	if got := resp["disposition"]; got != drivers.DispositionInline {
+		t.Errorf("disposition = %v, want %s", got, drivers.DispositionInline)
+	}
+}
+
+func TestDownload_ReportsHowTheFileIsServed(t *testing.T) {
+	tests := []struct {
+		storedType  string
+		disposition string
+	}{
+		{"application/pdf", drivers.DispositionInline},
+		{"text/xml", drivers.DispositionAttachment},
+		{"text/html; charset=utf-8", drivers.DispositionAttachment},
+		{"", drivers.DispositionAttachment},
+	}
+	for _, tt := range tests {
+		t.Run(tt.storedType, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /files/{key}", NewHTTPHandler(NewService(&MockDriver{StoredType: tt.storedType})).Download)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/files/"+testKey, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", rec.Code)
+			}
+			var resp map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			if got := resp["mime_type"]; got != tt.storedType {
+				t.Errorf("mime_type = %v, want %q", got, tt.storedType)
+			}
+			if got := resp["disposition"]; got != tt.disposition {
+				t.Errorf("disposition = %v, want %s", got, tt.disposition)
+			}
+		})
+	}
 }
 
 func TestDownload_GenerateURLError(t *testing.T) {
@@ -112,7 +152,7 @@ func TestDownload_GenerateURLError(t *testing.T) {
 
 func TestDownload_FileNotFound(t *testing.T) {
 	mock := &MockDriver{
-		GenerateURLErr: fmt.Errorf("%w: %s", drivers.ErrNotFound, testKey),
+		StatErr: fmt.Errorf("%w: %s", drivers.ErrNotFound, testKey),
 	}
 	handler := NewHTTPHandler(NewService(mock))
 
@@ -140,6 +180,9 @@ func TestDownload_ExpiresAtMatchesDriverTTL(t *testing.T) {
 	localDriver, err := drivers.NewLocalFSDriver(t.TempDir(), "/api/v1/storage", "local-dev-secret", 5*time.Minute)
 	if err != nil {
 		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	if err := localDriver.Save(context.Background(), "550e8400-e29b-41d4-a716-446655440000.pdf", bytes.NewReader([]byte("data")), "application/pdf"); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
 	tests := []struct {

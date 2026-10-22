@@ -54,12 +54,14 @@ func VerifyToken(key, token, secret string, expiresAt int64, contentType string,
 	return verify(token, secret, opUpload, key, expiresAt, contentType, maxSizeBytes)
 }
 
-// GenerateDownloadToken creates an HMAC-SHA256 token specifically for download links (only signs key and expiration).
-func GenerateDownloadToken(key, secret string, expiresAt int64) string {
-	return sign(secret, opDownload, key, expiresAt)
+// GenerateDownloadToken creates an HMAC-SHA256 token specifically for download
+// links. It signs the key, the expiration and the disposition the file is
+// served with.
+func GenerateDownloadToken(key, secret string, expiresAt int64, disposition string) string {
+	return sign(secret, opDownload, key, expiresAt, disposition)
 }
 
 // VerifyDownloadToken checks if a provided download token matches the expected signature.
-func VerifyDownloadToken(key, token, secret string, expiresAt int64) bool {
-	return verify(token, secret, opDownload, key, expiresAt)
+func VerifyDownloadToken(key, token, secret string, expiresAt int64, disposition string) bool {
+	return verify(token, secret, opDownload, key, expiresAt, disposition)
 }

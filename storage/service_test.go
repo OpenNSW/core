@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,12 @@ type MockDriver struct {
 	GenerateURLErr   error
 	DeleteCalled     bool
 	DeleteKey        string
+
+	// StoredType is the type Stat reports; StatErr makes Stat fail.
+	StoredType string
+	StatErr    error
+	// DownloadDisposition is the disposition GetDownloadURL was last asked for.
+	DownloadDisposition string
 }
 
 func (m *MockDriver) Save(ctx context.Context, key string, body io.Reader, contentType string) error {
@@ -52,10 +60,18 @@ func (m *MockDriver) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-func (m *MockDriver) GetDownloadURL(ctx context.Context, key string) (string, error) {
+func (m *MockDriver) Stat(ctx context.Context, key string) (drivers.ObjectInfo, error) {
+	if m.StatErr != nil {
+		return drivers.ObjectInfo{}, m.StatErr
+	}
+	return drivers.ObjectInfo{ContentType: m.StoredType, Size: int64(len(m.SavedBody))}, nil
+}
+
+func (m *MockDriver) GetDownloadURL(ctx context.Context, key string, disposition string) (string, error) {
 	if m.GenerateURLErr != nil {
 		return "", m.GenerateURLErr
 	}
+	m.DownloadDisposition = disposition
 	return "/test/download/" + key, nil
 }
 
@@ -233,25 +249,152 @@ func TestUploadService_DownloadURL_ExpiresAt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			before := time.Now()
-			url, expiresAt, err := NewService(tt.driver).DownloadURL(context.Background(), testKey)
+			download, err := NewService(tt.driver).DownloadURL(context.Background(), testKey)
 			if err != nil {
 				t.Fatalf("DownloadURL failed: %v", err)
 			}
-			if url != "/test/download/"+testKey {
-				t.Errorf("unexpected URL: %s", url)
+			if download.URL != "/test/download/"+testKey {
+				t.Errorf("unexpected URL: %s", download.URL)
 			}
 
 			want := before.Add(tt.ttl).Unix()
-			if expiresAt < want || expiresAt > want+2 {
-				t.Errorf("expiresAt = %d, want about %d (now + %v)", expiresAt, want, tt.ttl)
+			if download.ExpiresAt < want || download.ExpiresAt > want+2 {
+				t.Errorf("ExpiresAt = %d, want about %d (now + %v)", download.ExpiresAt, want, tt.ttl)
 			}
 		})
 	}
 }
 
 func TestUploadService_DownloadURL_InvalidKey(t *testing.T) {
-	if _, _, err := NewService(&MockDriver{}).DownloadURL(context.Background(), "test-key"); !errors.Is(err, ErrInvalidKey) {
+	if _, err := NewService(&MockDriver{}).DownloadURL(context.Background(), "test-key"); !errors.Is(err, ErrInvalidKey) {
 		t.Errorf("expected ErrInvalidKey, got %v", err)
+	}
+}
+
+// The Service decides how a file is served from the type it was stored with,
+// and tells the driver and the caller what it decided.
+func TestUploadService_DownloadURL_DispositionFollowsStoredType(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       []ServiceOption
+		storedType string
+		want       string
+	}{
+		{name: "pdf", storedType: "application/pdf", want: drivers.DispositionInline},
+		{name: "image", storedType: "image/png", want: drivers.DispositionInline},
+		{name: "text with a parameter", storedType: "text/plain; charset=utf-8", want: drivers.DispositionInline},
+		{name: "xml", storedType: "text/xml", want: drivers.DispositionAttachment},
+		{name: "svg", storedType: "image/svg+xml", want: drivers.DispositionAttachment},
+		{name: "html", storedType: "text/html; charset=utf-8", want: drivers.DispositionAttachment},
+		{name: "spreadsheet", storedType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", want: drivers.DispositionAttachment},
+		{name: "no type", storedType: "", want: drivers.DispositionAttachment},
+		{name: "html listed inline", opts: []ServiceOption{WithInlineTypes("text/html"), WithAllowedUploadTypes("application/pdf")}, storedType: "text/html; charset=utf-8", want: drivers.DispositionInline},
+		{name: "pdf not listed", opts: []ServiceOption{WithInlineTypes("text/html"), WithAllowedUploadTypes("application/pdf")}, storedType: "application/pdf", want: drivers.DispositionAttachment},
+		{name: "empty list saves every file", opts: []ServiceOption{WithInlineTypes()}, storedType: "application/pdf", want: drivers.DispositionAttachment},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockDriver{StoredType: tt.storedType}
+			download, err := NewService(mock, tt.opts...).DownloadURL(context.Background(), testKey)
+			if err != nil {
+				t.Fatalf("DownloadURL: %v", err)
+			}
+			if download.Disposition != tt.want {
+				t.Errorf("Disposition = %q, want %q", download.Disposition, tt.want)
+			}
+			if mock.DownloadDisposition != tt.want {
+				t.Errorf("the driver was asked for %q, want %q", mock.DownloadDisposition, tt.want)
+			}
+			if download.ContentType != tt.storedType {
+				t.Errorf("ContentType = %q, want %q", download.ContentType, tt.storedType)
+			}
+		})
+	}
+}
+
+func TestUploadService_DownloadURL_StructLiteralUsesDefaultInlineTypes(t *testing.T) {
+	service := &Service{Driver: &MockDriver{StoredType: "application/pdf"}}
+	download, err := service.DownloadURL(context.Background(), testKey)
+	if err != nil {
+		t.Fatalf("DownloadURL: %v", err)
+	}
+	if download.Disposition != drivers.DispositionInline {
+		t.Errorf("Disposition = %q, want %q", download.Disposition, drivers.DispositionInline)
+	}
+}
+
+func TestUploadService_DownloadURL_MissingFile(t *testing.T) {
+	mock := &MockDriver{StatErr: fmt.Errorf("%w: %s", drivers.ErrNotFound, testKey)}
+
+	download, err := NewService(mock).DownloadURL(context.Background(), testKey)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DownloadURL: err = %v, want ErrNotFound", err)
+	}
+	if download != (Download{}) {
+		t.Errorf("DownloadURL = %+v, want the zero Download", download)
+	}
+	if mock.DownloadDisposition != "" {
+		t.Error("a URL was requested from the driver for a file it does not hold")
+	}
+}
+
+func TestUploadService_DownloadURL_DriverErrors(t *testing.T) {
+	statErr := errors.New("stat failure")
+	if _, err := NewService(&MockDriver{StatErr: statErr}).DownloadURL(context.Background(), testKey); !errors.Is(err, statErr) {
+		t.Errorf("Stat failure: err = %v, want %v", err, statErr)
+	}
+	signErr := errors.New("presign failure")
+	if _, err := NewService(&MockDriver{GenerateURLErr: signErr}).DownloadURL(context.Background(), testKey); !errors.Is(err, signErr) {
+		t.Errorf("GetDownloadURL failure: err = %v, want %v", err, signErr)
+	}
+}
+
+func TestWithInlineTypes_PanicsOnAMalformedType(t *testing.T) {
+	for _, bad := range []string{"", "pdf", "TEXT/HTML", "text/html; charset=utf-8", "image/*", "*/*"} {
+		t.Run(bad, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("WithInlineTypes(%q) did not panic", bad)
+				}
+			}()
+			WithInlineTypes("application/pdf", bad)
+		})
+	}
+}
+
+// A type clients may upload must not also open in the browser unless it is
+// on the default list, which names only inert types.
+func TestNewService_RefusesAnUploadableInlineType(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      []ServiceOption
+		wantPanic string // text the panic must name; empty means no panic
+	}{
+		{name: "defaults", opts: nil},
+		{name: "html inline, only pdf uploadable", opts: []ServiceOption{WithInlineTypes("text/html"), WithAllowedUploadTypes("application/pdf")}},
+		{name: "html inline, no uploads allowed", opts: []ServiceOption{WithInlineTypes("text/html"), WithAllowedUploadTypes()}},
+		{name: "default types inline, any upload", opts: []ServiceOption{WithInlineTypes("application/pdf", "image/png")}},
+		{name: "empty inline list, any upload", opts: []ServiceOption{WithInlineTypes()}},
+		{name: "html inline and uploadable", opts: []ServiceOption{WithInlineTypes("text/html"), WithAllowedUploadTypes("application/pdf", "text/html")}, wantPanic: "text/html"},
+		{name: "option order does not matter", opts: []ServiceOption{WithAllowedUploadTypes("text/html"), WithInlineTypes("text/html")}, wantPanic: "text/html"},
+		{name: "html inline, any type uploadable", opts: []ServiceOption{WithInlineTypes("text/html")}, wantPanic: "text/html"},
+		{name: "case and parameters do not hide it", opts: []ServiceOption{WithInlineTypes("text/html"), WithAllowedUploadTypes("TEXT/HTML; charset=utf-8")}, wantPanic: "TEXT/HTML; charset=utf-8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				switch {
+				case tt.wantPanic == "" && r != nil:
+					t.Errorf("NewService panicked: %v", r)
+				case tt.wantPanic != "" && r == nil:
+					t.Errorf("NewService did not panic, want a panic naming %q", tt.wantPanic)
+				case tt.wantPanic != "" && !strings.Contains(fmt.Sprint(r), tt.wantPanic):
+					t.Errorf("panic %q does not name %q", r, tt.wantPanic)
+				}
+			}()
+			NewService(&MockDriver{}, tt.opts...)
+		})
 	}
 }
 

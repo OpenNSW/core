@@ -96,7 +96,7 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, expiresAt, err := h.Service.DownloadURL(r.Context(), key)
+	download, err := h.Service.DownloadURL(r.Context(), key)
 	if errors.Is(err, ErrInvalidKey) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
@@ -113,8 +113,10 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
-		"download_url": url,
-		"expires_at":   expiresAt,
+		"download_url": download.URL,
+		"expires_at":   download.ExpiresAt,
+		"mime_type":    download.ContentType,
+		"disposition":  download.Disposition,
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
 	}
