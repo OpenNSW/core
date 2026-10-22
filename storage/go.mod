@@ -3,7 +3,7 @@ module github.com/OpenNSW/core/storage
 go 1.26
 
 require (
-	github.com/OpenNSW/core/authn v0.3.0
+	github.com/OpenNSW/core/authn v0.4.0
 	github.com/OpenNSW/core/shared v0.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
