@@ -101,6 +101,10 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
 		return
 	}
+	if errors.Is(err, ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "file not found")
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "Failed to generate download URL", "key", key, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to generate access")

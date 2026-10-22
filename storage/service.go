@@ -20,6 +20,11 @@ import (
 // Callers can use errors.Is(err, storage.ErrInvalidKey) to detect it.
 var ErrInvalidKey = errors.New("storage: invalid key")
 
+// ErrNotFound is returned by GetDownloadURL and DownloadURL for a file the
+// backend does not hold, when the driver looks the file up (the S3 driver
+// does). Callers can use errors.Is(err, storage.ErrNotFound) to detect it.
+var ErrNotFound = drivers.ErrNotFound
+
 // storageKeyRx matches a UUID, optionally followed by a dot and an alphanumeric extension.
 var storageKeyRx = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\.[a-zA-Z0-9]+)?$`)
 

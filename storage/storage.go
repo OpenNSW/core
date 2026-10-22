@@ -19,7 +19,9 @@ type StorageDriver interface {
 	// Delete removes the file
 	Delete(ctx context.Context, key string) error
 
-	// GetDownloadURL returns a presigned or time-limited URL for downloading
+	// GetDownloadURL returns a presigned or time-limited URL for downloading.
+	// A driver that looks the file up first returns an error wrapping
+	// ErrNotFound for a file it does not hold.
 	GetDownloadURL(ctx context.Context, key string) (string, error)
 
 	// GetUploadURL returns a presigned URL for uploading a file directly to storage

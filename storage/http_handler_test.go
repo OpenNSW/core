@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -106,6 +107,32 @@ func TestDownload_GenerateURLError(t *testing.T) {
 	body := rec.Body.String()
 	if body == "" {
 		t.Fatal("expected error body, got empty")
+	}
+}
+
+func TestDownload_FileNotFound(t *testing.T) {
+	mock := &MockDriver{
+		GenerateURLErr: fmt.Errorf("%w: %s", drivers.ErrNotFound, testKey),
+	}
+	handler := NewHTTPHandler(NewService(mock))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /files/{key}", handler.Download)
+
+	req := httptest.NewRequest(http.MethodGet, "/files/"+testKey, nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", rec.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode body %q: %v", rec.Body.String(), err)
+	}
+	if resp["error"] != "file not found" {
+		t.Errorf("error = %q, want %q", resp["error"], "file not found")
 	}
 }
 

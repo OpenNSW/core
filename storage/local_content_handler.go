@@ -169,8 +169,14 @@ func (h *LocalContentHandler) download(w http.ResponseWriter, r *http.Request) {
 	// sandbox policy (see its CSPWithSandboxDoesNotBlockPDF browser test).
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox")
+	// Files a browser would interpret as documents are saved, not opened, as
+	// the S3 driver's download URLs have them.
+	disposition := "inline"
+	if drivers.ForcesDownload(contentType) {
+		disposition = "attachment"
+	}
+	w.Header().Set("Content-Disposition", disposition)
 	// Check if the body can report its size (standard for files/drivers)
-	w.Header().Set("Content-Disposition", "inline")
 	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
 		if fi, err := stater.Stat(); err == nil {
 			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
