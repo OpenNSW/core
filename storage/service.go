@@ -21,8 +21,8 @@ import (
 var ErrInvalidKey = errors.New("storage: invalid key")
 
 // ErrNotFound is returned by GetDownloadURL and DownloadURL for a file the
-// backend does not hold, when the driver looks the file up (the S3 driver
-// does). Callers can use errors.Is(err, storage.ErrNotFound) to detect it.
+// backend does not hold. Callers can use errors.Is(err, storage.ErrNotFound)
+// to detect it.
 var ErrNotFound = drivers.ErrNotFound
 
 // storageKeyRx matches a UUID, optionally followed by a dot and an alphanumeric extension.
@@ -63,6 +63,9 @@ type Service struct {
 	// maxUploadSize is the largest file Upload accepts; 0 means
 	// defaultMaxUploadSize.
 	maxUploadSize int64
+	// inline is the set of types a download opens in the browser with. It is
+	// nil unless WithInlineTypes set it, and then the default list applies.
+	inline inlinePolicy
 }
 
 // ServiceOption configures a Service.
@@ -93,12 +96,70 @@ func WithMaxUploadSize(n int64) ServiceOption {
 	}
 }
 
+// WithInlineTypes sets the media types a download opens in the browser with;
+// every other file is saved. Without it the types are DefaultInlineTypes.
+// Called with no types, it saves every file. It panics if a type is not one
+// ValidMediaType accepts.
+//
+// List a type a browser interprets as a document, such as text/html, only when
+// the service stores that type itself, for example documents it generates with
+// Save, and clients cannot upload it: NewService panics when a type that
+// WithAllowedUploadTypes lets clients upload (or any type, without that
+// option) also opens inline and is not one of DefaultInlineTypes.
+func WithInlineTypes(types ...string) ServiceOption {
+	for _, t := range types {
+		if err := ValidMediaType(t); err != nil {
+			panic(fmt.Sprintf("storage: WithInlineTypes: %v", err))
+		}
+	}
+	return func(s *Service) {
+		s.inline = newInlinePolicy(types)
+	}
+}
+
+// NewService returns a Service over driver. It panics when an option is
+// invalid, and when clients may upload a type the Service opens in the
+// browser although it is not one of DefaultInlineTypes (see WithInlineTypes).
 func NewService(driver StorageDriver, opts ...ServiceOption) *Service {
 	s := &Service{Driver: driver}
 	for _, opt := range opts {
 		opt(s)
 	}
+	if err := s.checkUploadableInline(); err != nil {
+		panic(err.Error())
+	}
 	return s
+}
+
+// checkUploadableInline reports a type clients may upload that the Service
+// opens in the browser without it being one of DefaultInlineTypes.
+func (s *Service) checkUploadableInline() error {
+	if s.inline == nil {
+		return nil // the default list names only inert types
+	}
+	uploadable := make([]string, 0, len(s.allowedUploadTypes))
+	if s.allowedUploadTypes == nil {
+		// Any type may be uploaded, so every inline type can be.
+		for t := range s.inline {
+			uploadable = append(uploadable, t)
+		}
+	} else {
+		for t := range s.allowedUploadTypes {
+			uploadable = append(uploadable, t)
+		}
+	}
+	if unsafe := s.inline.notInert(uploadable); len(unsafe) > 0 {
+		return errUploadableInline(unsafe)
+	}
+	return nil
+}
+
+// inlineTypes returns the policy a download is served under.
+func (s *Service) inlineTypes() inlinePolicy {
+	if s.inline == nil {
+		return defaultInline
+	}
+	return s.inline
 }
 
 func (s *Service) uploadLimit() int64 {
@@ -218,25 +279,48 @@ func (s *Service) Download(ctx context.Context, key string) (io.ReadCloser, stri
 	return s.Driver.Get(ctx, key)
 }
 
-// GetDownloadURL generates a time-limited or presigned URL for the given key
-func (s *Service) GetDownloadURL(ctx context.Context, key string) (string, error) {
-	if err := checkKey(key); err != nil {
-		return "", err
-	}
-	return s.Driver.GetDownloadURL(ctx, key)
+// Download is a time-limited URL for a stored file, with what the file is and
+// how the URL serves it.
+type Download struct {
+	URL string
+	// ExpiresAt is the Unix time, in seconds, at which URL stops working.
+	ExpiresAt int64
+	// ContentType is the type the file was stored with.
+	ContentType string
+	// Disposition is drivers.DispositionInline when a browser opens the file,
+	// and drivers.DispositionAttachment when it saves it.
+	Disposition string
 }
 
-// DownloadURL is GetDownloadURL plus the time, in unix seconds, at which the
-// URL stops working.
-func (s *Service) DownloadURL(ctx context.Context, key string) (string, int64, error) {
+// DownloadURL generates a time-limited or presigned URL for the given key.
+// The Service decides how the file is served from the type it was stored
+// with: it opens in the browser only when WithInlineTypes lists the type, and
+// is saved otherwise. A file the backend does not hold is an error wrapping
+// ErrNotFound.
+func (s *Service) DownloadURL(ctx context.Context, key string) (Download, error) {
+	if err := checkKey(key); err != nil {
+		return Download{}, err
+	}
 	// Taken before the URL is signed so the reported expiry is never later
 	// than the real one.
 	expiresAt := time.Now().Add(s.presignTTL()).Unix()
-	url, err := s.GetDownloadURL(ctx, key)
+
+	info, err := s.Driver.Stat(ctx, key)
 	if err != nil {
-		return "", 0, err
+		return Download{}, err
 	}
-	return url, expiresAt, nil
+	disposition := s.inlineTypes().disposition(info.ContentType)
+	url, err := s.Driver.GetDownloadURL(ctx, key, disposition)
+	if err != nil {
+		return Download{}, err
+	}
+	return Download{URL: url, ExpiresAt: expiresAt, ContentType: info.ContentType, Disposition: disposition}, nil
+}
+
+// GetDownloadURL is DownloadURL without the rest of the Download.
+func (s *Service) GetDownloadURL(ctx context.Context, key string) (string, error) {
+	d, err := s.DownloadURL(ctx, key)
+	return d.URL, err
 }
 
 // presignTTL reports how long the driver's presigned URLs stay valid. A

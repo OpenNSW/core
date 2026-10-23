@@ -6,6 +6,8 @@ package storage
 import (
 	"context"
 	"io"
+
+	"github.com/OpenNSW/core/storage/drivers"
 )
 
 // StorageDriver defines how we interact with the binary storage
@@ -19,10 +21,16 @@ type StorageDriver interface {
 	// Delete removes the file
 	Delete(ctx context.Context, key string) error
 
-	// GetDownloadURL returns a presigned or time-limited URL for downloading.
-	// A driver that looks the file up first returns an error wrapping
-	// ErrNotFound for a file it does not hold.
-	GetDownloadURL(ctx context.Context, key string) (string, error)
+	// Stat returns the type and size the file was stored with, or an error
+	// wrapping ErrNotFound for a file the driver does not hold.
+	Stat(ctx context.Context, key string) (drivers.ObjectInfo, error)
+
+	// GetDownloadURL returns a presigned or time-limited URL for downloading
+	// the file with the given disposition, which is drivers.DispositionInline
+	// or drivers.DispositionAttachment. The driver serves the file as the URL
+	// says, and does not decide it: for an attachment, a browser must save the
+	// file instead of opening it.
+	GetDownloadURL(ctx context.Context, key string, disposition string) (string, error)
 
 	// GetUploadURL returns a presigned URL for uploading a file directly to storage
 	GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error)

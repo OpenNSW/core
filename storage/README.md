@@ -78,13 +78,20 @@ meta, err := svc.Save(ctx, "certificate.pdf", "application/pdf", bytes.NewReader
 content, mimeType, err := svc.Download(ctx, fileKey)
 
 // Or get a presigned download URL for the client
-url, err := svc.GetDownloadURL(ctx, fileKey)
-// url — presigned GET URL, valid for PresignTTLSeconds
+download, err := svc.DownloadURL(ctx, fileKey)
+// download.URL         — presigned GET URL
+// download.ExpiresAt   — when it stops working, in Unix seconds (PresignTTLSeconds from now)
+// download.ContentType — the type the file was stored with
+// download.Disposition — "inline" if a browser opens the file, "attachment" if it saves it
 ```
 
-A file a browser would interpret as a document is served as a download, not opened: XML, including `+xml` types such as SVG and XHTML (`drivers.ForcesDownload`). XML with an XHTML body or an XSLT stylesheet can run script from the origin it is served on. The S3 driver signs `response-content-disposition=attachment` into those URLs, and the local route sends `Content-Disposition: attachment`; any other file is opened inline. `text/html` is not covered, so keep it off `WithAllowedUploadTypes`.
+`Service` decides how a file is served, from the type it was stored with. A browser interprets many types as documents (HTML, XML including XHTML and XSLT, SVG), and those run script from the origin they are served on. So a file is served inline only when its type is on the inline list, and every other file is saved. The `Service` asks the driver to serve the file with the disposition it chose: the S3 driver signs `response-content-disposition=attachment` into the URL of a file that is saved, and the local route signs the disposition into its token and sends it as `Content-Disposition`. The download response of `storage.NewHTTPHandler(svc)` carries `mime_type` and `disposition`, so a client does not guess from the file's name.
 
-The S3 driver looks the file up to find its type, so `GetDownloadURL` returns an error wrapping `storage.ErrNotFound` for a file the bucket does not hold. `storage.NewHTTPHandler(svc)` answers that with 404. The lookup is a `HeadObject`, which needs the same permission as a `GetObject`.
+The inline list is `DefaultInlineTypes()`: `application/pdf`, `image/png`, `image/jpeg`, `image/gif`, `image/webp` and `text/plain`. `WithInlineTypes(types...)` replaces it. Each type is a bare, lower-case `type/subtype` (`ValidMediaType` checks one), and a file's own parameters, such as `; charset=utf-8`, are ignored when matching. Called with no types, it saves every file.
+
+List a type a browser interprets as a document, such as `text/html`, only when the service stores that type itself, for example documents it generates with `Save`, and clients cannot upload it. `NewService` panics when a type that `WithAllowedUploadTypes` lets clients upload, or any type when that option is absent, also opens inline and is not on the default list. A host reports the same mistake without a panic by calling `CheckUploadTypes(allowed, inline)` with its two lists when it validates its configuration.
+
+`DownloadURL` looks the file up with the driver's `Stat`, so it returns an error wrapping `storage.ErrNotFound` for a file the backend does not hold, and `storage.NewHTTPHandler(svc)` answers that with 404. On S3 the lookup is a `HeadObject`, which needs the same permission as a `GetObject`.
 
 ### Delete
 
@@ -117,12 +124,15 @@ type StorageDriver interface {
     Save(ctx context.Context, key string, body io.Reader, contentType string) error
     Get(ctx context.Context, key string) (io.ReadCloser, string, error)
     Delete(ctx context.Context, key string) error
-    GetDownloadURL(ctx context.Context, key string) (string, error)
+    Stat(ctx context.Context, key string) (drivers.ObjectInfo, error)
+    GetDownloadURL(ctx context.Context, key string, disposition string) (string, error)
     GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error)
 }
 ```
 
 Register your driver by passing it directly to `storage.NewService(driver)`.
+
+`Stat` returns the type and size the file was stored with, or an error wrapping `drivers.ErrNotFound`. `GetDownloadURL` is told the disposition, `drivers.DispositionInline` or `drivers.DispositionAttachment`, and serves the file that way: for an attachment, a browser must save the file instead of opening it. The driver decides nothing about it.
 
 ## Config reference
 

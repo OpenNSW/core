@@ -85,45 +85,45 @@ func (d *S3Driver) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// presignGet returns a presigned GET URL for the key.
-//
-// It looks the object up first. A file ForcesDownload names has the URL signed
-// to come back as an attachment, so the browser saves it instead of rendering
-// it on the bucket's origin. A file that is not there yet gets no URL at all:
-// it could be uploaded afterwards and opened through a URL signed without
-// that override.
-func (d *S3Driver) presignGet(ctx context.Context, key string) (string, error) {
+// Stat returns the type and size the file was stored with. It returns an error
+// wrapping ErrNotFound for a file the bucket does not hold.
+func (d *S3Driver) Stat(ctx context.Context, key string) (ObjectInfo, error) {
 	head, err := d.Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(d.Bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
 		var notFound *types.NotFound
-		var noSuchKey *types.NoSuchKey
-		if errors.As(err, &notFound) || errors.As(err, &noSuchKey) {
-			return "", fmt.Errorf("%w: %s", ErrNotFound, key)
+		if errors.As(err, &notFound) {
+			return ObjectInfo{}, fmt.Errorf("%w: %s", ErrNotFound, key)
 		}
-		return "", fmt.Errorf("failed to look up %s in S3: %w", key, err)
+		return ObjectInfo{}, fmt.Errorf("failed to look up %s in S3: %w", key, err)
 	}
+	return ObjectInfo{ContentType: aws.ToString(head.ContentType), Size: aws.ToInt64(head.ContentLength)}, nil
+}
 
+// GetDownloadURL returns a presigned URL for downloading the file with the
+// given disposition. For DispositionAttachment it signs
+// response-content-disposition=attachment into the URL, so the bucket answers
+// with a header that makes a browser save the file instead of rendering it on
+// the bucket's origin; for DispositionInline it signs no override, and the
+// bucket serves the object as it was stored.
+func (d *S3Driver) GetDownloadURL(ctx context.Context, key, disposition string) (string, error) {
+	if !ValidDisposition(disposition) {
+		return "", fmt.Errorf("unknown disposition %q", disposition)
+	}
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(d.Bucket),
 		Key:    aws.String(key),
 	}
-	if ForcesDownload(aws.ToString(head.ContentType)) {
-		input.ResponseContentDisposition = aws.String("attachment")
+	if disposition == DispositionAttachment {
+		input.ResponseContentDisposition = aws.String(disposition)
 	}
 	presignedReq, err := d.PresignClient.PresignGetObject(ctx, input, s3.WithPresignExpires(d.presignTTL))
 	if err != nil {
 		return "", fmt.Errorf("failed to presign URL: %w", err)
 	}
 	return presignedReq.URL, nil
-}
-
-// GetDownloadURL returns a presigned URL for downloading the file. It returns
-// ErrNotFound for a file the bucket does not hold.
-func (d *S3Driver) GetDownloadURL(ctx context.Context, key string) (string, error) {
-	return d.presignGet(ctx, key)
 }
 
 // presignPut returns a presigned PUT URL for the key and constraints.
