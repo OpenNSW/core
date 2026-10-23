@@ -95,7 +95,7 @@ manager.SetServices(remote.ServiceConfig{
 
 ### Secrets
 
-Secret fields (`apiKey.value`, `bearer.token`, `oauth2.clientSecret`) are used verbatim: the package never reads env vars or files. Resolve secrets before calling `SetServices` — with [`configyaml`](../configyaml/README.md), write them as `{{env:NAME}}` / `{{file:/path}}` placeholders, which are expanded while the file is loaded (as in the YAML example above). JSON and in-code configuration must carry already-resolved values.
+Secret fields (`apiKey.value`, `bearer.token`, `oauth2.clientSecret`) are plain strings. With [`configyaml`](../configyaml/README.md), write them as `{{env:NAME}}` / `{{file:/path}}` placeholders, which are expanded while the file is loaded (as in the YAML example above).
 
 | Field     | Description                                                                                                                       |
 |-----------|-----------------------------------------------------------------------------------------------------------------------------------|

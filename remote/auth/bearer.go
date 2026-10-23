@@ -15,7 +15,7 @@ type Bearer struct {
 	token string
 }
 
-// build constructs the authenticator. Token is used verbatim.
+// build constructs the authenticator.
 func (c BearerConfig) build() (Authenticator, error) {
 	return NewBearer(c.Token), nil
 }

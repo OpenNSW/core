@@ -97,10 +97,9 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-func TestBuild_UsesSecretValuesVerbatim(t *testing.T) {
-	// Resolving secrets is the caller's job: a value shaped like a reference is
-	// sent as written, never resolved again. The env var and file here exist, so
-	// a resolving implementation would visibly substitute them.
+func TestBuild_SendsSecretValuesUnchanged(t *testing.T) {
+	// Secret values reach the wire unchanged, including ones shaped like an
+	// env:, file: or literal: reference to an env var or file that exists.
 	t.Setenv("BUILD_TOKEN", "resolved")
 	secretFile := filepath.Join(t.TempDir(), "secret")
 	require.NoError(t, os.WriteFile(secretFile, []byte("from-file"), 0o600))

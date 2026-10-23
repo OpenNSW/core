@@ -39,8 +39,7 @@ type authConfig interface {
 
 // Build constructs the authenticator cfg describes. It is the single entry point
 // callers (e.g. the remote Manager) use, so they need not know about individual
-// strategies. It performs no I/O: secret values are used verbatim, and resolving them
-// (from env vars, files, a secret store, ...) is the caller's job.
+// strategies.
 func Build(cfg Config) (Authenticator, error) {
 	strategy, err := cfg.strategy()
 	if err != nil {

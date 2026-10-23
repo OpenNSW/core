@@ -24,9 +24,9 @@ func bearerService(url, token string) ServiceConfig {
 	}
 }
 
-func TestManager_SetServices_SendsTokenVerbatim(t *testing.T) {
-	// The manager never resolves secrets: a token shaped like an env reference
-	// is sent as written, even when that env var is set.
+func TestManager_SetServices_SendsTokenUnchanged(t *testing.T) {
+	// A token shaped like an env reference reaches the server unchanged, even
+	// when that env var is set.
 	// Buffered so the handler never blocks; receiving from it orders the
 	// handler's write before the test's read.
 	gotAuth := make(chan string, 1)

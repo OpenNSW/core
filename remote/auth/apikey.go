@@ -12,7 +12,7 @@ type APIKeyConfig struct {
 	Value string `json:"value" yaml:"value"`
 }
 
-// build constructs the authenticator. Value is used verbatim.
+// build constructs the authenticator.
 func (c APIKeyConfig) build() (Authenticator, error) {
 	return NewAPIKey(c.Key, c.Value), nil
 }

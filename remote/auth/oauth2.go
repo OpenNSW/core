@@ -173,8 +173,7 @@ type OAuth2Config struct {
 	EndpointParams        EndpointParams `json:"endpointParams,omitempty" yaml:"endpointParams,omitempty"`
 }
 
-// build validates the settings and constructs the authenticator. ClientSecret is
-// used verbatim.
+// build validates the settings and constructs the authenticator.
 func (c OAuth2Config) build() (Authenticator, error) {
 	// Validated here, not just at token-request time, so a bad configuration fails when
 	// services are loaded rather than on the first outbound call.

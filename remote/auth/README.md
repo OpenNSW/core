@@ -18,8 +18,7 @@ There are two ways to build an authenticator:
 
 1. **From config** — `auth.Build(cfg)` takes an `auth.Config`, validates it, and
    returns the authenticator. This is what the `remote` Manager uses for each
-   service's `auth` block. It performs no I/O; secret values are used verbatim (see
-   [Secrets](#secrets)).
+   service's `auth` block.
 
    ```go
    authn, err := auth.Build(auth.Config{
@@ -62,13 +61,9 @@ Implements the OAuth2 Client Credentials flow with the following features:
 
 ## Secrets
 
-Secret-bearing fields (`value`, `token`, `clientSecret`) are plain strings, used
-verbatim: this package never reads env vars, files or a secret store, and a value
-that looks like a reference (`env:NAME`, `file:/path`) is sent as written. Resolving
-secrets is the application's job, done while it loads its configuration.
-
-With [`configyaml`](../../configyaml/README.md), write secrets as placeholders; they
-are expanded, once, before decoding:
+Secret-bearing fields (`value`, `token`, `clientSecret`) are plain strings. With
+[`configyaml`](../../configyaml/README.md), write them as placeholders, which are
+expanded while the file is loaded:
 
 ```yaml
 auth:
