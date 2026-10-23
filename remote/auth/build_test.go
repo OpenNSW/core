@@ -6,6 +6,10 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,20 +97,53 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-func TestBuild_ResolvesSecretReference(t *testing.T) {
+func TestBuild_UsesSecretValuesVerbatim(t *testing.T) {
+	// Resolving secrets is the caller's job: a value shaped like a reference is
+	// sent as written, never resolved again. The env var and file here exist, so
+	// a resolving implementation would visibly substitute them.
 	t.Setenv("BUILD_TOKEN", "resolved")
-	authn, err := Build(Config{Type: TypeBearer, Bearer: &BearerConfig{Token: "env:BUILD_TOKEN"}})
-	require.NoError(t, err)
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(secretFile, []byte("from-file"), 0o600))
 
-	req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
-	require.NoError(t, authn.Apply(req))
-	assert.Equal(t, "Bearer resolved", req.Header.Get("Authorization"))
-}
+	for _, value := range []string{"env:BUILD_TOKEN", "file:" + secretFile, "literal:pw"} {
+		t.Run(value, func(t *testing.T) {
+			t.Run("apiKey", func(t *testing.T) {
+				authn, err := Build(Config{Type: TypeAPIKey, APIKey: &APIKeyConfig{Key: "X-API-Key", Value: value}})
+				require.NoError(t, err)
+				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+				require.NoError(t, authn.Apply(req))
+				assert.Equal(t, value, req.Header.Get("X-API-Key"))
+			})
 
-func TestBuild_FailsLoudOnUnsetEnv(t *testing.T) {
-	_, err := Build(Config{Type: TypeBearer, Bearer: &BearerConfig{Token: "env:DEFINITELY_UNSET"}})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is not set or is empty")
+			t.Run("bearer", func(t *testing.T) {
+				authn, err := Build(Config{Type: TypeBearer, Bearer: &BearerConfig{Token: value}})
+				require.NoError(t, err)
+				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+				require.NoError(t, authn.Apply(req))
+				assert.Equal(t, "Bearer "+value, req.Header.Get("Authorization"))
+			})
+
+			t.Run("oauth2", func(t *testing.T) {
+				var gotSecret string
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, gotSecret, _ = r.BasicAuth()
+					_, _ = w.Write([]byte(`{"access_token": "t", "expires_in": 3600}`))
+				}))
+				defer ts.Close()
+
+				authn, err := Build(Config{Type: TypeOAuth2, OAuth2: &OAuth2Config{
+					TokenURL: ts.URL, ClientID: "id", ClientSecret: value,
+				}})
+				require.NoError(t, err)
+				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+				require.NoError(t, authn.Apply(req))
+				// client_secret_basic form-encodes credentials (RFC 6749 §2.3.1).
+				decoded, err := url.QueryUnescape(gotSecret)
+				require.NoError(t, err)
+				assert.Equal(t, value, decoded)
+			})
+		})
+	}
 }
 
 func TestConfig_DecodesFromJSONAndYAML(t *testing.T) {

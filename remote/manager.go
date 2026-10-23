@@ -15,9 +15,9 @@ import (
 )
 
 // TLSSettings configures transport-level client authentication (mTLS) for a
-// service. Both values are filesystem paths to PEM files, not secret
-// references: certificate chains routinely exceed the 4 KB cap that
-// secret.SecretRef places on file-sourced secrets.
+// service. Both values are filesystem paths to PEM files, read on each TLS
+// handshake (see WithClientCertificateFiles) so rotated material is picked up
+// without a restart.
 type TLSSettings struct {
 	ClientCertFile string `json:"clientCertFile" yaml:"clientCertFile"`
 	ClientKeyFile  string `json:"clientKeyFile" yaml:"clientKeyFile"`
@@ -53,9 +53,8 @@ func NewManager() *Manager {
 // It is all-or-nothing: on error the existing registry is left untouched. Cached
 // clients are discarded, so subsequent calls use the new configuration.
 func (m *Manager) SetServices(services ...ServiceConfig) error {
-	// Prepare the new state outside the lock: this performs I/O (resolving secret
-	// references in auth.Build) without blocking concurrent readers, and ensures a
-	// failure leaves the manager's existing state untouched rather than corrupted.
+	// Prepare the new state before taking the lock, so a failure leaves the
+	// manager's existing state untouched rather than corrupted.
 	configs := make(map[string]ServiceConfig, len(services))
 	authenticators := make(map[string]auth.Authenticator)
 	for _, cfg := range services {
@@ -63,9 +62,9 @@ func (m *Manager) SetServices(services ...ServiceConfig) error {
 		cfg.URL = strings.TrimSuffix(cfg.URL, "/")
 		configs[cfg.ID] = cfg
 
-		// Build authenticators eagerly so secret references resolve once, now,
-		// and any misconfiguration (unset env var, unreadable file) fails loud
-		// at startup rather than on the first request.
+		// Build authenticators eagerly so any misconfiguration (unsupported
+		// type, missing settings, reserved endpoint params) fails loud at
+		// startup rather than on the first request.
 		if cfg.Auth != nil {
 			authenticator, err := auth.Build(*cfg.Auth)
 			if err != nil {
@@ -146,7 +145,7 @@ func (m *Manager) GetClient(id string) (*Client, error) {
 		opts = append(opts, WithTimeout(d))
 	}
 
-	// Authenticators are built and resolved once, at load time (see SetServices).
+	// Authenticators are built once, when services are set (see SetServices).
 	if authenticator, ok := m.authenticators[id]; ok {
 		opts = append(opts, WithAuthenticator(authenticator))
 	}

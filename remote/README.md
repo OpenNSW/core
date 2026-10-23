@@ -21,7 +21,7 @@ err := manager.Call(ctx, "npqs-api", remote.Request{
 }, &result)
 ```
 
-`SetServices` replaces the whole registry and is all-or-nothing: if any service is invalid (unsupported auth type, unresolvable secret reference, incomplete `tls` block) it returns an error and the previous registry stays in place.
+`SetServices` replaces the whole registry and is all-or-nothing: if any service is invalid (unsupported auth type, missing auth settings, incomplete `tls` block) it returns an error and the previous registry stays in place.
 
 ## Services config
 
@@ -45,7 +45,7 @@ services:
       oauth2:
         tokenURL: https://idp.example.gov/token
         clientID: my-client
-        clientSecret: env:NPQS_CLIENT_SECRET
+        clientSecret: "{{env:NPQS_CLIENT_SECRET}}"
         scopes: [npqs:submit]
   - id: legacy-api
     url: https://legacy.example.gov
@@ -54,7 +54,7 @@ services:
       type: apiKey
       apiKey:
         key: X-API-Key
-        value: env:LEGACY_API_KEY
+        value: "{{env:LEGACY_API_KEY}}"
     tls:
       clientCertFile: /etc/certs/client.crt
       clientKeyFile: /etc/certs/client.key
@@ -74,7 +74,7 @@ JSON uses the same keys:
         "oauth2": {
           "tokenURL": "https://idp.example.gov/token",
           "clientID": "my-client",
-          "clientSecret": "env:NPQS_CLIENT_SECRET",
+          "clientSecret": "<client secret>",
           "scopes": ["npqs:submit"]
         }
       }
@@ -89,9 +89,13 @@ Or build it in code:
 manager.SetServices(remote.ServiceConfig{
     ID:   "legacy-api",
     URL:  "https://legacy.example.gov",
-    Auth: &auth.Config{Type: auth.TypeAPIKey, APIKey: &auth.APIKeyConfig{Key: "X-API-Key", Value: "env:LEGACY_API_KEY"}},
+    Auth: &auth.Config{Type: auth.TypeAPIKey, APIKey: &auth.APIKeyConfig{Key: "X-API-Key", Value: os.Getenv("LEGACY_API_KEY")}},
 })
 ```
+
+### Secrets
+
+Secret fields (`apiKey.value`, `bearer.token`, `oauth2.clientSecret`) are used verbatim: the package never reads env vars or files. Resolve secrets before calling `SetServices` — with [`configyaml`](../configyaml/README.md), write them as `{{env:NAME}}` / `{{file:/path}}` placeholders, which are expanded while the file is loaded (as in the YAML example above). JSON and in-code configuration must carry already-resolved values.
 
 | Field     | Description                                                                                                                       |
 |-----------|-----------------------------------------------------------------------------------------------------------------------------------|

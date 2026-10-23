@@ -20,7 +20,7 @@ const (
 // Config selects a built-in strategy and carries its settings. Type names the
 // strategy, and the matching block — and only that block — must be set:
 //
-//	{"type": "bearer", "bearer": {"token": "env:API_TOKEN"}}
+//	{"type": "bearer", "bearer": {"token": "my-token"}}
 //
 // It is plain data with json and yaml tags (the same camelCase keys in both), so it
 // decodes from whichever format the application keeps its configuration in.
@@ -31,16 +31,16 @@ type Config struct {
 	OAuth2 *OAuth2Config `json:"oauth2,omitempty" yaml:"oauth2,omitempty"`
 }
 
-// authConfig is implemented by each strategy's settings struct. build resolves any
-// secret references the strategy declares and constructs the authenticator.
+// authConfig is implemented by each strategy's settings struct. build validates the
+// settings and constructs the authenticator.
 type authConfig interface {
 	build() (Authenticator, error)
 }
 
 // Build constructs the authenticator cfg describes. It is the single entry point
 // callers (e.g. the remote Manager) use, so they need not know about individual
-// strategies. Secret references are resolved here, once; an unresolvable reference
-// is a loud error.
+// strategies. It performs no I/O: secret values are used verbatim, and resolving them
+// (from env vars, files, a secret store, ...) is the caller's job.
 func Build(cfg Config) (Authenticator, error) {
 	strategy, err := cfg.strategy()
 	if err != nil {

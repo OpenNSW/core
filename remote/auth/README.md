@@ -16,15 +16,15 @@ type Authenticator interface {
 
 There are two ways to build an authenticator:
 
-1. **From config** — `auth.Build(cfg)` takes an `auth.Config`, resolves any secret
-   references (see [Secret References](#secret-references)) once, and returns the
-   authenticator. This is what the `remote` Manager uses for each service's `auth`
-   block. A reference that cannot be resolved is a loud error.
+1. **From config** — `auth.Build(cfg)` takes an `auth.Config`, validates it, and
+   returns the authenticator. This is what the `remote` Manager uses for each
+   service's `auth` block. It performs no I/O; secret values are used verbatim (see
+   [Secrets](#secrets)).
 
    ```go
    authn, err := auth.Build(auth.Config{
        Type:   auth.TypeBearer,
-       Bearer: &auth.BearerConfig{Token: "env:API_TOKEN"},
+       Bearer: &auth.BearerConfig{Token: os.Getenv("API_TOKEN")},
    })
    ```
 
@@ -32,8 +32,8 @@ There are two ways to build an authenticator:
    that block — must be set. A missing block, or a stray block for another
    strategy, is rejected rather than silently ignored.
 
-2. **Directly** — the `New*` constructors take already-resolved plain values. They
-   are pure: no I/O, no error.
+2. **Directly** — the `New*` constructors take the same plain values. They are
+   pure: no I/O, no error.
 
    ```go
    auth.NewAPIKey("X-Custom-Key", "my-secret-key")
@@ -60,15 +60,15 @@ Implements the OAuth2 Client Credentials flow with the following features:
 - Synchronized token updates to prevent race conditions.
 - Scope support.
 
-## Secret References
+## Secrets
 
-Secret-bearing config fields (`value`, `token`, `clientSecret`) are a
-[`secret.SecretRef`](../../secret/README.md) — a literal value or a scheme-prefixed
-reference (`env:NAME`, `file:/path`) that is resolved to its concrete value. The
-type lives in the standalone [`secret`](../../secret/README.md) module; see its
-README for the full scheme table and how to add a source.
+Secret-bearing fields (`value`, `token`, `clientSecret`) are plain strings, used
+verbatim: this package never reads env vars, files or a secret store, and a value
+that looks like a reference (`env:NAME`, `file:/path`) is sent as written. Resolving
+secrets is the application's job, done while it loads its configuration.
 
-A reference is written per field:
+With [`configyaml`](../../configyaml/README.md), write secrets as placeholders; they
+are expanded, once, before decoding:
 
 ```yaml
 auth:
@@ -76,21 +76,9 @@ auth:
   oauth2:
     tokenURL: https://identity.example.com/oauth2/token
     clientID: my-client
-    clientSecret: env:CLIENT_SECRET
+    clientSecret: "{{env:CLIENT_SECRET}}"
     scopes: [read, write]
 ```
-
-References are resolved **once, at startup** — when `Manager.SetServices` is called,
-or via `auth.Build`. A missing env var or an unreadable/empty file is a
-**loud error** — a reference never silently resolves to the empty string.
-Resolution is not repeated per request; if a referenced value changes, restart the
-process to pick it up.
-
-When loading with [`configyaml`](../../configyaml/README.md), write secret fields as
-references (`env:NAME`), not `{{env:NAME}}` placeholders. A placeholder is expanded
-before decoding, and the resulting value is then resolved again as a reference — so a
-secret whose value happens to begin with `env:`, `file:` or `literal:` would be
-misread.
 
 ## Strategy Configuration
 
@@ -100,14 +88,14 @@ Used when the authentication type is `"apiKey"`; set under `apiKey`.
 | Field   | Type        | Description                                                                             |
 |:--------|:------------|:----------------------------------------------------------------------------------------|
 | `key`   | `string`    | The HTTP header name (e.g., `"X-API-Key"`).                                             |
-| `value` | `SecretRef` | The key value — a literal or a reference (see [Secret References](#secret-references)). |
+| `value` | `string`    | The key value.                                                                          |
 
 ### BearerConfig
 Used when the authentication type is `"bearer"`; set under `bearer`.
 
 | Field   | Type        | Description                                                                                |
 |:--------|:------------|:-------------------------------------------------------------------------------------------|
-| `token` | `SecretRef` | The bearer token — a literal or a reference (see [Secret References](#secret-references)). |
+| `token` | `string`    | The bearer token.                                                                          |
 
 ### OAuth2Config
 Used when the authentication type is `"oauth2"`; set under `oauth2`.
@@ -116,7 +104,7 @@ Used when the authentication type is `"oauth2"`; set under `oauth2`.
 |:------------------------|:------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `tokenURL`              | `string`    | The OAuth2 token endpoint URL.                                                                                                                                                                                                                                                                                                                                                                       |
 | `clientID`              | `string`    | The client identifier.                                                                                                                                                                                                                                                                                                                                                                               |
-| `clientSecret`          | `SecretRef` | The client secret — a literal or a reference (see [Secret References](#secret-references)).                                                                                                                                                                                                                                                                                                          |
+| `clientSecret`          | `string`    | The client secret.                                                                                                                                                                                                                                                                                                                                                                                   |
 | `scopes`                | `[]string`  | Optional list of requested scopes.                                                                                                                                                                                                                                                                                                                                                                   |
 | `insecureSkipTLSVerify` | `bool`      | Optional. Skips TLS certificate verification on the **token request** only. For local development against a self-signed identity provider — **never enable in production**. Defaults to `false`.                                                                                                                                                                                                     |
 | `endpointParams`        | `object`    | Optional. Extra parameters for the token request, sent in the request body (RFC 6749 §3.2) — for example the RFC 8707 `resource` indicator naming the resource server a token is for. Each value is a string or an array of strings; `null` is rejected rather than sent as an empty parameter. `grant_type`, `scope`, `client_id` and `client_secret` are set by the flow itself and rejected here. |
@@ -125,7 +113,7 @@ Used when the authentication type is `"oauth2"`; set under `oauth2`.
 {
   "tokenURL": "https://idp.example/oauth2/token",
   "clientID": "my-client",
-  "clientSecret": "env:MY_CLIENT_SECRET",
+  "clientSecret": "<client secret>",
   "scopes": ["api:read"],
   "endpointParams": { "resource": "https://api.example" }
 }
