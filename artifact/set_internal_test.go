@@ -6,6 +6,8 @@ package artifact
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,6 +148,94 @@ func (b blockingLoader) Load(_ context.Context, path string) ([]byte, error) {
 	}
 	if f, ok := b.files[path]; ok {
 		return f, nil
+	}
+	return nil, ErrNotFound
+}
+
+// A caller waiting for another caller's probe gives up when its own context ends.
+func TestProbeWaitHonoursTheCallersContext(t *testing.T) {
+	ctx := context.Background()
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	loader := blockingLoader{
+		files:   map[string][]byte{"manifest_v1.json": []byte(`{"artifacts":[]}`)},
+		block:   "manifest_v2.json",
+		entered: entered,
+		release: release,
+	}
+	set, err := LoadSet(ctx, loader, WithPinnedVersion(1))
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = set.Registry(ctx, 2)
+		close(done)
+	}()
+	<-entered // the first probe now holds the slot, stuck in the loader
+
+	waitCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if _, err := set.Registry(waitCtx, 3); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting caller: err = %v, want context.DeadlineExceeded", err)
+	}
+	close(release)
+	<-done
+}
+
+// A probe cut short by its caller's context does not start the back-off: a manifest
+// published just after loads on the next call.
+func TestCancelledProbeDoesNotBackOff(t *testing.T) {
+	loader := &ctxLoader{files: map[string][]byte{"manifest_v1.json": []byte(`{"artifacts":[]}`)}, entered: make(chan struct{}, 1)}
+	set, err := LoadSet(context.Background(), loader, WithPinnedVersion(1))
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	loader.block.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		_, err := set.Registry(ctx, 2)
+		errs <- err
+	}()
+	<-loader.entered
+	cancel()
+	if err := <-errs; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled probe: err = %v, want context.Canceled", err)
+	}
+
+	loader.block.Store(false)
+	loader.publish("manifest_v2.json", []byte(`{"artifacts":[]}`))
+	if _, err := set.Registry(context.Background(), 2); err != nil {
+		t.Fatalf("Registry(2) right after a cancelled probe: %v", err)
+	}
+}
+
+// ctxLoader serves files; while block is set, a load waits for its context to end and
+// returns the context's error, as a network loader does on a cancelled request.
+type ctxLoader struct {
+	mu      sync.Mutex
+	files   map[string][]byte
+	block   atomic.Bool
+	entered chan struct{}
+}
+
+func (l *ctxLoader) publish(path string, body []byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.files[path] = body
+}
+
+func (l *ctxLoader) Load(ctx context.Context, path string) ([]byte, error) {
+	if l.block.Load() {
+		l.entered <- struct{}{}
+		<-ctx.Done()
+		return nil, fmt.Errorf("load %s: %w", path, ctx.Err())
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.files[path]; ok {
+		return b, nil
 	}
 	return nil, ErrNotFound
 }

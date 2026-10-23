@@ -39,10 +39,11 @@ var ErrUnknownManifestVersion = errors.New("unknown manifest version")
 type Set struct {
 	loader Loader
 
-	// probeMu serializes on-demand probes for newer manifests. It is held across the loader
-	// round trips; mu is taken only to read state and to install what a probe fetched, so a
-	// probe never blocks lookups of versions already loaded.
-	probeMu sync.Mutex
+	// probeSlot serializes on-demand probes for newer manifests: a probe holds its one slot
+	// across the loader round trips, and a caller waiting for it gives up when its own context
+	// ends. mu is taken only to read state and to install what a probe fetched, so a probe
+	// never blocks lookups of versions already loaded.
+	probeSlot chan struct{}
 
 	mu      sync.RWMutex
 	views   map[int]*Registry
@@ -101,10 +102,11 @@ func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error
 	}
 
 	s := &Set{
-		loader:   loader,
-		views:    make(map[int]*Registry),
-		explicit: make(map[Key]explicitRow),
-		now:      time.Now,
+		loader:    loader,
+		probeSlot: make(chan struct{}, 1),
+		views:     make(map[int]*Registry),
+		explicit:  make(map[Key]explicitRow),
+		now:       time.Now,
 	}
 	cfgs, err := fetchManifests(ctx, loader, 1, o.pin)
 	if err != nil {
@@ -260,11 +262,16 @@ func (s *Set) Registry(ctx context.Context, v int) (*Registry, error) {
 // probe loads manifests above the highest loaded one, up to version upTo (0: until the loader
 // reports one missing). It returns nil when there was nothing to load. One probe runs at a time
 // (a caller that waited may find the work done), it holds no lock that lookups wait on while it
-// fetches, and after a probe that loads nothing new, whatever the reason, the next one waits
-// reprobeInterval, so retries of a pinned flow cannot turn into a loader round trip each.
+// fetches, and after a probe that loads nothing new the next one waits reprobeInterval, so
+// retries of a pinned flow cannot turn into a loader round trip each. A probe cut short by its
+// caller's context ending does not start that wait: it says nothing about what is published.
 func (s *Set) probe(ctx context.Context, upTo int) error {
-	s.probeMu.Lock()
-	defer s.probeMu.Unlock()
+	select {
+	case s.probeSlot <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-s.probeSlot }()
 	s.mu.RLock()
 	latest, lastEmpty := s.latest, s.lastEmptyProbe
 	s.mu.RUnlock()
@@ -287,9 +294,12 @@ func (s *Set) probe(ctx context.Context, upTo int) error {
 	}
 	newLatest := s.latest
 	reached := upTo != 0 && newLatest >= upTo
-	if reached || (upTo == 0 && newLatest > latest && addErr == nil && fetchErr == nil) {
+	switch {
+	case reached || (upTo == 0 && newLatest > latest && addErr == nil && fetchErr == nil):
 		s.lastEmptyProbe = time.Time{}
-	} else {
+	case fetchErr != nil && ctx.Err() != nil:
+		// Cut short by the caller, not an answer from the loader: leave the back-off as it was.
+	default:
 		s.lastEmptyProbe = s.now()
 	}
 	s.mu.Unlock()
@@ -331,6 +341,9 @@ func GetExplicit[T Artifact](ctx context.Context, s *Set, id, version string) (T
 	reg, ok := s.explicitRegistry(key)
 	if !ok {
 		if err := s.probe(ctx, 0); err != nil {
+			if ctx.Err() != nil {
+				return zero, err
+			}
 			return zero, fmt.Errorf("%w: %s/%s version %q (probing newer manifests: %v)", ErrNotFound, id, kind, version, err)
 		}
 		if reg, ok = s.explicitRegistry(key); !ok {
