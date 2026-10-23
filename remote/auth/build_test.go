@@ -124,9 +124,12 @@ func TestBuild_UsesSecretValuesVerbatim(t *testing.T) {
 			})
 
 			t.Run("oauth2", func(t *testing.T) {
-				var gotSecret string
+				// Buffered so the handler never blocks; receiving from it orders the
+				// handler's write before the test's read.
+				gotSecret := make(chan string, 1)
 				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					_, gotSecret, _ = r.BasicAuth()
+					_, secret, _ := r.BasicAuth()
+					gotSecret <- secret
 					_, _ = w.Write([]byte(`{"access_token": "t", "expires_in": 3600}`))
 				}))
 				defer ts.Close()
@@ -138,7 +141,7 @@ func TestBuild_UsesSecretValuesVerbatim(t *testing.T) {
 				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
 				require.NoError(t, authn.Apply(req))
 				// client_secret_basic form-encodes credentials (RFC 6749 §2.3.1).
-				decoded, err := url.QueryUnescape(gotSecret)
+				decoded, err := url.QueryUnescape(<-gotSecret)
 				require.NoError(t, err)
 				assert.Equal(t, value, decoded)
 			})

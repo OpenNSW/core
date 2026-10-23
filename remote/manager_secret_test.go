@@ -27,9 +27,11 @@ func bearerService(url, token string) ServiceConfig {
 func TestManager_SetServices_SendsTokenVerbatim(t *testing.T) {
 	// The manager never resolves secrets: a token shaped like an env reference
 	// is sent as written, even when that env var is set.
-	var gotAuth string
+	// Buffered so the handler never blocks; receiving from it orders the
+	// handler's write before the test's read.
+	gotAuth := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		gotAuth <- r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
@@ -41,7 +43,7 @@ func TestManager_SetServices_SendsTokenVerbatim(t *testing.T) {
 
 	err := manager.Call(context.Background(), "svc", Request{Method: "GET", Path: "/"}, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer env:SVC_TOKEN", gotAuth)
+	assert.Equal(t, "Bearer env:SVC_TOKEN", <-gotAuth)
 }
 
 func TestManager_SetServices_FailedReloadKeepsPreviousState(t *testing.T) {
