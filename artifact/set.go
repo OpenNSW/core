@@ -35,6 +35,15 @@ type Set struct {
 	views   map[int]*Registry
 	latest  int
 	current int
+
+	// explicit records the path each explicitly versioned row resolves to, across every loaded
+	// manifest, so a later manifest cannot repoint an (id, kind, version) at other content.
+	explicit map[Key]explicitRow
+}
+
+type explicitRow struct {
+	path     string
+	manifest int
 }
 
 // SetOption configures LoadSet.
@@ -58,8 +67,9 @@ func WithPinnedVersion(v int) SetOption {
 // current version. Loading stops at the first version whose manifest the loader reports as
 // ErrNotFound, or at the pinned version; any other load error fails the call, so a transient
 // fault never silently hides the newer manifests. Without a manifest_v1.json, it loads
-// manifest.json as version 1. Each manifest is checked as RegisterFromConfig checks it.
-// Artifact files themselves are not fetched.
+// manifest.json as version 1. Each manifest is checked as RegisterFromConfig checks it, and
+// explicitly versioned rows are checked for a consistent path across manifests. Artifact files
+// themselves are not fetched.
 func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error) {
 	if loader == nil {
 		return nil, errors.New("artifact: nil loader passed to LoadSet")
@@ -72,7 +82,7 @@ func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error
 		return nil, fmt.Errorf("%w: pinned version %d", ErrUnknownManifestVersion, o.pin)
 	}
 
-	s := &Set{loader: loader, views: make(map[int]*Registry)}
+	s := &Set{loader: loader, views: make(map[int]*Registry), explicit: make(map[Key]explicitRow)}
 	cfgs, err := fetchManifests(ctx, loader, 1, o.pin)
 	if err != nil {
 		return nil, err
@@ -142,6 +152,26 @@ func (s *Set) add(v int, cfg ManifestConfig) error {
 	if err := RegisterFromConfig(reg, cfg); err != nil {
 		return fmt.Errorf("%s: %w", ManifestPath(v), err)
 	}
+	// Check every explicit row before recording any, so a rejected manifest leaves no trace.
+	for _, row := range cfg.Artifacts {
+		if row.Version == "" {
+			continue
+		}
+		k := Key{ID: row.ID, Kind: row.Kind, Version: row.Version}
+		if prev, ok := s.explicit[k]; ok && prev.path != row.Path {
+			return fmt.Errorf("%s: %s/%s version %q points at %q, but %s points it at %q; an explicit version must keep its file",
+				ManifestPath(v), row.ID, row.Kind, row.Version, row.Path, ManifestPath(prev.manifest), prev.path)
+		}
+	}
+	for _, row := range cfg.Artifacts {
+		if row.Version == "" {
+			continue
+		}
+		k := Key{ID: row.ID, Kind: row.Kind, Version: row.Version}
+		if _, ok := s.explicit[k]; !ok {
+			s.explicit[k] = explicitRow{path: row.Path, manifest: v}
+		}
+	}
 	s.views[v] = reg
 	s.latest = v
 	return nil
@@ -181,4 +211,31 @@ func (s *Set) Registry(_ context.Context, v int) (*Registry, error) {
 // CurrentRegistry returns the registry for the current version.
 func (s *Set) CurrentRegistry() *Registry {
 	return s.views[s.current]
+}
+
+// GetExplicit fetches an explicitly versioned artifact without a manifest version, from
+// whichever manifest lists it. LoadSet guarantees every manifest that lists an (id, kind,
+// version) points it at the same path, so the result does not depend on which one is used.
+// Use it for artifacts requested by explicit version outside any flow, such as static data.
+func GetExplicit[T Artifact](ctx context.Context, s *Set, id, version string) (T, error) {
+	var zero T
+	kind := kindOf[T]()
+	if version == "" {
+		return zero, fmt.Errorf("%w: %s/%s needs an explicit version", ErrNotFound, id, kind)
+	}
+	key := Key{ID: id, Kind: kind, Version: version}
+	reg, ok := s.explicitRegistry(key)
+	if !ok {
+		return zero, fmt.Errorf("%w: %s/%s version %q", ErrNotFound, id, kind, version)
+	}
+	return Get[T](ctx, reg, id, version)
+}
+
+// explicitRegistry returns a registry of a loaded manifest that lists key.
+func (s *Set) explicitRegistry(key Key) (*Registry, bool) {
+	row, ok := s.explicit[key]
+	if !ok {
+		return nil, false
+	}
+	return s.views[row.manifest], true
 }
