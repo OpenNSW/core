@@ -16,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/OpenNSW/core/secret"
 )
 
 // reservedEndpointParams are set by the client-credentials flow itself. Letting
@@ -167,27 +165,22 @@ func (p EndpointParams) validate() error {
 }
 
 type OAuth2Config struct {
-	TokenURL              string           `json:"tokenURL" yaml:"tokenURL"`
-	ClientID              string           `json:"clientID" yaml:"clientID"`
-	ClientSecret          secret.SecretRef `json:"clientSecret" yaml:"clientSecret"`
-	Scopes                []string         `json:"scopes,omitempty" yaml:"scopes,omitempty"`
-	InsecureSkipTLSVerify bool             `json:"insecureSkipTLSVerify,omitempty" yaml:"insecureSkipTLSVerify,omitempty"`
-	EndpointParams        EndpointParams   `json:"endpointParams,omitempty" yaml:"endpointParams,omitempty"`
+	TokenURL              string         `json:"tokenURL" yaml:"tokenURL"`
+	ClientID              string         `json:"clientID" yaml:"clientID"`
+	ClientSecret          string         `json:"clientSecret" yaml:"clientSecret"`
+	Scopes                []string       `json:"scopes,omitempty" yaml:"scopes,omitempty"`
+	InsecureSkipTLSVerify bool           `json:"insecureSkipTLSVerify,omitempty" yaml:"insecureSkipTLSVerify,omitempty"`
+	EndpointParams        EndpointParams `json:"endpointParams,omitempty" yaml:"endpointParams,omitempty"`
 }
 
-// build resolves the configured client secret (failing loud on an unresolvable
-// reference) and constructs the authenticator.
+// build validates the settings and constructs the authenticator.
 func (c OAuth2Config) build() (Authenticator, error) {
-	clientSecret, err := c.ClientSecret.Resolve()
-	if err != nil {
-		return nil, fmt.Errorf("oauth2 clientSecret: %w", err)
-	}
 	// Validated here, not just at token-request time, so a bad configuration fails when
 	// services are loaded rather than on the first outbound call.
 	if err := c.EndpointParams.validate(); err != nil {
 		return nil, fmt.Errorf("oauth2: %w", err)
 	}
-	auth := NewOAuth2(c.TokenURL, c.ClientID, clientSecret, c.Scopes,
+	auth := NewOAuth2(c.TokenURL, c.ClientID, c.ClientSecret, c.Scopes,
 		WithEndpointParams(url.Values(c.EndpointParams)))
 	auth.SetInsecureSkipTLSVerify(c.InsecureSkipTLSVerify)
 	return auth, nil

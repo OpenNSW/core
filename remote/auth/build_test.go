@@ -6,6 +6,10 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,20 +97,55 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-func TestBuild_ResolvesSecretReference(t *testing.T) {
+func TestBuild_SendsSecretValuesUnchanged(t *testing.T) {
+	// Secret values reach the wire unchanged, including ones shaped like an
+	// env:, file: or literal: reference to an env var or file that exists.
 	t.Setenv("BUILD_TOKEN", "resolved")
-	authn, err := Build(Config{Type: TypeBearer, Bearer: &BearerConfig{Token: "env:BUILD_TOKEN"}})
-	require.NoError(t, err)
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(secretFile, []byte("from-file"), 0o600))
 
-	req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
-	require.NoError(t, authn.Apply(req))
-	assert.Equal(t, "Bearer resolved", req.Header.Get("Authorization"))
-}
+	for _, value := range []string{"env:BUILD_TOKEN", "file:" + secretFile, "literal:pw"} {
+		t.Run(value, func(t *testing.T) {
+			t.Run("apiKey", func(t *testing.T) {
+				authn, err := Build(Config{Type: TypeAPIKey, APIKey: &APIKeyConfig{Key: "X-API-Key", Value: value}})
+				require.NoError(t, err)
+				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+				require.NoError(t, authn.Apply(req))
+				assert.Equal(t, value, req.Header.Get("X-API-Key"))
+			})
 
-func TestBuild_FailsLoudOnUnsetEnv(t *testing.T) {
-	_, err := Build(Config{Type: TypeBearer, Bearer: &BearerConfig{Token: "env:DEFINITELY_UNSET"}})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is not set or is empty")
+			t.Run("bearer", func(t *testing.T) {
+				authn, err := Build(Config{Type: TypeBearer, Bearer: &BearerConfig{Token: value}})
+				require.NoError(t, err)
+				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+				require.NoError(t, authn.Apply(req))
+				assert.Equal(t, "Bearer "+value, req.Header.Get("Authorization"))
+			})
+
+			t.Run("oauth2", func(t *testing.T) {
+				// Buffered so the handler never blocks; receiving from it orders the
+				// handler's write before the test's read.
+				gotSecret := make(chan string, 1)
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, secret, _ := r.BasicAuth()
+					gotSecret <- secret
+					_, _ = w.Write([]byte(`{"access_token": "t", "expires_in": 3600}`))
+				}))
+				defer ts.Close()
+
+				authn, err := Build(Config{Type: TypeOAuth2, OAuth2: &OAuth2Config{
+					TokenURL: ts.URL, ClientID: "id", ClientSecret: value,
+				}})
+				require.NoError(t, err)
+				req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+				require.NoError(t, authn.Apply(req))
+				// client_secret_basic form-encodes credentials (RFC 6749 §2.3.1).
+				decoded, err := url.QueryUnescape(<-gotSecret)
+				require.NoError(t, err)
+				assert.Equal(t, value, decoded)
+			})
+		})
+	}
 }
 
 func TestConfig_DecodesFromJSONAndYAML(t *testing.T) {
