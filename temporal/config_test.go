@@ -4,6 +4,8 @@
 package temporal
 
 import (
+	"encoding/base64"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -99,5 +101,58 @@ tls:
 	}
 	if plain.TLS != nil {
 		t.Fatalf("TLS = %+v without a tls block, want nil", plain.TLS)
+	}
+}
+
+func TestConfigValidateEncryption(t *testing.T) {
+	key32 := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	tests := []struct {
+		name    string
+		enc     *EncryptionConfig
+		wantErr string
+	}{
+		{"no encryption", nil, ""},
+		{"a 32-byte key", &EncryptionConfig{KeyID: "k1", Key: key32}, ""},
+		{"missing keyId", &EncryptionConfig{Key: key32}, "keyId is required"},
+		{"key not base64", &EncryptionConfig{KeyID: "k1", Key: "not base64!"}, "not valid base64"},
+		{"16-byte key", &EncryptionConfig{KeyID: "k1", Key: base64.StdEncoding.EncodeToString(make([]byte, 16))}, "must be 32 bytes, got 16"},
+		{"empty key", &EncryptionConfig{KeyID: "k1"}, "must be 32 bytes, got 0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Host: "localhost", Port: 7233, Namespace: "default", Encryption: tt.enc}
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want one containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfigEncryptionFromYAML(t *testing.T) {
+	const doc = `
+host: localhost
+port: 7233
+namespace: default
+encryption:
+  keyId: k1
+  key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(doc), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	want := EncryptionConfig{KeyID: "k1", Key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}
+	if cfg.Encryption == nil || *cfg.Encryption != want {
+		t.Fatalf("Encryption = %+v, want %+v", cfg.Encryption, want)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
