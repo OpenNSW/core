@@ -5,31 +5,28 @@ package remote
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/secret"
 )
 
-// writeServices writes a services.json with a single bearer-auth service whose
-// token is the given (possibly scheme-prefixed) reference, and returns its path.
-func writeServices(t *testing.T, url, tokenRef string) string {
-	t.Helper()
-	body := fmt.Sprintf(
-		`{"version":"1.0","services":[{"id":"svc","url":%q,"auth":{"type":"bearer","options":{"token":%q}}}]}`,
-		url, tokenRef,
-	)
-	path := filepath.Join(t.TempDir(), "services.json")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	return path
+// bearerService returns a single bearer-auth service whose token is the given
+// (possibly scheme-prefixed) reference.
+func bearerService(url, tokenRef string) ServiceConfig {
+	return ServiceConfig{
+		ID:   "svc",
+		URL:  url,
+		Auth: &auth.Config{Type: auth.TypeBearer, Bearer: &auth.BearerConfig{Token: secret.SecretRef(tokenRef)}},
+	}
 }
 
-func TestManager_LoadServices_ResolvesEnvSecretAtStartup(t *testing.T) {
+func TestManager_SetServices_ResolvesEnvSecretAtStartup(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -39,47 +36,47 @@ func TestManager_LoadServices_ResolvesEnvSecretAtStartup(t *testing.T) {
 	defer server.Close()
 
 	t.Setenv("SVC_TOKEN", "resolved-token")
-	path := writeServices(t, server.URL, "env:SVC_TOKEN")
+	svc := bearerService(server.URL, "env:SVC_TOKEN")
 
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(path))
+	require.NoError(t, manager.SetServices(svc))
 
 	err := manager.Call(context.Background(), "svc", Request{Method: "GET", Path: "/"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer resolved-token", gotAuth)
 }
 
-func TestManager_LoadServices_FailsLoudOnUnsetEnv(t *testing.T) {
-	path := writeServices(t, "http://local", "env:DEFINITELY_UNSET_TOKEN")
+func TestManager_SetServices_FailsLoudOnUnsetEnv(t *testing.T) {
+	svc := bearerService("http://local", "env:DEFINITELY_UNSET_TOKEN")
 
 	manager := NewManager()
-	err := manager.LoadServices(path)
+	err := manager.SetServices(svc)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to configure auth for service")
 }
 
-func TestManager_LoadServices_LiteralTokenStillWorks(t *testing.T) {
+func TestManager_SetServices_LiteralTokenStillWorks(t *testing.T) {
 	// Backward compatibility: a plain literal token resolves to itself.
-	path := writeServices(t, "http://local", "plain-token")
+	svc := bearerService("http://local", "plain-token")
 
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(path))
+	require.NoError(t, manager.SetServices(svc))
 }
 
-func TestManager_LoadServices_FailedReloadKeepsPreviousState(t *testing.T) {
-	// A first load succeeds.
-	good := writeServices(t, "http://local", "plain-token")
+func TestManager_SetServices_FailedReloadKeepsPreviousState(t *testing.T) {
+	// A first set succeeds.
+	good := bearerService("http://local", "plain-token")
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(good))
+	require.NoError(t, manager.SetServices(good))
 	require.Contains(t, manager.ListServices(), "svc")
 
-	// A second load that fails (unresolvable reference) must leave the manager's
+	// A second set that fails (unresolvable reference) must leave the manager's
 	// existing state untouched, not corrupted/half-applied.
-	bad := writeServices(t, "http://other", "env:DEFINITELY_UNSET_TOKEN")
-	err := manager.LoadServices(bad)
+	bad := bearerService("http://other", "env:DEFINITELY_UNSET_TOKEN")
+	err := manager.SetServices(bad)
 	require.Error(t, err)
 
-	// The previously loaded service is still usable.
+	// The previously set service is still usable.
 	assert.Contains(t, manager.ListServices(), "svc")
 	client, err := manager.GetClient("svc")
 	require.NoError(t, err)
