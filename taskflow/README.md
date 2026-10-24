@@ -59,7 +59,7 @@ store := gormstore.New(db)
 pluginRegistry := plugins.NewRegistry()
 pluginRegistry.Register("USER_INPUT",      plugins.NewUserInputPlugin())
 pluginRegistry.Register("API_CALL",        plugins.NewAPICallPlugin(remoteManager))
-pluginRegistry.Register("PAYMENT",         NewPaymentPlugin(paymentService))
+pluginRegistry.Register("PAYMENT",         plugins.NewPaymentPlugin(paymentService))
 pluginRegistry.Register("EXTERNAL_REVIEW", NewExternalReviewPlugin(remoteManager))
 
 // 3. Renderer

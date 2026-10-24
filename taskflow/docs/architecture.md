@@ -187,7 +187,7 @@ Everything else is a plugin's responsibility:
 |-----------------------------------|------------------------------------------|------------------------------------------------------|
 | `UserInputPlugin`                 | `PENDING_USER` (or `cfg.StatusOverride`) | Returns `ErrSuspended` — waits for portal submission |
 | `ExternalReviewPlugin`            | `QUEUED_EXTERNALLY`                      | Dispatches, returns `ErrSuspended`                   |
-| `PaymentPlugin`                   | `PENDING_PAYMENT`                        | Dispatches, returns `ErrSuspended`                   |
+| `PaymentPlugin`                   | `PENDING_PAYMENT`                        | Opens a checkout via `core/payment`, returns `ErrSuspended` |
 | `APICallPlugin` (fire-and-forget) | `DISPATCHED`                             | Dispatches, returns `nil` (sync completion)          |
 
 ```mermaid
