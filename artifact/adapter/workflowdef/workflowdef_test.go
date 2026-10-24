@@ -36,27 +36,6 @@ func TestWorkflowDefAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("LoadVersion returns pinned version", func(t *testing.T) {
-		m := testutil.MemLoader{
-			"wf_v3.json": []byte(`{"id": "import_clearance", "name": "Clearance V3", "version": 3}`),
-			"wf_v4.json": []byte(`{"id": "import_clearance", "name": "Clearance V4", "version": 4}`),
-		}
-		reg := artifact.NewRegistry(m)
-		reg.RegisterArtifact("import_clearance", "workflow", "v3", "wf_v3.json")
-		reg.RegisterArtifact("import_clearance", "workflow", "v4", "wf_v4.json")
-
-		def, err := workflowdef.LoadVersion(context.Background(), reg, "import_clearance", "v3")
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if def.Version != 3 {
-			t.Errorf("expected Version 3, got %d", def.Version)
-		}
-		if def.Name != "Clearance V3" {
-			t.Errorf("expected Name 'Clearance V3', got %q", def.Name)
-		}
-	})
-
 	t.Run("Load returns latest version when multiple exist", func(t *testing.T) {
 		m := testutil.MemLoader{
 			"wf_v1.json":  []byte(`{"id": "import_clearance", "name": "Clearance V1", "version": 1}`),

@@ -110,6 +110,9 @@ The loader is required — `NewRegistry(nil)` panics and `LoadSet(ctx, nil)` fai
 // Inside a flow: the version the flow recorded when it started.
 reg, err := set.Registry(ctx, flow.ManifestVersion)
 tmpl, err := artifact.Latest[EmailTemplate](ctx, reg, "welcome_email")
+
+// Outside any flow, for an artifact requested by explicit version (static data):
+list, err := artifact.GetExplicit[StaticList](ctx, set, "ports", "2")
 ```
 
 All calls: fetch bytes via the loader → call `Parse` → return typed value. Within one manifest an artifact without an explicit version has a single row, so `Latest` returns it.
@@ -135,7 +138,9 @@ The rules that make a manifest version a stable snapshot:
 - **Published files never change.** A change to an artifact is a new file, and a new manifest, with the next version number, points the same ID at it. Every older manifest keeps resolving what it resolved when it was published.
 - **Artifacts refer to each other by ID.** A task template names its workflow and render config by ID, and the manifest decides which file each ID is. Changing a render config needs a new manifest, not a new task template.
 - **Versions are contiguous from 1.** `LoadSet` probes upward until the loader reports `ErrNotFound`, so a gap hides every later manifest. Any other load error fails `LoadSet`; for S3 this means the reader needs `s3:ListBucket`, or a missing key is reported as access denied.
+- **An explicit `version` keeps its path.** A row with a `version` is fetched by that version outside any flow (`GetExplicit`), so every manifest that lists it must point at the same file. `LoadSet` rejects one that does not.
 - **The current version** is the highest one, unless `WithPinnedVersion` names an older one for a rollback. With a pin, `LoadSet` reads only manifests up to it, so a broken newer manifest cannot block the rollback.
+- **Within a manifest, the unversioned row wins.** `Latest` returns the row without a version when there is one, even if the manifest also lists explicit versions of the same ID.
 
 ---
 

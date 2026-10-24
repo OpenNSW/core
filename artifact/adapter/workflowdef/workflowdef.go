@@ -17,7 +17,7 @@ const Kind artifact.Kind = "workflow"
 
 // loadable is the adapter: a local type (so we may legally define methods on it)
 // that embeds the pure DSL type and satisfies artifact.Artifact + artifact.Parser.
-// Unexported — callers use Load/LoadVersion and never see it.
+// Unexported — callers use Load and never see it.
 type loadable struct {
 	engine.WorkflowDefinition
 }
@@ -34,17 +34,10 @@ func (w *loadable) Parse(raw []byte) error {
 	return nil
 }
 
-// Load returns the newest version of a workflow definition. Callers get a plain
-// engine.WorkflowDefinition back — they never see the adapter or know "artifact"
-// was involved in fetching it.
+// Load returns a workflow definition from reg, which is one manifest version's registry. Callers
+// get a plain engine.WorkflowDefinition back — they never see the adapter or know "artifact" was
+// involved in fetching it.
 func Load(ctx context.Context, reg *artifact.Registry, id string) (engine.WorkflowDefinition, error) {
 	w, err := artifact.Latest[loadable](ctx, reg, id)
-	return w.WorkflowDefinition, err
-}
-
-// LoadVersion returns a specific pinned version (e.g. to resume a running
-// instance on the version it started with).
-func LoadVersion(ctx context.Context, reg *artifact.Registry, id, version string) (engine.WorkflowDefinition, error) {
-	w, err := artifact.Get[loadable](ctx, reg, id, version)
 	return w.WorkflowDefinition, err
 }
