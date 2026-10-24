@@ -44,6 +44,7 @@ type TaskStore interface {
     PersistSubmission(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
     WriteDraft(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
     CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error)
+    CancelTask(ctx context.Context, taskID string) (int64, error)
 
     // Guarded claim writes: the same kind of statement, on the claim columns only.
     ClaimTask(ctx context.Context, taskID, holder string, at time.Time) (int64, error)
@@ -57,7 +58,7 @@ type TaskStore interface {
 - **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). Must return `(zero, false)` when absent, never panic.
 - **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
 - **`GetAllTasks`** returns every record if `parentWorkflowID == ""`, otherwise only records where `record.ParentWorkflowID == parentWorkflowID`. Used by the portal listing API.
-- **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
+- **The six step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
 
   | Method              | Guard                                | Sets                                                                        |
   |---------------------|--------------------------------------|-----------------------------------------------------------------------------|
@@ -66,6 +67,7 @@ type TaskStore interface {
   | `PersistSubmission` | `active_step_id = stepID AND seq = seq` | `data`, `state = ADVANCING`, `seq = seq + 1`                             |
   | `WriteDraft`        | `active_step_id = stepID AND seq = seq AND state NOT IN (STARTING_STEP, ADVANCING, COMPLETED)` | `data` only                       |
   | `CompleteTask`      | stored `seq <= seq`                  | `state = COMPLETED`, `seq`                                                  |
+  | `CancelTask`        | `state NOT IN (COMPLETED, CANCELLED)` | `state = CANCELLED`, `seq = seq + 1`, so a step write still in flight is stale |
 
   Return the number of rows changed. **0 rows means the write was stale and was dropped; it is not an error.** Return an error only when the store failed.
 - **The two claim methods** are conditional writes of the same kind, on `claimed_by` and `claimed_at` only. They must not change `seq` or the step columns, and the step methods and `InitTask` must not change the claim columns:

@@ -169,6 +169,14 @@ func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) 
 	})
 }
 
+func (s *TaskStore) CancelTask(ctx context.Context, taskID string) (int64, error) {
+	return s.stepUpdate(ctx, taskID, "state NOT IN ?", []any{[]string{store.StateCompleted, store.StateCancelled}},
+		map[string]any{
+			"state": store.StateCancelled,
+			"seq":   gorm.Expr("seq + 1"),
+		})
+}
+
 func (s *TaskStore) ClaimTask(ctx context.Context, taskID, holder string, at time.Time) (int64, error) {
 	// The holder matches the guard again on a repeat claim, which then succeeds without moving
 	// claimed_at: the CASE reads the row's value before this update, as SQL assignments do.

@@ -242,6 +242,35 @@ func TestCompleteTask(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
 }
 
+// CancelTask ends a task that has not ended, and advances seq so a step write still in flight
+// for the old seq is stale. A task that has ended keeps the way it ended.
+func TestCancelTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+
+	n, err := s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 1)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCancelled)
+
+	// The step's own write, landing after the cancel, changes nothing.
+	n, err = s.WriteRenderState(ctx, task1, stepB, 5, "PENDING_USER", nil)
+	wantRows(t, n, err, 0)
+	// A repeat cancel, and a late completion, leave the cancelled task as it is.
+	n, err = s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCancelled)
+}
+
+func TestCancelTask_LeavesACompletedTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	_, _ = s.CompleteTask(ctx, task1, 6)
+
+	n, err := s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
+}
+
 func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	s, ctx := newTestStore(t)
 
@@ -254,6 +283,8 @@ func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	n, err = s.WriteDraft(ctx, "nope", stepA, 1, nil)
 	wantRows(t, n, err, 0)
 	n, err = s.CompleteTask(ctx, "nope", 1)
+	wantRows(t, n, err, 0)
+	n, err = s.CancelTask(ctx, "nope")
 	wantRows(t, n, err, 0)
 	n, err = s.ClaimTask(ctx, "nope", userA, t1)
 	wantRows(t, n, err, 0)

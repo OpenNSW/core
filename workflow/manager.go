@@ -303,6 +303,16 @@ type TemporalManager interface {
 	// StopWorker gracefully shuts down the internal Temporal Worker, stopping it from
 	// pulling new tasks while allowing currently executing tasks to finish.
 	StopWorker()
+
+	// RootWorkflowID returns the ID of the top-level workflow workflowID runs under: workflowID
+	// itself when it was started on its own, or the workflow that started it when it is a child,
+	// such as a split's branch. A workflow that does not exist is ErrWorkflowNotFound.
+	RootWorkflowID(ctx context.Context, workflowID string) (string, error)
+
+	// TerminateWorkflow ends workflowID now, recording reason, and with it every child workflow it
+	// started. A workflow that has already closed, or does not exist, is not an error: the
+	// outcome the caller asked for already holds, so a retried call succeeds.
+	TerminateWorkflow(ctx context.Context, workflowID, reason string) error
 }
 
 type temporalManagerImpl struct {
@@ -420,6 +430,31 @@ func (m *temporalManagerImpl) GetStatus(ctx context.Context, workflowID string) 
 	}
 
 	return &instance, nil
+}
+
+func (m *temporalManagerImpl) RootWorkflowID(ctx context.Context, workflowID string) (string, error) {
+	resp, err := m.temporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
+	if err != nil {
+		var notFound *serviceerror.NotFound
+		if errors.As(err, &notFound) {
+			return "", fmt.Errorf("%w: %w", ErrWorkflowNotFound, err)
+		}
+		return "", fmt.Errorf("describe workflow %s: %w", workflowID, err)
+	}
+	if root := resp.GetWorkflowExecutionInfo().GetRootExecution(); root.GetWorkflowId() != "" {
+		return root.GetWorkflowId(), nil
+	}
+	return workflowID, nil
+}
+
+func (m *temporalManagerImpl) TerminateWorkflow(ctx context.Context, workflowID, reason string) error {
+	err := m.temporalClient.TerminateWorkflow(ctx, workflowID, "", reason)
+	// Temporal answers NotFound both for an unknown workflow and for one that has already closed.
+	var notFound *serviceerror.NotFound
+	if err != nil && !errors.As(err, &notFound) {
+		return fmt.Errorf("terminate workflow %s: %w", workflowID, err)
+	}
+	return nil
 }
 
 func (m *temporalManagerImpl) StartWorker() error {
