@@ -102,7 +102,7 @@ var ErrStepNotGuarded = errors.New("step template does not declare a required pr
 type TaskManager struct {
 	db                  store.TaskStore
 	renderer            renderer.Renderer
-	registry            *artifact.Registry
+	artifacts           *artifact.Set
 	pluginsRegistry     *plugins.Registry
 	extensionsRegistry  *extensions.Registry
 	onTaskCompleted     TaskCompletedCallback
@@ -117,14 +117,15 @@ type TaskManager struct {
 // NewTaskManager creates a TaskManager instance.
 //
 //   - db                  — the persistence/in-memory task store.
-//   - registry            — artifact registry holding task templates, step templates, workflow definitions, and render configs.
+//   - artifacts           — the artifact manifests holding task templates, step templates, workflow definitions, and render configs.
+//     Every task resolves them through the manifest version its parent workflow carries (see engine.VarManifestVersion).
 //   - pluginsRegistry     — registry containing task execution plugin handlers.
 //   - taskWorkflowManager — the TemporalManager used to start and complete Task sub-workflows.
 //   - onTaskCompleted     — callback invoked when a Task workflow finishes;
 //     typically invokes Parent.CompleteActivation to resume the parent workflow using stored coordinates.
 func NewTaskManager(
 	db store.TaskStore,
-	registry *artifact.Registry,
+	artifacts *artifact.Set,
 	pluginsRegistry *plugins.Registry,
 	extensionsRegistry *extensions.Registry,
 	taskWorkflowManager engine.TemporalManager,
@@ -134,7 +135,7 @@ func NewTaskManager(
 ) *TaskManager {
 	tm := &TaskManager{
 		db:                  db,
-		registry:            registry,
+		artifacts:           artifacts,
 		pluginsRegistry:     pluginsRegistry,
 		extensionsRegistry:  extensionsRegistry,
 		onTaskCompleted:     onTaskCompleted,
@@ -151,21 +152,46 @@ func NewTaskManager(
 	return tm
 }
 
+// registryFor returns the registry of manifest version v. A task without a version cannot resolve
+// templates: falling back to the current version would change templates under a running task. That
+// is a host wiring fault no retry repairs, so it fails without retrying; a version this replica has
+// not loaded yet may still appear, so that error stays retryable.
+//
+// Temporal reads retryability off the returned error itself, not anything it wraps, so callers
+// running as an Activity return the error unwrapped.
+func (tm *TaskManager) registryFor(ctx context.Context, taskTemplateID string, v int) (*artifact.Registry, error) {
+	if v <= 0 {
+		return nil, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("template %q: no artifact manifest version (got %d); the workflow was started without %s", taskTemplateID, v, engine.VarManifestVersion),
+			"NoManifestVersion", artifact.ErrUnknownManifestVersion)
+	}
+	reg, err := tm.artifacts.Registry(ctx, v)
+	if err != nil {
+		return nil, fmt.Errorf("template %q: %w", taskTemplateID, err)
+	}
+	return reg, nil
+}
+
 // StartTask is called by the parent workflow engine when it activates a TASK node.
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
 func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
-	template, err := tasktemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
+	reg, err := tm.registryFor(ctx, payload.TaskTemplateID, payload.ManifestVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	template, err := tasktemplate.Load(ctx, reg, payload.TaskTemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("load task template %q: %w", payload.TaskTemplateID, err)
 	}
 
-	wfDef, err := workflowdef.Load(ctx, tm.registry, template.WorkflowID)
+	wfDef, err := workflowdef.Load(ctx, reg, template.WorkflowID)
 	if err != nil {
 		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, err)
 	}
 
-	renderConfig, err := generictemplate.Load(ctx, tm.registry, template.RenderConfigID)
+	renderConfig, err := generictemplate.Load(ctx, reg, template.RenderConfigID)
 	if err != nil {
 		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
@@ -184,6 +210,8 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		maputil.SetNestedKey(initialData, k, v)
 	}
 	initialData["_task_id"] = taskID
+	// The task's own workflow resolves its steps through the same manifest version.
+	initialData[engine.VarManifestVersion] = payload.ManifestVersion
 
 	record := store.TaskRecord{
 		TaskID:           taskID,
@@ -193,6 +221,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		ParentWorkflowID: payload.WorkflowID,
 		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
 		CaseID:           payload.CaseID,       // the same at every level of nesting (see engine.VarCaseID)
+		ManifestVersion:  payload.ManifestVersion,
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
 		CreatedAt:        time.Now(),
@@ -208,7 +237,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	if err := tm.db.InitTask(ctx, record); err != nil {
 		return nil, fmt.Errorf("create task record: %w", err)
 	}
-	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type)
+	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type, "manifest_version", payload.ManifestVersion)
 
 	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)
 	if err != nil {
@@ -242,7 +271,14 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		return nil, fmt.Errorf("[StartTaskStep] no task record found for workflow %s", payload.WorkflowID)
 	}
 
-	stepTemplate, err := steptemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
+	// The record's version is the one the task started on; every step uses it.
+	reg, err := tm.registryFor(ctx, payload.TaskTemplateID, record.ManifestVersion)
+	if err != nil {
+		return nil, err
+	}
+	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
+
+	stepTemplate, err := steptemplate.Load(ctx, reg, payload.TaskTemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("[StartTaskStep] load step template %q: %w", payload.TaskTemplateID, err)
 	}
@@ -291,7 +327,7 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		OutputNamespace: stepTemplate.OutputNamespace,
 	}
 
-	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID)
+	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID, "manifest_version", record.ManifestVersion)
 
 	err = plugin.Execute(pluginCtx, stepTemplate.PluginProperties)
 	suspended := errors.Is(err, plugins.ErrSuspended)
@@ -416,7 +452,14 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	}
 	seq := record.Seq
 
-	stepTemplate, err := steptemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
+	reg, err := tm.registryFor(ctx, record.ActiveTaskTemplateID, record.ManifestVersion)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", taskID, err)
+	}
+	// Extensions (a notification's template, for example) resolve through the task's version.
+	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
+
+	stepTemplate, err := steptemplate.Load(ctx, reg, record.ActiveTaskTemplateID)
 	if err != nil {
 		return fmt.Errorf("failed to load active step template %q: %w", record.ActiveTaskTemplateID, err)
 	}
@@ -583,7 +626,10 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		return TaskView{}, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
-	view, err := tm.renderer.Render(context, record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
+	// The renderer's template provider resolves the render config's templates through the task's
+	// version, so a form does not change under an open task.
+	renderCtx := artifact.WithManifestVersion(context, record.ManifestVersion)
+	view, err := tm.renderer.Render(renderCtx, record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
 	if err != nil {
 		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
 	}

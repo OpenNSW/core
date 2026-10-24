@@ -47,7 +47,8 @@ func startTaskStepFixture(t *testing.T) (*TaskManager, *safeMockTaskStore, *prob
 	t.Helper()
 	db := newSafeMockTaskStore()
 	db.InitTask(context.Background(), store.TaskRecord{
-		TaskID: "task-1", TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf",
+		ManifestVersion: 1,
+		TaskID:          "task-1", TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf",
 		Data: map[string]any{"old": "value"},
 	})
 	return startTaskStepFixtureOver(t, db)
@@ -67,7 +68,8 @@ func startTaskStepFixtureOver(t *testing.T, db *safeMockTaskStore) (*TaskManager
 
 func stepPayload(step string, seq int64, inputs map[string]any) engine.TaskPayload {
 	return engine.TaskPayload{
-		WorkflowID: "task-wf", RunID: "run-1", NodeID: "form", ActivationID: step, Seq: seq,
+		ManifestVersion: 1,
+		WorkflowID:      "task-wf", RunID: "run-1", NodeID: "form", ActivationID: step, Seq: seq,
 		TaskTemplateID: "generic_user_input", Inputs: inputs,
 	}
 }

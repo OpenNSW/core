@@ -116,7 +116,6 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     //    configs/manifest_v1.json, manifest_v2.json, … (or configs/manifest.json)
     artifactLoader, _ := local.New(local.Config{Root: "configs"})
     artifacts, _ := artifact.LoadSet(ctx, artifactLoader)
-    registry := artifacts.CurrentRegistry()
 
     // 3. Payment
     paymentRepo := NewPaymentRepo(db)
@@ -148,7 +147,8 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     onTaskCompleted := func(parentWorkflowID, parentStepID string, vars map[string]any) error {
         return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentStepID, vars)
     }
-    tm = orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, microRunner, onTaskCompleted, taskRenderer)
+    // Each task resolves its templates through the manifest version its workflow carries.
+    tm = orchestrator.NewTaskManager(taskStore, artifacts, pluginRegistry, nil /* extensions */, microRunner, onTaskCompleted, taskRenderer)
     microRunner.StartWorker()
 
     // 6. Macro workflow runner
