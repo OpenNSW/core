@@ -94,6 +94,30 @@ func TestOptionsFromConfigTLSError(t *testing.T) {
 	}
 }
 
+func TestOptionsFromConfigEncryption(t *testing.T) {
+	plain, err := optionsFromConfig(Config{Host: "localhost", Port: 7233, Namespace: "default"})
+	if err != nil {
+		t.Fatalf("optionsFromConfig() error = %v", err)
+	}
+	if plain.DataConverter != nil || plain.FailureConverter != nil {
+		t.Fatalf("converters set without an encryption block")
+	}
+
+	enc := testEncryptionConfig(t, "k1")
+	opts, err := optionsFromConfig(Config{Host: "localhost", Port: 7233, Namespace: "default", Encryption: &enc})
+	if err != nil {
+		t.Fatalf("optionsFromConfig() error = %v", err)
+	}
+	if opts.DataConverter == nil || opts.FailureConverter == nil {
+		t.Fatalf("converters not set for an encryption block")
+	}
+
+	bad := EncryptionConfig{KeyID: "k1", Key: "short"}
+	if _, err := optionsFromConfig(Config{Host: "localhost", Port: 7233, Namespace: "default", Encryption: &bad}); err == nil {
+		t.Fatalf("optionsFromConfig() error = nil for an invalid key")
+	}
+}
+
 // serverStub answers the capabilities call the Temporal SDK makes when it
 // dials, and records the client certificate that call came with.
 type serverStub struct {
