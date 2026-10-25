@@ -172,6 +172,14 @@ func TestLoadSet(t *testing.T) {
 		}
 	})
 
+	t.Run("an error in manifest.json names manifest.json", func(t *testing.T) {
+		src := testutil.MemLoader{"manifest.json": manifest(row("welcome", "email", "", "a.json"), row("welcome", "email", "", "b.json"))}
+		_, err := artifact.LoadSet(ctx, src)
+		if err == nil || !strings.HasPrefix(err.Error(), "manifest.json:") {
+			t.Fatalf("expected an error naming manifest.json, got %v", err)
+		}
+	})
+
 	t.Run("a malformed manifest fails", func(t *testing.T) {
 		src := twoVersions()
 		src["manifest_v2.json"] = []byte(`{`)

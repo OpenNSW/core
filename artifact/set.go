@@ -77,17 +77,22 @@ func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error
 	if err != nil {
 		return nil, err
 	}
+	unversioned := false
 	if len(cfgs) == 0 && o.pin <= 1 {
 		cfg, err := loadUnversioned(ctx, loader)
 		if err != nil {
 			return nil, err
 		}
 		if cfg != nil {
-			cfgs = append(cfgs, *cfg)
+			cfgs, unversioned = append(cfgs, *cfg), true
 		}
 	}
 	for i, cfg := range cfgs {
-		if err := s.add(i+1, cfg); err != nil {
+		file := ManifestPath(i + 1)
+		if unversioned {
+			file = ManifestFilename
+		}
+		if err := s.add(i+1, file, cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -136,11 +141,11 @@ func loadUnversioned(ctx context.Context, loader Loader) (*ManifestConfig, error
 	return &cfg, nil
 }
 
-// add registers manifest v. It runs only while LoadSet builds s.
-func (s *Set) add(v int, cfg ManifestConfig) error {
+// add registers manifest v, loaded from file. It runs only while LoadSet builds s.
+func (s *Set) add(v int, file string, cfg ManifestConfig) error {
 	reg := NewRegistry(s.loader)
 	if err := RegisterFromConfig(reg, cfg); err != nil {
-		return fmt.Errorf("%s: %w", ManifestPath(v), err)
+		return fmt.Errorf("%s: %w", file, err)
 	}
 	s.views[v] = reg
 	s.latest = v
