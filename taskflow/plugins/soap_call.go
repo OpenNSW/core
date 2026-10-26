@@ -57,23 +57,23 @@ type SOAPCallConfig struct {
 
 func (p *SOAPCallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
 	if ctx.Record == nil {
-		return fmt.Errorf("soap_call: task record is required")
+		return Permanent(ErrorTypeInput, fmt.Errorf("soap_call: task record is required"))
 	}
 	if p.manager == nil {
-		return fmt.Errorf("soap_call: remote manager is not initialized")
+		return Permanent(ErrorTypeConfig, fmt.Errorf("soap_call: remote manager is not initialized"))
 	}
 	if p.interpreter == nil {
-		return fmt.Errorf("soap_call: interpreter is not initialized")
+		return Permanent(ErrorTypeConfig, fmt.Errorf("soap_call: interpreter is not initialized"))
 	}
 
 	var cfg SOAPCallConfig
 	if len(configRaw) > 0 && string(configRaw) != "null" {
 		if err := json.Unmarshal(configRaw, &cfg); err != nil {
-			return fmt.Errorf("soap_call: invalid config: %w", err)
+			return Permanent(ErrorTypeConfig, fmt.Errorf("soap_call: invalid config: %w", err))
 		}
 	}
 	if cfg.ServiceID == "" {
-		return fmt.Errorf("soap_call: service_id is required")
+		return Permanent(ErrorTypeConfig, fmt.Errorf("soap_call: service_id is required"))
 	}
 
 	var resp *remote.RawResponse

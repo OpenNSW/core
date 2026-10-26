@@ -33,11 +33,11 @@ type APICallConfig struct {
 func (p *APICallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
 	var cfg APICallConfig
 	if err := json.Unmarshal(configRaw, &cfg); err != nil {
-		return fmt.Errorf("failed to parse generic_api_call config: %w", err)
+		return Permanent(ErrorTypeConfig, fmt.Errorf("failed to parse generic_api_call config: %w", err))
 	}
 
 	if cfg.URL == "" {
-		return fmt.Errorf("missing 'url' in generic_api_call config")
+		return Permanent(ErrorTypeConfig, fmt.Errorf("missing 'url' in generic_api_call config"))
 	}
 
 	ctx.Record.State = "DISPATCHED"
@@ -46,7 +46,7 @@ func (p *APICallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 
 	token, err := CallbackToken(ctx.Record)
 	if err != nil {
-		return err
+		return Permanent(ErrorTypeInput, err)
 	}
 	if err := p.dispatcher(ctx.Context, cfg.URL, token, ctx.Record.Data); err != nil {
 		return fmt.Errorf("api call dispatch failed: %w", err)

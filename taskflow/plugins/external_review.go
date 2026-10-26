@@ -32,11 +32,11 @@ type ExternalReviewConfig struct {
 func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
 	var cfg ExternalReviewConfig
 	if err := json.Unmarshal(configRaw, &cfg); err != nil {
-		return fmt.Errorf("failed to parse external review plugin config: %w", err)
+		return Permanent(ErrorTypeConfig, fmt.Errorf("failed to parse external review plugin config: %w", err))
 	}
 
 	if cfg.ExternalURL == "" {
-		return fmt.Errorf("missing 'external_url' in external review plugin config")
+		return Permanent(ErrorTypeConfig, fmt.Errorf("missing 'external_url' in external review plugin config"))
 	}
 
 	ctx.Record.State = "QUEUED_EXTERNALLY"
@@ -44,7 +44,7 @@ func (p *ExternalReviewPlugin) Execute(ctx PluginContext, configRaw json.RawMess
 
 	token, err := CallbackToken(ctx.Record)
 	if err != nil {
-		return err
+		return Permanent(ErrorTypeInput, err)
 	}
 	if err := p.dispatcher(ctx.Context, cfg.ExternalURL, token, ctx.Record.Data); err != nil {
 		return fmt.Errorf("external dispatch failed: %w", err)

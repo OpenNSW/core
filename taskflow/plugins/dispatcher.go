@@ -26,12 +26,12 @@ type Dispatcher func(ctx context.Context, url string, callbackToken string, payl
 func DefaultHTTPDispatcher(ctx context.Context, url string, callbackToken string, payload map[string]any) error {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal dispatch payload: %w", err)
+		return Permanent(ErrorTypeInput, fmt.Errorf("failed to marshal dispatch payload: %w", err))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return fmt.Errorf("failed to create http request: %w", err)
+		return Permanent(ErrorTypeConfig, fmt.Errorf("failed to create http request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Task-ID", callbackToken) // carry the callback token as a header, not in the body
@@ -45,7 +45,11 @@ func DefaultHTTPDispatcher(ctx context.Context, url string, callbackToken string
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("external system returned %d: %s", resp.StatusCode, body)
+		err := fmt.Errorf("external system returned %d: %s", resp.StatusCode, body)
+		if !RetryableStatus(resp.StatusCode) {
+			return Permanent(ErrorTypeRejected, err)
+		}
+		return err
 	}
 
 	return nil
