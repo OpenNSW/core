@@ -69,12 +69,12 @@ jobs:
         continue-on-error: true
 
       - name: Run Gosec
-        uses: securego/gosec@v2.29.0
+        uses: securego/gosec@v2.30.0
         with:
           args: -no-fail -fmt sarif -out results.sarif ./...
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v4.39.0
+        uses: github/codeql-action/upload-sarif@v4.39.1
         with:
           sarif_file: results.sarif
         if: always()
