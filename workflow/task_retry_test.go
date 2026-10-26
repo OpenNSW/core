@@ -144,3 +144,60 @@ func TestCompletionHookParksWhenRetriesRunOut(t *testing.T) {
 	require.Error(t, env.GetWorkflowError())
 	require.Equal(t, taskMaxAttempts, attempts)
 }
+
+// A split whose branch workflow can't be fetched stops retrying after taskMaxAttempts and parks the
+// split node, instead of retrying forever.
+func TestSplitParksWhenItsDefinitionCantBeFetched(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.FetchWorkflowDefinitionActivity, activity.RegisterOptions{Name: "FetchWorkflowDefinitionActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	attempts := 0
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "missing_workflow", mock.Anything).
+		Return(func(context.Context, string, int) (WorkflowDefinition, error) {
+			attempts++
+			return WorkflowDefinition{}, errors.New("workflow definition not found")
+		})
+
+	def := WorkflowDefinition{
+		ID: "split_missing",
+		Nodes: []Node{
+			{ID: "start", Type: NodeTypeStart},
+			{
+				ID:             "split",
+				Type:           NodeTypeSplitTask,
+				TaskTemplateID: "missing_workflow",
+				SplitTask:      &SplitTaskConfig{Mode: SplitModeSameTemplate, ItemsVariable: "items", FailureMode: FailureModeFailFast},
+			},
+			{ID: "end", Type: NodeTypeEnd},
+		},
+		Edges: []Edge{
+			{ID: "e1", SourceID: "start", TargetID: "split"},
+			{ID: "e2", SourceID: "split", TargetID: "end"},
+		},
+	}
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		node := instance.NodeInfo["split"]
+		require.Equal(t, NodeStatusAwaitingAdmin, node.Status)
+		require.Equal(t, ParkCategoryDefinitionError, node.ParkCategory)
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "split",
+			ActivationID: node.ActivationID,
+			Action:       AdminActionAbort,
+		})
+	}, 48*time.Hour)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{
+		"items": []map[string]any{{"branch_id": "b1", "payload": map[string]any{}}},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.Equal(t, taskMaxAttempts, attempts)
+}

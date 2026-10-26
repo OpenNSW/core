@@ -473,8 +473,9 @@ const taskActivityTimeout = 24 * time.Hour * 365
 // during an attempt is noticed when it runs out.
 const completionActivityTimeout = 5 * time.Minute
 
-// taskRetryPolicy bounds the retries of a task's Activity and of WorkflowCompletedActivity, so an
-// error that never clears ends in a park for an admin instead of retrying forever. An attempt that
+// taskRetryPolicy bounds the retries of a task's Activity, of WorkflowCompletedActivity and of a
+// split's FetchWorkflowDefinitionActivity, so an error that never clears ends in a park for an admin
+// instead of retrying forever. An attempt that
 // times out is retried like one that failed. Retries back off from 1s, doubling to a cap of 1h,
 // and stop after taskMaxAttempts: about 24h of retrying in all. A non-retryable error parks at once.
 var taskRetryPolicy = &temporal.RetryPolicy{
