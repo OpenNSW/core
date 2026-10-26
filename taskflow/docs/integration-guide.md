@@ -169,16 +169,16 @@ taskWorkflowManager := engine.NewTemporalManager(
 The handlers wire into the orchestrator:
 
 ```go
-parentTaskHandler := func(p engine.TaskPayload) (map[string]any, error) {
-    return tm.StartTask(p)
+parentTaskHandler := func(ctx context.Context, p engine.TaskPayload) (map[string]any, error) {
+    return tm.StartTask(ctx, p)
 }
 
-taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
-    return tm.StartTaskStep(p)
+taskHandler := func(ctx context.Context, p engine.TaskPayload) (map[string]any, error) {
+    return tm.StartTaskStep(ctx, p)
 }
 
-taskCompletionHandler := func(c engine.WorkflowCompletion) error {
-    return tm.HandleTaskCompletion(context.Background(), c)
+taskCompletionHandler := func(ctx context.Context, c engine.WorkflowCompletion) error {
+    return tm.HandleTaskCompletion(ctx, c)
 }
 ```
 
@@ -191,11 +191,11 @@ taskCompletionHandler := func(c engine.WorkflowCompletion) error {
 ```go
 var tm *orchestrator.TaskManager
 
-taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
+taskHandler := func(ctx context.Context, p engine.TaskPayload) (map[string]any, error) {
     if tm == nil {
         return nil, fmt.Errorf("task manager not initialised")
     }
-    return tm.StartTaskStep(p)
+    return tm.StartTaskStep(ctx, p)
 }
 
 // ... construct managers ...
@@ -289,7 +289,7 @@ The orchestrator uses two sentinel errors to signal "this isn't really an error,
 
 | Sentinel                                                         | Returned by                                        | Meaning                                                                                  |
 |------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------|
-| `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartTaskStep` (when plugin suspends) | The Temporal activity should park indefinitely; the orchestrator will resume it later.   |
+| `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartTaskStep` (when plugin suspends) | The step waits for a completion: its activity ends, and its node waits in the workflow, with no timeout, until `CompleteActivation` resumes it. |
 | `plugins.ErrSuspended`                                           | A plugin's `Execute` method                        | "I dispatched the work; don't advance the workflow until something external resumes me." |
 
 `StartTaskStep` translates `ErrSuspended` from a plugin into `ErrResultPending` for Temporal. Both are normal happy-path values, not failures.
@@ -301,18 +301,18 @@ A real error from `StartTask` / `StartTaskStep` (template not found, plugin fail
 ## What `StartTask` does, step by step
 
 ```go
-func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, error) {
+func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
     // 1. Resolve TaskTemplate → workflow definition → render config
     // 2. Reject if the child workflow has parallel gateways
     // 3. taskID := payload.ActivationID (the parent's step ID); taskWorkflowID := "task-wf-" + taskID
     // 4. Build the initial Data map from payload.Inputs (setNestedKey for dotted keys)
     // 5. Persist TaskRecord (state=STARTING, parent coords, render config snapshot)
     // 6. Start the child task workflow on the task queue
-    // 7. Return activity.ErrResultPending — the parent activity parks
+    // 7. Return activity.ErrResultPending — the parent's node waits for the task to complete
 }
 ```
 
-Note that **the parent activity returns `ErrResultPending` even on success**. The parent workflow doesn't get its result until `onTaskCompleted` wakes it later.
+Note that **`StartTask` returns `ErrResultPending` even on success**. The parent's activity ends there, and the parent workflow doesn't get the task's result until `onTaskCompleted` completes its node later.
 
 ## What `StartTaskStep` does
 

@@ -49,10 +49,10 @@ func newSingleTaskEnv(t *testing.T, execute func(attempt int) (map[string]any, e
 
 	attempts := 0
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "FLAKY", mock.Anything, mock.Anything, mock.Anything).
-		Return(func(context.Context, string, map[string]any, string, ActivationRef) (map[string]any, error) {
+		Return(taskOutput(func(context.Context, string, map[string]any, string, ActivationRef) (map[string]any, error) {
 			attempts++
 			return execute(attempts)
-		})
+		}))
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	return env, def, &attempts
 }
@@ -200,4 +200,16 @@ func TestSplitParksWhenItsDefinitionCantBeFetched(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
 	require.Equal(t, taskMaxAttempts, attempts)
+}
+
+// taskOutput adapts a mock that answers ExecuteTaskActivity with the step's output to the Activity's
+// signature: the output of a step that completed synchronously, or the mock's error.
+func taskOutput(fn func(context.Context, string, map[string]any, string, ActivationRef) (map[string]any, error)) func(context.Context, string, map[string]any, string, ActivationRef) (TaskResult, error) {
+	return func(ctx context.Context, template string, inputs map[string]any, caseID string, step ActivationRef) (TaskResult, error) {
+		output, err := fn(ctx, template, inputs, caseID, step)
+		if err != nil {
+			return TaskResult{}, err
+		}
+		return TaskResult{Output: output}, nil
+	}
 }

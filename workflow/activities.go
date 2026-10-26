@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.temporal.io/sdk/activity"
@@ -14,16 +15,14 @@ import (
 // Activities encapsulates the Temporal activity implementations utilized by the workflow engine.
 // It maps the activity execution flow to custom callback handlers provided by the host application.
 type Activities struct {
-	// ExecuteTaskActivityHandler is invoked when the workflow engine encounters a task node.
-	// - For synchronous execution, it should return a nil error with a map containing the results.
-	// - For asynchronous execution, it should return a nil map and an ErrResultPending error,
-	//   which pauses the workflow activity until an external handler triggers CompleteActivation.
-	ExecuteTaskActivityHandler func(TaskPayload) (map[string]any, error)
+	// ExecuteTaskActivityHandler is invoked when the workflow engine encounters a task node. See
+	// TaskActivationHandler.
+	ExecuteTaskActivityHandler TaskActivationHandler
 
 	// WorkflowCompletedActivityHandler is invoked when the overall workflow execution succeeds and reaches
 	// an End node. It receives the workflow ID and the final accumulated workflow variables, allowing the
 	// host application to run any necessary completion triggers, notify listeners, or persist final state.
-	WorkflowCompletedActivityHandler func(WorkflowCompletion) error
+	WorkflowCompletedActivityHandler WorkflowCompletionHandler
 
 	// FetchWorkflowDefinitionHandler is invoked to dynamically retrieve the workflow definition structure
 	// for a given template ID during SPLIT_TASK execution.
@@ -55,8 +54,20 @@ type ActivationRef struct {
 	ManifestVersion int `json:"manifest_version,omitempty"`
 }
 
-// ExecuteTaskActivity pushes the task to your application and sleeps waiting for it or completes synchronously
-func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, caseID string, step ActivationRef) (map[string]any, error) {
+// TaskResult is what ExecuteTaskActivity reports to the workflow.
+type TaskResult struct {
+	// Suspended is true when the step is waiting for a completion (the handler returned
+	// ErrResultPending). The workflow then waits for CompleteActivation, outside the Activity.
+	Suspended bool `json:"suspended,omitempty"`
+	// Output is the step's result when it completed synchronously.
+	Output map[string]any `json:"output,omitempty"`
+}
+
+// ExecuteTaskActivity hands the task to the host application. It returns the step's output when the
+// handler completes it synchronously, and Suspended when the handler returns ErrResultPending: the
+// Activity ends either way, and a suspended step's completion reaches the workflow through
+// CompleteActivation, not through this Activity.
+func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, caseID string, step ActivationRef) (TaskResult, error) {
 	info := activity.GetInfo(ctx)
 	payload := TaskPayload{
 		WorkflowID:      info.WorkflowExecution.ID,
@@ -70,20 +81,19 @@ func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID str
 		CaseID:          caseID,
 	}
 
-	// Trigger custom code block. ExecuteTaskActivityHandler can return error ErrResultPending to pause the workflow
-	// or return a nil error with the outputs for the next step to consume (synchronous execution)
-	res, err := a.ExecuteTaskActivityHandler(payload)
-	if err != nil {
-		return nil, err
+	res, err := a.ExecuteTaskActivityHandler(ctx, payload)
+	if errors.Is(err, activity.ErrResultPending) {
+		return TaskResult{Suspended: true}, nil
 	}
-
-	// Return result immediately for synchronous steps
-	return res, nil
+	if err != nil {
+		return TaskResult{}, err
+	}
+	return TaskResult{Output: res}, nil
 }
 
 // WorkflowCompletedActivity is a Temporal activity that executes when a workflow completes successfully.
-func (a *Activities) WorkflowCompletedActivity(_ context.Context, workflowID string, finalContext map[string]any, seq int64) error {
-	return a.WorkflowCompletedActivityHandler(WorkflowCompletion{WorkflowID: workflowID, Seq: seq, FinalVariables: finalContext})
+func (a *Activities) WorkflowCompletedActivity(ctx context.Context, workflowID string, finalContext map[string]any, seq int64) error {
+	return a.WorkflowCompletedActivityHandler(ctx, WorkflowCompletion{WorkflowID: workflowID, Seq: seq, FinalVariables: finalContext})
 }
 
 // AdminParkActivity is a Temporal activity that notifies the host application whenever a node

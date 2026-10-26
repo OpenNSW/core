@@ -13,25 +13,66 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/mocks"
+	"go.temporal.io/sdk/temporal"
 )
 
-// TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace guards against CompleteActivation completing the
-// activity in a namespace other than the one the manager was configured with.
-func TestTemporalManagerImpl_TaskDone_UsesConfiguredNamespace(t *testing.T) {
+// CompleteActivation sends the step's output as the workflow's CompleteActivation Update, with no
+// Update ID of its own, and waits for the workflow to accept it.
+func TestTemporalManagerImpl_CompleteActivation_SendsTheUpdate(t *testing.T) {
 	mockClient := &mocks.Client{}
+	handle := &mocks.WorkflowUpdateHandle{}
 	output := map[string]any{"k": "v"}
-	mockClient.On("CompleteActivityByID", mock.Anything, "staging", "wf-1", "run-1", "node-1", output, nil).
-		Return(nil)
+	mockClient.On("UpdateWorkflow", mock.Anything, client.UpdateWorkflowOptions{
+		WorkflowID:   "wf-1",
+		RunID:        "run-1",
+		UpdateName:   completeActivationUpdate,
+		Args:         []any{"step-1", output},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	}).Return(handle, nil)
+	handle.On("Get", mock.Anything, nil).Return(nil)
 
-	// Go through the constructor so the test also covers it storing the namespace. worker.New
-	// rejects mocks, so construct with a lazy (non-connecting) client, then swap in the mock.
-	lazyClient, err := client.NewLazyClient(client.Options{Namespace: "staging"})
-	require.NoError(t, err)
-	m := NewTemporalManager(lazyClient, "staging", "some-queue", nil, nil).(*temporalManagerImpl)
-	m.temporalClient = mockClient
-
-	require.NoError(t, m.CompleteActivation(context.Background(), "wf-1", "run-1", "node-1", output))
+	m := &temporalManagerImpl{temporalClient: mockClient}
+	require.NoError(t, m.CompleteActivation(context.Background(), "wf-1", "run-1", "step-1", output))
 	mockClient.AssertExpectations(t)
+	handle.AssertExpectations(t)
+}
+
+func TestTemporalManagerImpl_CompleteActivation_NotPending(t *testing.T) {
+	rejected := temporal.NewApplicationError("step step-1 is not waiting to be completed", activationNotPendingErrorType)
+
+	for name, tc := range map[string]struct {
+		updateErr, getErr error
+	}{
+		"the workflow rejects it":           {getErr: rejected},
+		"the workflow has ended or is gone": {updateErr: serviceerror.NewNotFound("workflow execution already completed")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mockClient := &mocks.Client{}
+			handle := &mocks.WorkflowUpdateHandle{}
+			if tc.updateErr != nil {
+				mockClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(nil, tc.updateErr)
+			} else {
+				mockClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(handle, nil)
+				handle.On("Get", mock.Anything, nil).Return(tc.getErr)
+			}
+
+			m := &temporalManagerImpl{temporalClient: mockClient}
+			err := m.CompleteActivation(context.Background(), "wf-1", "", "step-1", nil)
+			require.ErrorIs(t, err, ErrActivationNotPending)
+		})
+	}
+}
+
+// Any other failure is returned as it is, not as ErrActivationNotPending: the caller may retry it.
+func TestTemporalManagerImpl_CompleteActivation_OtherErrorPassesThrough(t *testing.T) {
+	mockClient := &mocks.Client{}
+	underlying := serviceerror.NewUnavailable("temporal unavailable")
+	mockClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(nil, underlying)
+
+	m := &temporalManagerImpl{temporalClient: mockClient}
+	err := m.CompleteActivation(context.Background(), "wf-1", "", "step-1", nil)
+	require.ErrorIs(t, err, underlying)
+	require.False(t, errors.Is(err, ErrActivationNotPending))
 }
 
 func TestTemporalManagerImpl_GetStatus_NotFound(t *testing.T) {

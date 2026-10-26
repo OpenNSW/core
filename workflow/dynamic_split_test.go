@@ -109,13 +109,13 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	// Mock Task Activity Processing Handlers. Each branch carries the master's manifest version
 	// on its task activations.
 	pinned := mock.MatchedBy(func(ref ActivationRef) bool { return ref.ManifestVersion == 7 })
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, pinned).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, pinned).Return(TaskResult{Output: map[string]any{
 		"inspection_status": "APPROVED_PHYTO",
-	}, nil)
+	}}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything, pinned).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything, pinned).Return(TaskResult{Output: map[string]any{
 		"inspection_status": "APPROVED_HEALTH",
-	}, nil)
+	}}, nil)
 
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -237,9 +237,9 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "simple_child_workflow", mock.Anything).Return(childDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{Output: map[string]any{
 		"processed_status": "DONE_SUCCESS",
-	}, nil)
+	}}, nil)
 
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -337,7 +337,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "failing_child_workflow", mock.Anything).Return(childDef, nil)
 
 	// Mock Task Activity to fail
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("task failed intentionally"))
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{}, errors.New("task failed intentionally"))
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -523,13 +523,13 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow", mock.Anything).Return(healthDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{Output: map[string]any{
 		"inspection_status": "APPROVED_CLEAN",
-	}, nil)
+	}}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{Output: map[string]any{
 		"health_clearance": "PASSED_SECURE",
-	}, nil)
+	}}, nil)
 
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
