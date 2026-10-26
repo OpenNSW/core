@@ -104,3 +104,43 @@ func TestTaskParksWhenRetriesRunOut(t *testing.T) {
 	require.Error(t, env.GetWorkflowError())
 	require.Equal(t, taskMaxAttempts, *attempts)
 }
+
+// A completion hook whose error never clears stops retrying after taskMaxAttempts and parks the END
+// node, instead of retrying forever.
+func TestCompletionHookParksWhenRetriesRunOut(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+	var def WorkflowDefinition
+	require.NoError(t, json.Unmarshal([]byte(startEndWorkflowJSON), &def))
+
+	acts := &Activities{}
+	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
+	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
+	attempts := 0
+	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(func(context.Context, string, map[string]any, int64) error {
+			attempts++
+			return errors.New("database unavailable")
+		})
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow("GetStatus")
+		require.NoError(t, err)
+		var instance WorkflowInstance
+		require.NoError(t, val.Get(&instance))
+		node := instance.NodeInfo["end"]
+		require.Equal(t, NodeStatusAwaitingAdmin, node.Status)
+		require.Equal(t, ParkCategoryTaskFailure, node.ParkCategory)
+
+		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
+			NodeID:       "end",
+			ActivationID: node.ActivationID,
+			Action:       AdminActionAbort,
+		})
+	}, 48*time.Hour)
+
+	env.ExecuteWorkflow(GraphInterpreterWorkflow, def, map[string]any{})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.Equal(t, taskMaxAttempts, attempts)
+}

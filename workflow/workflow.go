@@ -132,7 +132,9 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 
 	interp.startAdminResolutionDispatcher(ctx)
 
-	ao := workflow.ActivityOptions{StartToCloseTimeout: taskActivityTimeout, RetryPolicy: taskRetryPolicy}
+	// The END node's WorkflowCompletedActivity runs with these options. Every other Activity sets its
+	// own (handleTaskNode's ExecuteTaskActivity among them).
+	ao := workflow.ActivityOptions{StartToCloseTimeout: completionActivityTimeout, RetryPolicy: taskRetryPolicy}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
 	// Begin Execution
@@ -466,8 +468,14 @@ func (g *graphInterpreter) caseID() string {
 // counts against this timeout.
 const taskActivityTimeout = 24 * time.Hour * 365
 
-// taskRetryPolicy bounds the retries of a task's Activity, so an error that never clears ends in a
-// park for an admin instead of retrying forever. Retries back off from 1s, doubling to a cap of 1h,
+// completionActivityTimeout bounds one attempt of WorkflowCompletedActivity. The completion hook does
+// its work and returns without waiting for anyone, so a few minutes is ample, and a worker that dies
+// during an attempt is noticed when it runs out.
+const completionActivityTimeout = 5 * time.Minute
+
+// taskRetryPolicy bounds the retries of a task's Activity and of WorkflowCompletedActivity, so an
+// error that never clears ends in a park for an admin instead of retrying forever. An attempt that
+// times out is retried like one that failed. Retries back off from 1s, doubling to a cap of 1h,
 // and stop after taskMaxAttempts: about 24h of retrying in all. A non-retryable error parks at once.
 var taskRetryPolicy = &temporal.RetryPolicy{
 	InitialInterval:    time.Second,
