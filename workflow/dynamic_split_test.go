@@ -361,9 +361,9 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	const parentWorkflowID = "master-collect-all-test"
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
 
-	// The default Activity retry policy retries "fail_task" ~10 times (~10s of simulated
-	// time, per Temporal's test environment defaults) before giving up and returning the
-	// error to the child workflow, so the abort signals must be scheduled well past that.
+	// taskRetryPolicy retries "fail_task" for about 24h of (skipped) workflow time before
+	// giving up and returning the error to the child workflow, so the abort signals must be
+	// scheduled well past that.
 	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
 		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "m_fanout", branchID)
 		env.RegisterDelayedCallback(func() {
@@ -377,7 +377,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 				Action:       AdminActionAbort,
 			})
 			s.NoError(err)
-		}, 15*time.Second)
+		}, 48*time.Hour)
 	}
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -385,7 +385,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 			ActivationID: parkedActivationID(s.T(), env, "m_fanout"),
 			Action:       AdminActionAbort,
 		})
-	}, 16*time.Second)
+	}, 48*time.Hour+time.Second)
 
 	// Execute Test Execution
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)
