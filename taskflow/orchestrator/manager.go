@@ -592,6 +592,31 @@ func (tm *TaskManager) CancelTask(ctx context.Context, taskID, reason string) er
 	return nil
 }
 
+// HoldTask marks a task ON_HOLD when a node in its workflow parks for admin intervention (wire it
+// to the task workflow runner's AdminParkHandler). While ON_HOLD, the task's view renders no legal
+// actions and SaveDraft refuses drafts as stale; resolving the park (RETRY or COMPLETE) moves the
+// row on when the retried or next step claims it, or when the task workflow completes.
+//
+// The write is guarded by payload.Seq and refuses COMPLETED or CANCELLED rows, so a late park
+// notification that arrives after the park was resolved and a later step claimed the row is
+// dropped.
+func (tm *TaskManager) HoldTask(ctx context.Context, payload engine.AdminParkPayload) error {
+	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
+	if !exists {
+		return nil
+	}
+	rows, err := tm.db.HoldTask(ctx, record.TaskID, payload.Seq)
+	if err != nil {
+		return fmt.Errorf("mark task %s on hold: %w", record.TaskID, err)
+	}
+	if rows == 0 {
+		tm.logger.InfoContext(ctx, "dropping stale hold of task", "task_id", record.TaskID, "task_workflow_id", payload.WorkflowID, "seq", payload.Seq)
+		return nil
+	}
+	tm.logger.InfoContext(ctx, "task placed on hold", "task_id", record.TaskID, "task_workflow_id", payload.WorkflowID, "node_id", payload.NodeID, "seq", payload.Seq)
+	return nil
+}
+
 // submissionData returns the task data with payload stored in it. Writes are confined to the active
 // step's declared OutputNamespace, which was loaded from the registry. An open top-level merge
 // would let callers overwrite slots owned by other steps (or internal keys like _task_id), so the

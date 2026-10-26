@@ -145,9 +145,10 @@ type TaskRecord struct {
 | `ClaimStep`          | `StartTaskStep`        | stored `seq <= n`                       | active step, `seq = n`, template, `STARTING_STEP`, data from inputs |
 | `WriteRenderState`   | `StartTaskStep`        | active step is `A` and `seq = n`        | state and data the plugin produced                 |
 | `PersistSubmission`  | `CompleteTaskStep`    | active step is `A` and `seq = n`        | data, `ADVANCING`, `seq = n+1`                     |
-| `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING`, `COMPLETED` or `CANCELLED`) | data only |
-| `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m`                       | `COMPLETED`, `seq = m`                             |
+| `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING`, `COMPLETED`, `CANCELLED` or `ON_HOLD`) | data only |
+| `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m` and not `CANCELLED`   | `COMPLETED`, `seq = m`                             |
 | `CancelTask`         | `CancelTask`          | state is not `COMPLETED`                | `CANCELLED`, `seq = seq+1`                         |
+| `HoldTask`           | `HoldTask`            | stored `seq <= n` and not `COMPLETED` or `CANCELLED` | `ON_HOLD`, `seq = n`                  |
 
 `InitTask` still exists for creating the row and for coarse fields, but it never writes `ActiveStepID` or `Seq`, so a stale full-record save cannot move them.
 
@@ -182,6 +183,7 @@ These are not the same as a step's claim (`ClaimStep`, above, which makes a step
 - `ADVANCING` — set when a submission was accepted by the workflow and it is moving to the next node. It offers no actions, since a second submission could only be rejected as stale.
 - `COMPLETED` — set by `HandleTaskCompletion` when the task workflow ends.
 - `CANCELLED` — set by `TaskManager.CancelTask`, which closes a task from outside its workflow and terminates that workflow. Advancing `seq` drops any step write still in flight, and a submission is rejected as stale. The parent's TASK node is left waiting; the caller decides what happens to it, typically parking it with `ForceParkActivation` so an admin can resolve it.
+- `ON_HOLD` — set by `TaskManager.HoldTask` when a node in the task's workflow parks for admin intervention. While `ON_HOLD`, no actions render and drafts are refused as stale; resolving the park (`RETRY` or `COMPLETE`) moves the row on when the retried or next step claims it, or when the task workflow completes.
 
 Everything else is a plugin's responsibility:
 

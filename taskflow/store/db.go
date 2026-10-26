@@ -96,6 +96,10 @@ const (
 	// StateCancelled means the task was closed from outside its workflow (see
 	// TaskManager.CancelTask). Its workflow has been terminated, so nothing can be submitted to it.
 	StateCancelled = "CANCELLED"
+	// StateOnHold means a node in the task's workflow parked for admin intervention (see
+	// TaskManager.HoldTask). The task stays open, and resolving the park (RETRY or COMPLETE) moves
+	// the row on when the next step claims it or the workflow completes.
+	StateOnHold = "ON_HOLD"
 )
 
 // StepClaim is the row change that makes a step the task's active step.
@@ -149,8 +153,9 @@ type TaskStore interface {
 	PersistSubmission(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
 	// WriteDraft stores the data of a draft saved for the active step, leaving state and seq as
 	// they are. Guard: the active step is stepID, the stored seq equals seq, and the state is none
-	// of StateStartingStep, StateAdvancing, StateCompleted and StateCancelled, so a draft never
-	// lands on a step that is not yet showing, has been submitted, or has ended.
+	// of StateStartingStep, StateAdvancing, StateCompleted, StateCancelled and StateOnHold, so a
+	// draft never lands on a step that is not yet showing, is on hold, has been submitted, or has
+	// ended.
 	WriteDraft(context context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
 	// CompleteTask sets StateCompleted and seq. Guard: the stored seq is <= seq and the state is not
 	// StateCancelled.
@@ -159,6 +164,11 @@ type TaskStore interface {
 	// task's active step is dropped as stale. Guard: the state is not StateCompleted. Cancelling a
 	// cancelled task matches again.
 	CancelTask(context context.Context, taskID string) (int64, error)
+	// HoldTask sets StateOnHold and seq when a node in the task's workflow parks at seq. Guard: the
+	// stored seq is <= seq and the state is neither StateCompleted nor StateCancelled, so a late
+	// park notification cannot overwrite a step that claimed the row after the park was resolved,
+	// or a task that has ended.
+	HoldTask(context context.Context, taskID string, seq int64) (int64, error)
 
 	// ClaimTask sets the claim to holder. Guard: the task is unclaimed or already claimed by
 	// holder, and its state is neither StateCompleted nor StateCancelled. A repeat claim by the

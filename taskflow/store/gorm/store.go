@@ -157,7 +157,7 @@ func (s *TaskStore) WriteDraft(ctx context.Context, taskID, stepID string, seq i
 	// Neither state nor seq moves: a draft does not advance the step, so it must not make the
 	// step's ID or the view's version stale.
 	return s.stepUpdate(ctx, taskID, "active_step_id = ? AND seq = ? AND state NOT IN ?",
-		[]any{stepID, seq, []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled}},
+		[]any{stepID, seq, []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled, store.StateOnHold}},
 		map[string]any{"data": encoded})
 }
 
@@ -169,6 +169,17 @@ func (s *TaskStore) CancelTask(ctx context.Context, taskID string) (int64, error
 		"state": store.StateCancelled,
 		"seq":   gorm.Expr("seq + 1"),
 	})
+}
+
+func (s *TaskStore) HoldTask(ctx context.Context, taskID string, seq int64) (int64, error) {
+	// No active_step_id check: a gateway parking inside a task workflow has no step row of its own.
+	// seq <= ? drops a late park notification after a resolved step moved on to a higher seq, and
+	// state NOT IN keeps it from overwriting a completed or cancelled task.
+	return s.stepUpdate(ctx, taskID, "seq <= ? AND state NOT IN ?",
+		[]any{seq, []string{store.StateCompleted, store.StateCancelled}}, map[string]any{
+			"state": store.StateOnHold,
+			"seq":   seq,
+		})
 }
 
 func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error) {

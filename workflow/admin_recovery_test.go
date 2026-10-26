@@ -221,6 +221,7 @@ func TestAdminParkNotificationCarriesCategoryAndMappings(t *testing.T) {
 	require.Equal(t, map[string]string{"missing_global_var": "local_key"}, captured.InputMapping)
 	require.Empty(t, captured.OutputMapping)
 	require.Equal(t, parkedID, captured.ActivationID, "AdminParkPayload.ActivationID matches NodeInfo's")
+	require.Equal(t, int64(2), captured.Seq, "AdminParkPayload.Seq matches NodeInfo's (start=1, task=2)")
 	env.AssertExpectations(t)
 }
 

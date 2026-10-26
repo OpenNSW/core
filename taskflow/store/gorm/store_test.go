@@ -215,7 +215,7 @@ func TestWriteDraft(t *testing.T) {
 
 // The state guard alone turns a draft away: same step and seq, but the step is not showing.
 func TestWriteDraft_StateGuard(t *testing.T) {
-	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled} {
+	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled, store.StateOnHold} {
 		t.Run(state, func(t *testing.T) {
 			s, ctx := newTestStore(t)
 			_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
@@ -280,6 +280,52 @@ func TestCancelTask_CompletedTaskIsNotCancelled(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
 }
 
+func TestHoldTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+	_, _ = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", map[string]any{"a": 1.0})
+
+	// Step A parks at seq 4 (or a gateway parks at seq 5): the row becomes ON_HOLD.
+	n, err := s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 1)
+	wantRow(t, mustGet(t, s, ctx), stepA, 4, store.StateOnHold)
+
+	// Repeating the same hold matches again.
+	n, err = s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 1)
+
+	// Resolving the park (RETRY or COMPLETE) claims the next step at a higher seq, clearing ON_HOLD.
+	n, err = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	wantRows(t, n, err, 1)
+	_, _ = s.WriteRenderState(ctx, task1, stepB, 5, "PENDING_USER", nil)
+	wantRow(t, mustGet(t, s, ctx), stepB, 5, "PENDING_USER")
+
+	// A late park notification for seq 4 arrives after B claimed seq 5: dropped.
+	n, err = s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 5, "PENDING_USER")
+}
+
+func TestHoldTask_TerminalTasksAreNotHeld(t *testing.T) {
+	for _, state := range []string{store.StateCompleted, store.StateCancelled} {
+		t.Run(state, func(t *testing.T) {
+			s, ctx := newTestStore(t)
+			_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+			if state == store.StateCompleted {
+				_, _ = s.CompleteTask(ctx, task1, 5)
+			} else {
+				_, _ = s.CancelTask(ctx, task1)
+			}
+
+			n, err := s.HoldTask(ctx, task1, 99)
+			wantRows(t, n, err, 0)
+			if got := mustGet(t, s, ctx).State; got != state {
+				t.Fatalf("state = %q, want %q", got, state)
+			}
+		})
+	}
+}
+
 func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	s, ctx := newTestStore(t)
 
@@ -294,6 +340,8 @@ func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	n, err = s.CompleteTask(ctx, "nope", 1)
 	wantRows(t, n, err, 0)
 	n, err = s.CancelTask(ctx, "nope")
+	wantRows(t, n, err, 0)
+	n, err = s.HoldTask(ctx, "nope", 1)
 	wantRows(t, n, err, 0)
 	n, err = s.ClaimTask(ctx, "nope", userA, t1)
 	wantRows(t, n, err, 0)
