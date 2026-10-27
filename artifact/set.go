@@ -36,8 +36,16 @@ var ErrUnknownManifestVersion = errors.New("unknown manifest version")
 // so versions must be contiguous. A source with no manifest_v1.json but a manifest.json (a
 // checkout of an artifacts repository, which holds only the current state) loads that file as
 // version 1. A Set is safe for concurrent use.
+//
+// Because published files never change, the registries of a Set keep the artifact files they
+// load, up to DefaultFileCacheBytes (see WithFileCacheBytes), evicting the least recently used.
+// A manifest.json source is the exception: its files are a working copy that may be edited while
+// the process runs, so they are fetched every time.
 type Set struct {
 	loader Loader
+	// files is the loader the registries fetch artifact files through: loader itself for a
+	// manifest.json source, otherwise a cache in front of it.
+	files Loader
 
 	// probeSlot serializes on-demand probes for newer manifests: a probe holds its one slot
 	// across the loader round trips, and a caller waiting for it gives up when its own context
@@ -69,7 +77,8 @@ type explicitRow struct {
 type SetOption func(*setOptions)
 
 type setOptions struct {
-	pin int
+	pin            int
+	fileCacheBytes int
 }
 
 // WithPinnedVersion makes manifest v the current one instead of the highest published version.
@@ -83,6 +92,13 @@ func WithPinnedVersion(v int) SetOption {
 	return func(o *setOptions) { o.pin = v }
 }
 
+// WithFileCacheBytes sets how many bytes of artifact files the Set keeps, in place of
+// DefaultFileCacheBytes. Zero or less turns the cache off, so every lookup fetches its file from
+// the source.
+func WithFileCacheBytes(n int) SetOption {
+	return func(o *setOptions) { o.fileCacheBytes = n }
+}
+
 // LoadSet loads every manifest the loader can see, starting at manifest_v1.json, and picks the
 // current version. Loading stops at the first version whose manifest the loader reports as
 // ErrNotFound, or at the pinned version; any other load error fails the call, so a transient
@@ -94,7 +110,7 @@ func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error
 	if loader == nil {
 		return nil, errors.New("artifact: nil loader passed to LoadSet")
 	}
-	var o setOptions
+	o := setOptions{fileCacheBytes: DefaultFileCacheBytes}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -122,6 +138,10 @@ func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error
 		if cfg != nil {
 			cfgs, unversioned = append(cfgs, *cfg), true
 		}
+	}
+	s.files = loader
+	if !unversioned && o.fileCacheBytes > 0 {
+		s.files = newCachingLoader(loader, o.fileCacheBytes)
 	}
 	for i, cfg := range cfgs {
 		file := ManifestPath(i + 1)
@@ -180,7 +200,7 @@ func loadUnversioned(ctx context.Context, loader Loader) (*ManifestConfig, error
 // add registers manifest v, loaded from file. The caller must hold s.mu for writing, or own s
 // exclusively.
 func (s *Set) add(v int, file string, cfg ManifestConfig) error {
-	reg := NewRegistry(s.loader)
+	reg := NewRegistry(s.files)
 	if err := RegisterFromConfig(reg, cfg); err != nil {
 		return fmt.Errorf("%s: %w", file, err)
 	}
