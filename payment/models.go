@@ -18,8 +18,8 @@ const (
 	PaymentStatusFailed  PaymentStatus = "FAILED"
 )
 
-// PaymentTransaction represents the internal state of a payment
-type PaymentTransaction struct {
+// Transaction represents the internal state of a payment
+type Transaction struct {
 	ID              string `json:"id" gorm:"type:text;not null;primaryKey"`
 	ReferenceNumber string `json:"reference_number" gorm:"uniqueIndex"` // From the service's ReferenceGenerator
 	// CallbackToken is the opaque address of the workflow step this payment completes
@@ -41,6 +41,10 @@ type PaymentTransaction struct {
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 }
+
+// TableName keeps the table, and the index names GORM derives from it, that
+// this type mapped to as PaymentTransaction, so renaming it moved no data.
+func (Transaction) TableName() string { return "payment_transactions" }
 
 // --------------------------------------------------------
 // Gateway Session API Contracts (Outbound to GovPay)

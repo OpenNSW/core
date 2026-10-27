@@ -66,7 +66,7 @@ func toDomainStatus(s WebhookStatus) (PaymentStatus, error) {
 // gateway's own verification logic) propagates here unwrapped-by-us, so
 // it falls through to the generic transient/500 handling in HTTPHandler,
 // not a 401.
-func verifyCaller(ctx context.Context, gateway PaymentGateway, gatewayID string, body []byte, headers map[string][]string) error {
+func verifyCaller(ctx context.Context, gateway Gateway, gatewayID string, body []byte, headers map[string][]string) error {
 	if err := gateway.VerifyWebhook(ctx, body, headers); err != nil {
 		return fmt.Errorf("gateway %s: %w", gatewayID, err)
 	}
@@ -167,7 +167,7 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 	// 2. Write-ahead: persist a PENDING transaction BEFORE contacting the gateway.
 	// If the DB write fails we never create a gateway session (no orphan), and if
 	// an inbound validation/webhook races the response it can still find the row.
-	tx := &PaymentTransaction{
+	tx := &Transaction{
 		ID:              uuid.NewString(),
 		ReferenceNumber: generatedRef,
 		CallbackToken:   req.CallbackToken,

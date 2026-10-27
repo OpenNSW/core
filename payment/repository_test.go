@@ -33,7 +33,7 @@ func TestRepository_Create(t *testing.T) {
 	db, mock := setupTestDB(t)
 	repo := NewPaymentRepository(db)
 
-	tx := &PaymentTransaction{
+	tx := &Transaction{
 		ID:              "uuid-1",
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "govpay",
@@ -99,7 +99,7 @@ func TestRepository_Create_DuplicateReference(t *testing.T) {
 				tc.lookup(mock)
 			}
 
-			err := repo.Create(context.Background(), &PaymentTransaction{ID: "uuid-1", ReferenceNumber: "REF-1"})
+			err := repo.Create(context.Background(), &Transaction{ID: "uuid-1", ReferenceNumber: "REF-1"})
 			require.Error(t, err)
 			assert.Equal(t, tc.duplicate, errors.Is(err, ErrDuplicateReference), "err = %v", err)
 			if !tc.duplicate {
@@ -183,7 +183,7 @@ func TestRepository_Update(t *testing.T) {
 	mock.ExpectExec(`UPDATE "payment_transactions" SET`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	err := repo.Update(context.Background(), &PaymentTransaction{
+	err := repo.Update(context.Background(), &Transaction{
 		ID:              "uuid-1",
 		ReferenceNumber: "TNSW1",
 		Status:          PaymentStatusSuccess,
@@ -216,7 +216,7 @@ func TestRepository_RunInTransaction_Commit(t *testing.T) {
 	mock.ExpectCommit()
 
 	err := repo.RunInTransaction(context.Background(), func(r PaymentRepository) error {
-		return r.Update(context.Background(), &PaymentTransaction{ID: "uuid-1", ReferenceNumber: "TNSW1", Status: PaymentStatusSuccess})
+		return r.Update(context.Background(), &Transaction{ID: "uuid-1", ReferenceNumber: "TNSW1", Status: PaymentStatusSuccess})
 	})
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())

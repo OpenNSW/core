@@ -22,7 +22,7 @@ import (
 
 // mockRepo is an in-memory PaymentRepository keyed by reference number.
 type mockRepo struct {
-	txs map[string]*PaymentTransaction
+	txs map[string]*Transaction
 
 	createErr error
 	getErr    error
@@ -32,9 +32,9 @@ type mockRepo struct {
 	updateCount int
 }
 
-func newMockRepo() *mockRepo { return &mockRepo{txs: map[string]*PaymentTransaction{}} }
+func newMockRepo() *mockRepo { return &mockRepo{txs: map[string]*Transaction{}} }
 
-func (m *mockRepo) Create(_ context.Context, tx *PaymentTransaction) error {
+func (m *mockRepo) Create(_ context.Context, tx *Transaction) error {
 	if m.createErr != nil {
 		return m.createErr
 	}
@@ -42,7 +42,7 @@ func (m *mockRepo) Create(_ context.Context, tx *PaymentTransaction) error {
 	return nil
 }
 
-func (m *mockRepo) GetByReferenceNumber(_ context.Context, ref string) (*PaymentTransaction, error) {
+func (m *mockRepo) GetByReferenceNumber(_ context.Context, ref string) (*Transaction, error) {
 	m.getCount++
 	if m.getErr != nil {
 		return nil, m.getErr
@@ -53,11 +53,11 @@ func (m *mockRepo) GetByReferenceNumber(_ context.Context, ref string) (*Payment
 	return nil, nil
 }
 
-func (m *mockRepo) GetByReferenceNumberForUpdate(ctx context.Context, ref string) (*PaymentTransaction, error) {
+func (m *mockRepo) GetByReferenceNumberForUpdate(ctx context.Context, ref string) (*Transaction, error) {
 	return m.GetByReferenceNumber(ctx, ref)
 }
 
-func (m *mockRepo) Update(_ context.Context, tx *PaymentTransaction) error {
+func (m *mockRepo) Update(_ context.Context, tx *Transaction) error {
 	m.updateCount++
 	if m.updateErr != nil {
 		return m.updateErr
@@ -82,7 +82,7 @@ func (m *mockRepo) WithTx(*gorm.DB) PaymentRepository { return m }
 // mockRegistry returns a single configured gateway, which maps every payee
 // to testPayeeMapping unless unmapped is set.
 type mockRegistry struct {
-	gw       PaymentGateway
+	gw       Gateway
 	getErr   error
 	infos    []GatewayInfo
 	unmapped bool
@@ -92,7 +92,7 @@ type mockRegistry struct {
 
 const testPayeeMapping = `{"account":"ACC-1"}`
 
-func (m *mockRegistry) Get(string) (PaymentGateway, error) {
+func (m *mockRegistry) Get(string) (Gateway, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -410,7 +410,7 @@ func validateGateway(ref string) *MockGateway {
 
 func TestValidateReference_PayablePending(t *testing.T) {
 	repo := newMockRepo()
-	repo.txs["TNSW1"] = &PaymentTransaction{
+	repo.txs["TNSW1"] = &Transaction{
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "govpay",
 		OrgID:           "org_a",
@@ -453,7 +453,7 @@ func TestValidateReference_UnknownReference(t *testing.T) {
 
 func TestValidateReference_GatewayMismatch(t *testing.T) {
 	repo := newMockRepo()
-	repo.txs["TNSW1"] = &PaymentTransaction{
+	repo.txs["TNSW1"] = &Transaction{
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "other-gateway",
 		Status:          PaymentStatusPending,
@@ -486,7 +486,7 @@ func TestValidateReference_PayeeNoLongerMapped(t *testing.T) {
 
 func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 	repo := newMockRepo()
-	repo.txs["TNSW1"] = &PaymentTransaction{
+	repo.txs["TNSW1"] = &Transaction{
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "govpay",
 		Status:          PaymentStatusPending,
@@ -529,8 +529,8 @@ func TestValidateReference_VerificationOperationalError_NotClassifiedAsAuthFailu
 
 // --- ProcessWebhook ---------------------------------------------------------
 
-func pendingTx() *PaymentTransaction {
-	return &PaymentTransaction{
+func pendingTx() *Transaction {
+	return &Transaction{
 		ReferenceNumber: "TNSW1",
 		CallbackToken:   "token-9",
 		GatewayID:       "govpay",

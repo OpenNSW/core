@@ -6,9 +6,9 @@ The `payment` package provides a modular and extensible payment orchestration sy
 
 The system consists of several key components:
 
-1.  **PaymentGateway**: An interface for gateway-specific integrations (e.g., LankaPay, GovPay). It handles session creation, webhook parsing, and real-time validation formatting.
+1.  **Gateway**: An interface for gateway-specific integrations (e.g., LankaPay, GovPay). It handles session creation, webhook parsing, and real-time validation formatting.
 2.  **GatewayRegistry**: A pure discovery and lookup service. It is built from a `payment.Config` value (it reads no files), manages gateway registration and configuration injection, and provides sanitized metadata for the UI.
-3.  **PaymentRepository**: Handles persistence for `PaymentTransaction` records using GORM.
+3.  **PaymentRepository**: Handles persistence for `Transaction` records using GORM.
 4.  **PaymentService**: The high-level orchestrator. It uses the Registry to find the correct Gateway and coordinates between the gateway logic, database, and internal events.
 5.  **HTTPHandler**: Exposes the payment service via RESTful endpoints for both public and internal use.
 
@@ -22,9 +22,9 @@ import "github.com/OpenNSW/core/payment"
 
 ## Getting Started
 
-### 1. Implement a PaymentGateway
+### 1. Implement a Gateway
 
-Each payment gateway requires a dedicated implementation of the `PaymentGateway` interface.
+Each payment gateway requires a dedicated implementation of the `Gateway` interface.
 
 ```go
 type MyGateway struct{ cfg Config }
@@ -38,7 +38,7 @@ type Config struct {
 // NewMyGateway is this gateway's Factory, called once by the registry at
 // init time. decode decodes the method's "config" block into this gateway's
 // own config type.
-func NewMyGateway(decode func(v any) error) (payment.PaymentGateway, error) {
+func NewMyGateway(decode func(v any) error) (payment.Gateway, error) {
     var cfg Config
     if err := decode(&cfg); err != nil {
         return nil, err
@@ -223,7 +223,7 @@ Once a payment reaches SUCCESS or FAILED, the Service resumes the workflow step 
 
 ## Schema
 
-`PaymentTransaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.
+`Transaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.
 
 A host upgrading an existing table adds both columns as nullable, backfills them (e.g. from each row's stored gateway metadata), then makes them `NOT NULL`. A pending transaction left without them cannot be presented or settled.
 
@@ -280,7 +280,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 
 ### Core Interfaces
 
-- **PaymentGateway**: Interface for gateway implementations
+- **Gateway**: Interface for gateway implementations
 - **PaymentService**: Main orchestrator service
 - **PaymentRepository**: Database persistence layer
 
