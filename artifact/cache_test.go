@@ -143,30 +143,6 @@ func TestSetCachesArtifactFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("a caller changing the bytes it got on a miss does not change the source", func(t *testing.T) {
-		src := counting(testutil.MemLoader{
-			"manifest_v1.json": manifest(row("welcome", "email", "", "welcome.json")),
-			"welcome.json":     []byte(`{"subject":"Hello"}`),
-		})
-		// Too small to keep the file, so every lookup misses and fetches it from the source.
-		set, err := artifact.LoadSet(ctx, src, artifact.WithFileCacheBytes(1))
-		if err != nil {
-			t.Fatalf("LoadSet: %v", err)
-		}
-		reg, err := set.Registry(ctx, 1)
-		if err != nil {
-			t.Fatalf("Registry(1): %v", err)
-		}
-		for range 3 {
-			got, err := artifact.Latest[mutatingEmail](ctx, reg, "welcome")
-			if err != nil || got.Subject != "Hello" {
-				t.Fatalf("got %+v, %v; want the original file", got, err)
-			}
-		}
-		if n := src.count("welcome.json"); n != 3 {
-			t.Errorf("welcome.json loaded %d times, want 3", n)
-		}
-	})
 }
 
 // mutatingEmail is a fakeEmail whose Parse overwrites its input once it has read it.

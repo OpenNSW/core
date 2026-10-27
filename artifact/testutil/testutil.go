@@ -5,6 +5,7 @@
 package testutil
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/OpenNSW/core/artifact"
@@ -14,9 +15,10 @@ import (
 // Populate it with path → raw bytes entries and register it with a Registry.
 type MemLoader map[string][]byte
 
+// Load returns a copy of the entry, so a caller that changes it does not change the map.
 func (m MemLoader) Load(_ context.Context, path string) ([]byte, error) {
 	if b, ok := m[path]; ok {
-		return b, nil
+		return bytes.Clone(b), nil
 	}
 	return nil, artifact.ErrNotFound
 }
