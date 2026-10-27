@@ -35,6 +35,8 @@ type MockDriver struct {
 	StatErr    error
 	// DownloadDisposition is the disposition GetDownloadURL was last asked for.
 	DownloadDisposition string
+	// UploadURLs counts the upload URLs GetUploadURL was asked for.
+	UploadURLs int
 }
 
 func (m *MockDriver) Save(ctx context.Context, key string, body io.Reader, contentType string) error {
@@ -77,6 +79,7 @@ func (m *MockDriver) GetDownloadURL(ctx context.Context, key string, disposition
 }
 
 func (m *MockDriver) GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error) {
+	m.UploadURLs++
 	if m.GenerateURLErr != nil {
 		return "", m.GenerateURLErr
 	}
@@ -514,7 +517,8 @@ func TestUploadService_TypeExtensions(t *testing.T) {
 			if tt.opts != nil {
 				opts = tt.opts
 			}
-			_, err := NewService(&MockDriver{}, opts...).Upload(context.Background(), tt.filename, 1024, tt.mimeType)
+			driver := &MockDriver{}
+			_, err := NewService(driver, opts...).Upload(context.Background(), tt.filename, 1024, tt.mimeType)
 			var mismatch *ExtensionMismatchError
 			if !errors.As(err, &mismatch) {
 				t.Fatalf("expected *ExtensionMismatchError, got %v", err)
@@ -522,8 +526,20 @@ func TestUploadService_TypeExtensions(t *testing.T) {
 			if mismatch.Extension != tt.wantExt || mismatch.MediaType != tt.wantType {
 				t.Errorf("mismatch %+v, want extension %q and type %q", *mismatch, tt.wantExt, tt.wantType)
 			}
+			// Nothing is reserved for a refused name.
+			if driver.UploadURLs != 0 {
+				t.Errorf("a refused name was given %d upload URLs", driver.UploadURLs)
+			}
 		})
 	}
+
+	t.Run("the size is checked before the name", func(t *testing.T) {
+		svc := NewService(&MockDriver{}, withExtensions...)
+		var tooLarge *FileTooLargeError
+		if _, err := svc.Upload(context.Background(), "setup.exe", 32<<20+1, "application/pdf"); !errors.As(err, &tooLarge) {
+			t.Fatalf("expected *FileTooLargeError, got %v", err)
+		}
+	})
 
 	t.Run("the type is checked before the name", func(t *testing.T) {
 		svc := NewService(&MockDriver{}, WithAllowedUploadTypes("application/pdf"), WithUploadTypeExtensions(testExtensions))
