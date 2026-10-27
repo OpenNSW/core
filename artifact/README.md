@@ -123,6 +123,8 @@ All calls: fetch bytes via the loader → call `Parse` → return typed value. W
 
 Manifests are `manifest_v1.json`, `manifest_v2.json`, … at the loader's root (`artifact.ManifestPath(v)`), alongside the artifacts they catalog. There is no per-row `loader`: the source has exactly one. A source without `manifest_v1.json` but with a `manifest.json` (`artifact.ManifestFilename`), such as a checkout of an artifacts repository, which holds only the current state, loads that file as version 1.
 
+Published files never change, so a `Set`'s registries keep each artifact file they load, by path, and fetch it from the source once per process. Failed fetches are not kept. A `manifest.json` source is the exception: it is a working copy that may be edited while the process runs, so its files are fetched every time. Manifests themselves are always fetched from the source.
+
 ```json
 {
   "artifacts": [
