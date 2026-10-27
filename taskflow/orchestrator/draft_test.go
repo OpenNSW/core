@@ -36,7 +36,7 @@ func draftFixture(t *testing.T, db store.TaskStore) (*TaskManager, *draftProbe) 
 			"userform":     map[string]any{"applicant_name": "Prefilled"},
 		}
 	}
-	db.InitTask(ctx, store.TaskRecord{TaskID: wakeTaskID, TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: wakeTaskID, TaskType: "TEST", State: "STARTING", TaskWorkflowID: "task-wf", Data: map[string]any{}})
 	if _, err := db.ClaimStep(ctx, wakeTaskID, store.StepClaim{
 		StepID: stepA, Seq: 4, ActiveTaskTemplateID: "draft_user_input", State: store.StateStartingStep, Data: data(),
 	}); err != nil {
