@@ -280,7 +280,7 @@ func TestUpload_PolicyErrors(t *testing.T) {
 		{name: "size missing", mimeType: "application/pdf", size: 0, want: http.StatusBadRequest, wantErr: "size must be greater than 0"},
 		{name: "over the default limit", mimeType: "application/pdf", size: 32<<20 + 1, want: http.StatusBadRequest, wantErr: "file size exceeds 32MB limit"},
 		{name: "over a custom limit", opts: []ServiceOption{WithMaxUploadSize(1 << 20)}, mimeType: "application/pdf", size: 1<<20 + 1, want: http.StatusBadRequest, wantErr: "file size exceeds 1MB limit"},
-		{name: "a name with another type's extension", opts: []ServiceOption{WithUploadTypeExtensions(map[string][]string{"application/zip": {".zip"}})}, mimeType: "application/zip", size: 1024, want: http.StatusBadRequest, wantErr: "the file name's extension (.bin) does not match its type (application/zip)"},
+		{name: "a name with another type's extension", opts: []ServiceOption{WithUploadTypeExtensions(map[string][]string{"application/zip": {".zip"}})}, mimeType: "application/zip", size: 1024, want: http.StatusBadRequest, wantErr: `the file name's extension (".bin") does not match its type (application/zip)`},
 	}
 
 	for _, tt := range tests {

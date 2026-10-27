@@ -55,7 +55,8 @@ func (e *FileTooLargeError) Error() string {
 // "setup.exe" sent as application/pdf. The key keeps the name's extension, and
 // the file is downloaded under it.
 type ExtensionMismatchError struct {
-	// Extension is the file name's, with its dot, as sent.
+	// Extension is the file name's, with its dot, as sent, cut to 16
+	// characters and ended with "…" when longer.
 	Extension string
 	// MediaType is the upload's type, lower case and without parameters.
 	MediaType string

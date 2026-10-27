@@ -494,6 +494,7 @@ func TestUploadService_TypeExtensions(t *testing.T) {
 		{name: "a program sent as a PDF", filename: "setup.exe", mimeType: "application/pdf", wantExt: ".exe", wantType: "application/pdf"},
 		{name: "another type's extension", filename: "report.pdf", mimeType: "image/jpeg", wantExt: ".pdf", wantType: "image/jpeg"},
 		{name: "a name ending in a dot", filename: "report.", mimeType: "application/pdf", wantExt: ".", wantType: "application/pdf"},
+		{name: "a long extension, cut", filename: "report." + strings.Repeat("x", 1000), mimeType: "application/pdf", wantExt: "." + strings.Repeat("x", 15) + "…", wantType: "application/pdf"},
 		{name: "the type with parameters", filename: "page.pdf", mimeType: "text/html; charset=utf-8", wantExt: ".pdf", wantType: "text/html"},
 		{name: "the type with a malformed parameter", filename: "setup.exe", mimeType: "application/pdf;x", wantExt: ".exe", wantType: "application/pdf"},
 		{name: "with an allowlist that admits the type", filename: "setup.exe", mimeType: "application/pdf", wantExt: ".exe", wantType: "application/pdf",

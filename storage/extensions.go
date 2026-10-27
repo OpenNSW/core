@@ -74,6 +74,20 @@ func (p extensionPolicy) match(filename, contentType string) (string, error) {
 	case slices.Contains(exts, strings.ToLower(ext)):
 		return filename, nil
 	default:
-		return "", &ExtensionMismatchError{Extension: ext, MediaType: mt}
+		return "", &ExtensionMismatchError{Extension: shortExtension(ext), MediaType: mt}
 	}
+}
+
+// maxReportedExtension is how many characters of a refused extension an
+// ExtensionMismatchError keeps: more than any real extension has.
+const maxReportedExtension = 16
+
+// shortExtension returns ext cut to maxReportedExtension characters, marked
+// with "…" when cut. A name is the client's, and its extension runs from its
+// last dot to its end, however long that is.
+func shortExtension(ext string) string {
+	if r := []rune(ext); len(r) > maxReportedExtension {
+		return string(r[:maxReportedExtension]) + "…"
+	}
+	return ext
 }

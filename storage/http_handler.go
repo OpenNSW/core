@@ -71,7 +71,7 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusUnsupportedMediaType, "invalid or prohibited file type")
 		return
 	case errors.As(err, &mismatch):
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("the file name's extension (%s) does not match its type (%s)", mismatch.Extension, mismatch.MediaType))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("the file name's extension (%q) does not match its type (%s)", mismatch.Extension, mismatch.MediaType))
 		return
 	}
 	if err != nil {
