@@ -30,7 +30,9 @@ type idKind struct {
 
 // Loader fetches raw bytes for a path from one source. It knows nothing about
 // ids, kinds, versions, or artifact shapes. Return ErrNotFound when the artifact
-// is absent; return other errors only for real failures.
+// is absent; return other errors only for real failures. The bytes returned
+// belong to the caller, which may keep or change them, so return a fresh slice,
+// never one the loader still holds.
 type Loader interface {
 	Load(ctx context.Context, path string) ([]byte, error)
 }
