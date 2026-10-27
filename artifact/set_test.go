@@ -188,6 +188,22 @@ func TestLoadSet(t *testing.T) {
 		}
 	})
 
+	t.Run("an explicit version must keep its path across manifests", func(t *testing.T) {
+		src := testutil.MemLoader{
+			"manifest_v1.json": manifest(row("ports", "static_data", "1", "ports.json")),
+			"manifest_v2.json": manifest(row("ports", "static_data", "1", "ports_moved.json")),
+		}
+		_, err := artifact.LoadSet(ctx, src)
+		if err == nil || !strings.Contains(err.Error(), "must keep its file") {
+			t.Fatalf("expected an explicit-version path error, got %v", err)
+		}
+
+		src["manifest_v2.json"] = manifest(row("ports", "static_data", "1", "ports.json"), row("ports", "static_data", "2", "ports_v2.json"))
+		if _, err := artifact.LoadSet(ctx, src); err != nil {
+			t.Fatalf("same path and a new version should load, got %v", err)
+		}
+	})
+
 	t.Run("nil loader fails", func(t *testing.T) {
 		if _, err := artifact.LoadSet(ctx, nil); err == nil {
 			t.Fatal("expected an error")
@@ -212,4 +228,49 @@ func TestSetRegistry(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestGetExplicit(t *testing.T) {
+	ctx := context.Background()
+	src := testutil.MemLoader{
+		"manifest_v1.json": manifest(row("ports", "email", "1", "ports.json")),
+		"manifest_v2.json": manifest(row("ports", "email", "1", "ports.json"), row("ports", "email", "2", "ports_v2.json")),
+		"ports.json":       []byte(`{"subject":"one"}`),
+		"ports_v2.json":    []byte(`{"subject":"two"}`),
+	}
+	set, err := artifact.LoadSet(ctx, src)
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	for version, want := range map[string]string{"1": "one", "2": "two"} {
+		got, err := artifact.GetExplicit[fakeEmail](ctx, set, "ports", version)
+		if err != nil || got.Subject != want {
+			t.Errorf("version %s: got %q, %v; want %q", version, got.Subject, err, want)
+		}
+	}
+	for _, version := range []string{"3", ""} {
+		if _, err := artifact.GetExplicit[fakeEmail](ctx, set, "ports", version); !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("version %q: expected ErrNotFound, got %v", version, err)
+		}
+	}
+}
+
+func TestLatestPrefersTheUnversionedRow(t *testing.T) {
+	ctx := context.Background()
+	set, err := artifact.LoadSet(ctx, testutil.MemLoader{
+		"manifest_v1.json": manifest(row("welcome", "email", "", "current.json"), row("welcome", "email", "1", "old.json")),
+		"current.json":     []byte(`{"subject":"current"}`),
+		"old.json":         []byte(`{"subject":"old"}`),
+	})
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	got, err := artifact.Latest[fakeEmail](ctx, set.CurrentRegistry(), "welcome")
+	if err != nil || got.Subject != "current" {
+		t.Fatalf("Latest = %q, %v; want the unversioned row", got.Subject, err)
+	}
+	old, err := artifact.GetExplicit[fakeEmail](ctx, set, "welcome", "1")
+	if err != nil || old.Subject != "old" {
+		t.Fatalf("GetExplicit(1) = %q, %v; want the explicit row", old.Subject, err)
+	}
 }

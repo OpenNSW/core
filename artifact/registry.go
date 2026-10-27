@@ -109,9 +109,10 @@ func Get[T Artifact](ctx context.Context, r *Registry, id, version string) (T, e
 	return loadAndParse[T](ctx, r, e, id, kind, version)
 }
 
-// Latest fetches and parses the newest version of an artifact, as type T. For an
-// unversioned artifact (a single "" entry) it simply returns that entry, so it is
-// also the natural "give me the current one" call for templates and schemas.
+// Latest fetches and parses an artifact as type T: the row without an explicit version if
+// the registry has one, otherwise the highest explicit version. In a manifest the row without
+// a version is the artifact for that manifest, so Latest is the "give me this manifest's one"
+// call for templates and schemas, even when the same manifest also lists explicit versions.
 func Latest[T Artifact](ctx context.Context, r *Registry, id string) (T, error) {
 	var zero T
 	kind := kindOf[T]()
@@ -119,6 +120,9 @@ func Latest[T Artifact](ctx context.Context, r *Registry, id string) (T, error) 
 	versions, ok := r.manifest[idKind{ID: id, Kind: kind}]
 	if !ok || len(versions) == 0 {
 		return zero, fmt.Errorf("%w: %s/%s", ErrNotFound, id, kind)
+	}
+	if e, ok := versions[""]; ok {
+		return loadAndParse[T](ctx, r, e, id, kind, "")
 	}
 
 	best, first := "", true
