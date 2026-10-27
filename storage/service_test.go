@@ -458,6 +458,9 @@ var testExtensions = map[string][]string{
 
 func TestUploadService_TypeExtensions(t *testing.T) {
 	withExtensions := []ServiceOption{WithUploadTypeExtensions(testExtensions)}
+	// An empty type is uploaded as drivers.DefaultMime, and its name is
+	// matched to that.
+	withOctetStream := []ServiceOption{WithUploadTypeExtensions(map[string][]string{drivers.DefaultMime: {".bin"}})}
 
 	accepted := []struct {
 		name, filename, mimeType, want string
@@ -470,6 +473,9 @@ func TestUploadService_TypeExtensions(t *testing.T) {
 		{name: "no extension: the type's first", filename: "photo", mimeType: "image/jpeg", want: "photo.jpg"},
 		{name: "a type with no entry is not checked", filename: "data.bin", mimeType: "application/zip", want: "data.bin"},
 		{name: "no map: nothing is checked", filename: "setup.exe", mimeType: "application/pdf", want: "setup.exe", opts: []ServiceOption{}},
+		{name: "a name that is only an extension", filename: ".pdf", mimeType: "application/pdf", want: ".pdf"},
+		{name: "a dot only before the last slash: no extension", filename: "a.exe/b", mimeType: "application/pdf", want: "a.exe/b.pdf"},
+		{name: "no type, no extension: the default type's", filename: "x", mimeType: "", want: "x.bin", opts: withOctetStream},
 	}
 	for _, tt := range accepted {
 		t.Run(tt.name, func(t *testing.T) {
@@ -494,6 +500,8 @@ func TestUploadService_TypeExtensions(t *testing.T) {
 		{name: "a program sent as a PDF", filename: "setup.exe", mimeType: "application/pdf", wantExt: ".exe", wantType: "application/pdf"},
 		{name: "another type's extension", filename: "report.pdf", mimeType: "image/jpeg", wantExt: ".pdf", wantType: "image/jpeg"},
 		{name: "a name ending in a dot", filename: "report.", mimeType: "application/pdf", wantExt: ".", wantType: "application/pdf"},
+		{name: "only the last extension counts", filename: "inv.pdf.exe", mimeType: "application/pdf", wantExt: ".exe", wantType: "application/pdf"},
+		{name: "no type: matched to the default type", filename: "x.exe", mimeType: "", wantExt: ".exe", wantType: drivers.DefaultMime, opts: withOctetStream},
 		{name: "a long extension, cut", filename: "report." + strings.Repeat("x", 1000), mimeType: "application/pdf", wantExt: "." + strings.Repeat("x", 15) + "…", wantType: "application/pdf"},
 		{name: "the type with parameters", filename: "page.pdf", mimeType: "text/html; charset=utf-8", wantExt: ".pdf", wantType: "text/html"},
 		{name: "the type with a malformed parameter", filename: "setup.exe", mimeType: "application/pdf;x", wantExt: ".exe", wantType: "application/pdf"},
@@ -521,6 +529,20 @@ func TestUploadService_TypeExtensions(t *testing.T) {
 		svc := NewService(&MockDriver{}, WithAllowedUploadTypes("application/pdf"), WithUploadTypeExtensions(testExtensions))
 		if _, err := svc.Upload(context.Background(), "page.pdf", 1024, "text/html"); !errors.Is(err, ErrContentTypeNotAllowed) {
 			t.Fatalf("expected ErrContentTypeNotAllowed, got %v", err)
+		}
+	})
+
+	t.Run("the map is copied", func(t *testing.T) {
+		byType := map[string][]string{"application/pdf": {".pdf"}}
+		svc := NewService(&MockDriver{}, WithUploadTypeExtensions(byType))
+		byType["application/pdf"][0] = ".exe"
+		byType["image/png"] = []string{".png"}
+
+		if _, err := svc.Upload(context.Background(), "setup.exe", 1024, "application/pdf"); err == nil {
+			t.Error("a change to the slice after NewService let .exe through as a PDF")
+		}
+		if _, err := svc.Upload(context.Background(), "photo.jpg", 1024, "image/png"); err != nil {
+			t.Errorf("a type added after NewService is checked: %v", err)
 		}
 	})
 
