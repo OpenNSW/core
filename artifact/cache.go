@@ -43,8 +43,8 @@ func newCachingLoader(next Loader, maxBytes int) *cachingLoader {
 	return &cachingLoader{next: next, maxBytes: maxBytes, order: list.New(), files: make(map[string]*list.Element)}
 }
 
-// Load returns a copy of the cached file, so a parser that keeps or changes its input cannot
-// change what the next caller gets.
+// Load returns a copy of the file, from the cache or the source, so a parser that keeps or
+// changes its input cannot change what the next caller gets.
 func (c *cachingLoader) Load(ctx context.Context, path string) ([]byte, error) {
 	c.mu.Lock()
 	if el, ok := c.files[path]; ok {
@@ -60,7 +60,7 @@ func (c *cachingLoader) Load(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	c.store(path, raw)
-	return raw, nil
+	return bytes.Clone(raw), nil
 }
 
 // store keeps a copy of raw under path, evicting the least recently used files to make room.
