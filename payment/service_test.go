@@ -20,7 +20,7 @@ import (
 
 // --- mocks -----------------------------------------------------------------
 
-// mockRepo is an in-memory PaymentRepository keyed by reference number.
+// mockRepo is an in-memory Repository keyed by reference number.
 type mockRepo struct {
 	txs map[string]*Transaction
 
@@ -66,18 +66,18 @@ func (m *mockRepo) Update(_ context.Context, tx *Transaction) error {
 	return nil
 }
 
-func (m *mockRepo) UpdateStatus(_ context.Context, ref string, status PaymentStatus) error {
+func (m *mockRepo) UpdateStatus(_ context.Context, ref string, status Status) error {
 	if tx, ok := m.txs[ref]; ok {
 		tx.Status = status
 	}
 	return nil
 }
 
-func (m *mockRepo) RunInTransaction(ctx context.Context, fn func(repo PaymentRepository) error) error {
+func (m *mockRepo) RunInTransaction(ctx context.Context, fn func(repo Repository) error) error {
 	return fn(m)
 }
 
-func (m *mockRepo) WithTx(*gorm.DB) PaymentRepository { return m }
+func (m *mockRepo) WithTx(*gorm.DB) Repository { return m }
 
 // mockRegistry returns a single configured gateway, which maps every payee
 // to testPayeeMapping unless unmapped is set.
@@ -164,7 +164,7 @@ func TestCreateCheckoutSession_Success(t *testing.T) {
 		Run(func(mock.Arguments) {
 			require.Len(t, repo.txs, 1)
 			for _, tx := range repo.txs {
-				assert.Equal(t, PaymentStatusPending, tx.Status)
+				assert.Equal(t, StatusPending, tx.Status)
 			}
 		}).
 		Return(&SessionResponse{
@@ -173,7 +173,7 @@ func TestCreateCheckoutSession_Success(t *testing.T) {
 			Instructions: "pay now",
 		}, nil)
 
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	resp, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.NoError(t, err)
@@ -185,7 +185,7 @@ func TestCreateCheckoutSession_Success(t *testing.T) {
 
 	stored := repo.txs[resp.ReferenceNumber]
 	require.NotNil(t, stored)
-	assert.Equal(t, PaymentStatusPending, stored.Status)
+	assert.Equal(t, StatusPending, stored.Status)
 	assert.Equal(t, "sess-1", stored.SessionID)
 	assert.Equal(t, "token-1", stored.CallbackToken)
 	assert.Equal(t, "org_a", stored.OrgID)
@@ -208,7 +208,7 @@ func TestCreateCheckoutSession_ValidationErrors(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			repo := newMockRepo()
-			svc := NewPaymentService(repo, &mockRegistry{gw: new(MockGateway)}, &fakeReferences{})
+			svc := NewService(repo, &mockRegistry{gw: new(MockGateway)}, &fakeReferences{})
 			req := validCheckoutReq()
 			mutate(&req)
 
@@ -228,7 +228,7 @@ func TestCreateCheckoutSession_MetadataForwardedToGateway(t *testing.T) {
 			seen = args.Get(1).(SessionRequest).Metadata
 		}).
 		Return(&SessionResponse{}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	req := validCheckoutReq()
 	req.Metadata["fee_scheme_id"] = "SCHEME-7"
@@ -252,7 +252,7 @@ func TestCreateCheckoutSession_PayeeMappingForwardedToGateway(t *testing.T) {
 	gw.On("CreateSession", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { seen = args.Get(1).(SessionRequest) }).
 		Return(&SessionResponse{}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestCreateCheckoutSession_PayeeNotMapped_NothingPersisted(t *testing.T) {
 	repo := newMockRepo()
 	gw := new(MockGateway) // CreateSession must not be reached
 	refs := &fakeReferences{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw, unmapped: true}, refs)
+	svc := NewService(repo, &mockRegistry{gw: gw, unmapped: true}, refs)
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.ErrorIs(t, err, ErrPayeeNotMapped)
@@ -276,7 +276,7 @@ func TestCreateCheckoutSession_PayeeNotMapped_NothingPersisted(t *testing.T) {
 
 func TestCreateCheckoutSession_GatewayNotFound(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewPaymentService(repo, &mockRegistry{getErr: errors.New("not registered")}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{getErr: errors.New("not registered")}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.Error(t, err)
@@ -287,13 +287,13 @@ func TestCreateCheckoutSession_GatewaySessionError_MarksFailed(t *testing.T) {
 	repo := newMockRepo()
 	gw := new(MockGateway)
 	gw.On("CreateSession", mock.Anything, mock.Anything).Return(nil, errors.New("boom"))
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.Error(t, err)
 	require.Len(t, repo.txs, 1)
 	for _, tx := range repo.txs {
-		assert.Equal(t, PaymentStatusFailed, tx.Status, "row must be marked FAILED, not left PENDING")
+		assert.Equal(t, StatusFailed, tx.Status, "row must be marked FAILED, not left PENDING")
 	}
 }
 
@@ -304,7 +304,7 @@ func TestCreateCheckoutSession_ReferenceFromGenerator(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("CreateSession", mock.Anything, mock.Anything).Return(&SessionResponse{}, nil)
 	refs := &fakeReferences{issue: func(CreateCheckoutRequest) (string, error) { return "ACME-0042", nil }}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, refs)
+	svc := NewService(repo, &mockRegistry{gw: gw}, refs)
 
 	req := validCheckoutReq()
 	req.Metadata["fee"] = "export-licence"
@@ -332,7 +332,7 @@ func TestCreateCheckoutSession_GeneratorGetsACopyOfTheMetadata(t *testing.T) {
 		req.Metadata["added"] = "by the generator"
 		return "REF-1", nil
 	}}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, refs)
+	svc := NewService(repo, &mockRegistry{gw: gw}, refs)
 
 	req := validCheckoutReq()
 	req.Metadata["fee"] = "export-licence"
@@ -351,7 +351,7 @@ func TestCreateCheckoutSession_GeneratorError(t *testing.T) {
 	gw := new(MockGateway) // CreateSession must not be reached
 	sentinel := errors.New("format unavailable")
 	refs := &fakeReferences{issue: func(CreateCheckoutRequest) (string, error) { return "", sentinel }}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, refs)
+	svc := NewService(repo, &mockRegistry{gw: gw}, refs)
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.ErrorIs(t, err, sentinel)
@@ -363,7 +363,7 @@ func TestCreateCheckoutSession_EmptyReferenceRejected(t *testing.T) {
 	repo := newMockRepo()
 	gw := new(MockGateway) // CreateSession must not be reached
 	refs := &fakeReferences{issue: func(CreateCheckoutRequest) (string, error) { return "", nil }}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, refs)
+	svc := NewService(repo, &mockRegistry{gw: gw}, refs)
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.ErrorContains(t, err, "empty reference")
@@ -377,7 +377,7 @@ func TestCreateCheckoutSession_DuplicateReference(t *testing.T) {
 	repo := newMockRepo()
 	repo.createErr = fmt.Errorf("%w: REF-1", ErrDuplicateReference)
 	gw := new(MockGateway) // CreateSession must not be reached
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.ErrorIs(t, err, ErrDuplicateReference)
@@ -385,14 +385,14 @@ func TestCreateCheckoutSession_DuplicateReference(t *testing.T) {
 }
 
 func TestNewPaymentService_NilReferencesPanics(t *testing.T) {
-	assert.Panics(t, func() { NewPaymentService(newMockRepo(), &mockRegistry{}, nil) })
+	assert.Panics(t, func() { NewService(newMockRepo(), &mockRegistry{}, nil) })
 }
 
 func TestCreateCheckoutSession_PersistError(t *testing.T) {
 	repo := newMockRepo()
 	repo.createErr = errors.New("db down")
 	gw := new(MockGateway) // CreateSession must not be reached
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.Error(t, err)
@@ -415,7 +415,7 @@ func TestValidateReference_PayablePending(t *testing.T) {
 		GatewayID:       "govpay",
 		OrgID:           "org_a",
 		ServiceID:       "certificate_fee",
-		Status:          PaymentStatusPending,
+		Status:          StatusPending,
 		Amount:          decimal.RequireFromString("100"),
 		Currency:        "LKR",
 		ExpiryDate:      time.Now().Add(time.Hour),
@@ -429,7 +429,7 @@ func TestValidateReference_PayablePending(t *testing.T) {
 		}),
 		true, mock.Anything).
 		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	resp, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
@@ -444,7 +444,7 @@ func TestValidateReference_UnknownReference(t *testing.T) {
 		mock.MatchedBy(func(tx *ValidationTransaction) bool { return tx == nil }),
 		false, mock.Anything).
 		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
@@ -456,7 +456,7 @@ func TestValidateReference_GatewayMismatch(t *testing.T) {
 	repo.txs["TNSW1"] = &Transaction{
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "other-gateway",
-		Status:          PaymentStatusPending,
+		Status:          StatusPending,
 		ExpiryDate:      time.Now().Add(time.Hour),
 	}
 	gw := validateGateway("TNSW1")
@@ -464,7 +464,7 @@ func TestValidateReference_GatewayMismatch(t *testing.T) {
 		mock.MatchedBy(func(tx *ValidationTransaction) bool { return tx == nil }),
 		false, mock.Anything).
 		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestValidateReference_PayeeNoLongerMapped(t *testing.T) {
 	repo := newMockRepo()
 	repo.txs["TNSW1"] = pendingTx()
 	gw := validateGateway("TNSW1")
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw, unmapped: true}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw, unmapped: true}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrPayeeNotMapped)
@@ -489,7 +489,7 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 	repo.txs["TNSW1"] = &Transaction{
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "govpay",
-		Status:          PaymentStatusPending,
+		Status:          StatusPending,
 		ExpiryDate:      time.Now().Add(-time.Hour), // expired
 	}
 	gw := validateGateway("TNSW1")
@@ -497,7 +497,7 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 		mock.MatchedBy(func(tx *ValidationTransaction) bool { return tx != nil }),
 		false, mock.Anything).
 		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
@@ -507,7 +507,7 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrWebhookVerificationFailed)
@@ -519,7 +519,7 @@ func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 func TestValidateReference_VerificationOperationalError_NotClassifiedAsAuthFailure(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("jwks endpoint timeout"))
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
@@ -538,7 +538,7 @@ func pendingTx() *Transaction {
 		ServiceID:       "certificate_fee",
 		Amount:          decimal.RequireFromString("1500.00"),
 		Currency:        "LKR",
-		Status:          PaymentStatusPending,
+		Status:          StatusPending,
 		ExpiryDate:      time.Now().Add(time.Hour),
 	}
 }
@@ -563,12 +563,12 @@ func TestProcessWebhook_SuccessAdvancesTask(t *testing.T) {
 		PaymentMethod:        "CC",
 	})
 	tc := &mockTaskCompleter{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 	svc.SetTaskCompleter(tc)
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, PaymentStatusSuccess, repo.txs["TNSW1"].Status)
+	assert.Equal(t, StatusSuccess, repo.txs["TNSW1"].Status)
 	require.Len(t, tc.calls, 1)
 	assert.Equal(t, "token-9", tc.calls[0].token, "the settlement must complete the step the checkout was for")
 	assert.Equal(t, "success", tc.calls[0].payload["payment_status"])
@@ -584,7 +584,7 @@ func TestProcessWebhook_PayeeLookup(t *testing.T) {
 	repo := newMockRepo()
 	repo.txs["TNSW1"] = pendingTx()
 	gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: WebhookStatusPending})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
@@ -604,7 +604,7 @@ func TestProcessWebhook_PayeeLookup_NotMapped(t *testing.T) {
 	repo := newMockRepo()
 	repo.txs["TNSW1"] = pendingTx()
 	gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: WebhookStatusPending})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw, unmapped: true}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw, unmapped: true}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
@@ -623,12 +623,12 @@ func TestProcessWebhook_AmountMismatch(t *testing.T) {
 		Currency:        "LKR",
 	})
 	tc := &mockTaskCompleter{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 	svc.SetTaskCompleter(tc)
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrAmountMismatch)
-	assert.Equal(t, PaymentStatusPending, repo.txs["TNSW1"].Status, "must not mark paid on mismatch")
+	assert.Equal(t, StatusPending, repo.txs["TNSW1"].Status, "must not mark paid on mismatch")
 	assert.Empty(t, tc.calls)
 }
 
@@ -641,11 +641,11 @@ func TestProcessWebhook_CurrencyMismatch(t *testing.T) {
 		Amount:          decimal.RequireFromString("1500.00"),
 		Currency:        "USD", // mismatch
 	})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrAmountMismatch)
-	assert.Equal(t, PaymentStatusPending, repo.txs["TNSW1"].Status)
+	assert.Equal(t, StatusPending, repo.txs["TNSW1"].Status)
 }
 
 func TestProcessWebhook_Failed(t *testing.T) {
@@ -656,12 +656,12 @@ func TestProcessWebhook_Failed(t *testing.T) {
 		Status:          WebhookStatusFailed,
 	})
 	tc := &mockTaskCompleter{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 	svc.SetTaskCompleter(tc)
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, PaymentStatusFailed, repo.txs["TNSW1"].Status)
+	assert.Equal(t, StatusFailed, repo.txs["TNSW1"].Status)
 	require.Len(t, tc.calls, 1)
 	assert.Equal(t, "fail", tc.calls[0].payload["payment_status"])
 }
@@ -669,7 +669,7 @@ func TestProcessWebhook_Failed(t *testing.T) {
 func TestProcessWebhook_Idempotent(t *testing.T) {
 	repo := newMockRepo()
 	settled := pendingTx()
-	settled.Status = PaymentStatusSuccess
+	settled.Status = StatusSuccess
 	repo.txs["TNSW1"] = settled
 	gw := webhookGateway(&WebhookPayload{
 		ReferenceNumber: "TNSW1",
@@ -678,7 +678,7 @@ func TestProcessWebhook_Idempotent(t *testing.T) {
 		Currency:        "LKR",
 	})
 	tc := &mockTaskCompleter{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 	svc.SetTaskCompleter(tc)
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
@@ -689,7 +689,7 @@ func TestProcessWebhook_Idempotent(t *testing.T) {
 func TestProcessWebhook_NotFound(t *testing.T) {
 	repo := newMockRepo()
 	gw := webhookGateway(&WebhookPayload{ReferenceNumber: "NOPE", Status: WebhookStatusSuccess})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrTransactionNotFound)
@@ -702,11 +702,11 @@ func TestProcessWebhook_UnsupportedStatus(t *testing.T) {
 		ReferenceNumber: "TNSW1",
 		Status:          WebhookStatus("WEIRD"),
 	})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrUnsupportedWebhookStatus)
-	assert.Equal(t, PaymentStatusPending, repo.txs["TNSW1"].Status)
+	assert.Equal(t, StatusPending, repo.txs["TNSW1"].Status)
 }
 
 func TestProcessWebhook_NonTerminalDoesNotAdvance(t *testing.T) {
@@ -717,7 +717,7 @@ func TestProcessWebhook_NonTerminalDoesNotAdvance(t *testing.T) {
 		Status:          WebhookStatusPending,
 	})
 	tc := &mockTaskCompleter{}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 	svc.SetTaskCompleter(tc)
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
@@ -735,18 +735,18 @@ func TestProcessWebhook_CompleterErrorPropagates(t *testing.T) {
 		Currency:        "LKR",
 	})
 	tc := &mockTaskCompleter{err: errors.New("task engine down")}
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 	svc.SetTaskCompleter(tc)
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
-	assert.Equal(t, PaymentStatusSuccess, repo.txs["TNSW1"].Status, "status is committed before the advance call")
+	assert.Equal(t, StatusSuccess, repo.txs["TNSW1"].Status, "status is committed before the advance call")
 }
 
 func TestProcessWebhook_VerificationFailure_NeverParses(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.ErrorIs(t, err, ErrWebhookVerificationFailed)
@@ -757,7 +757,7 @@ func TestProcessWebhook_VerificationFailure_NeverParses(t *testing.T) {
 func TestProcessWebhook_VerificationOperationalError_NotClassifiedAsAuthFailure(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("jwks endpoint timeout"))
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
@@ -768,7 +768,7 @@ func TestProcessWebhook_VerificationOperationalError_NotClassifiedAsAuthFailure(
 func TestListAvailableMethods(t *testing.T) {
 	infos := []GatewayInfo{{ID: "govpay", IsActive: true}}
 	registry := &mockRegistry{infos: infos}
-	svc := NewPaymentService(newMockRepo(), registry, &fakeReferences{})
+	svc := NewService(newMockRepo(), registry, &fakeReferences{})
 	payee := Payee{OrgID: "org_a", ServiceID: "certificate_fee"}
 
 	got, err := svc.ListAvailableMethods(context.Background(), payee)
@@ -783,7 +783,7 @@ func TestCreateCheckoutSession_SessionIDPersistError(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("CreateSession", mock.Anything, mock.Anything).
 		Return(&SessionResponse{SessionID: "sess-1"}, nil)
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.Error(t, err)
@@ -794,14 +794,14 @@ func TestCreateCheckoutSession_GatewayErrorAndMarkFailedAlsoErrors(t *testing.T)
 	repo.updateErr = errors.New("db down") // the mark-FAILED Update also fails
 	gw := new(MockGateway)
 	gw.On("CreateSession", mock.Anything, mock.Anything).Return(nil, errors.New("boom"))
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.CreateCheckoutSession(context.Background(), validCheckoutReq())
 	require.Error(t, err) // still surfaces the gateway error; mark-FAILED failure is only logged
 }
 
 func TestValidateReference_GatewayNotFound(t *testing.T) {
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{getErr: errors.New("nope")}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{getErr: errors.New("nope")}, &fakeReferences{})
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
 }
@@ -810,7 +810,7 @@ func TestValidateReference_ExtractError(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	gw.On("ExtractReferenceNumber", mock.Anything, mock.Anything).Return("", errors.New("bad body"))
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
@@ -819,14 +819,14 @@ func TestValidateReference_ExtractError(t *testing.T) {
 func TestValidateReference_RepoError(t *testing.T) {
 	repo := newMockRepo()
 	repo.getErr = errors.New("db down")
-	svc := NewPaymentService(repo, &mockRegistry{gw: validateGateway("TNSW1")}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: validateGateway("TNSW1")}, &fakeReferences{})
 
 	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
 }
 
 func TestProcessWebhook_GatewayNotFound(t *testing.T) {
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{getErr: errors.New("nope")}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{getErr: errors.New("nope")}, &fakeReferences{})
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
 }
@@ -835,7 +835,7 @@ func TestProcessWebhook_ParseError(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	gw.On("ParseWebhook", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.New("bad payload"))
-	svc := NewPaymentService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(newMockRepo(), &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
@@ -845,7 +845,7 @@ func TestProcessWebhook_RepoGetError(t *testing.T) {
 	repo := newMockRepo()
 	repo.getErr = errors.New("db down")
 	gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: WebhookStatusSuccess})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)
@@ -861,7 +861,7 @@ func TestProcessWebhook_UpdateError(t *testing.T) {
 		Amount:          decimal.RequireFromString("1500.00"),
 		Currency:        "LKR",
 	})
-	svc := NewPaymentService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
 
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.Error(t, err)

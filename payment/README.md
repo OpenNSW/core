@@ -7,9 +7,9 @@ The `payment` package provides a modular and extensible payment orchestration sy
 The system consists of several key components:
 
 1.  **Gateway**: An interface for gateway-specific integrations (e.g., LankaPay, GovPay). It handles session creation, webhook parsing, and real-time validation formatting.
-2.  **GatewayRegistry**: A pure discovery and lookup service. It is built from a `payment.Config` value (it reads no files), manages gateway registration and configuration injection, and provides sanitized metadata for the UI.
-3.  **PaymentRepository**: Handles persistence for `Transaction` records using GORM.
-4.  **PaymentService**: The high-level orchestrator. It uses the Registry to find the correct Gateway and coordinates between the gateway logic, database, and internal events.
+2.  **Registry**: A pure discovery and lookup service. It is built from a `payment.Config` value (it reads no files), manages gateway registration and configuration injection, and provides sanitized metadata for the UI.
+3.  **Repository**: Handles persistence for `Transaction` records using GORM.
+4.  **Service**: The high-level orchestrator. It uses the Registry to find the correct Gateway and coordinates between the gateway logic, database, and internal events.
 5.  **HTTPHandler**: Exposes the payment service via RESTful endpoints for both public and internal use.
 
 ## Integration
@@ -161,7 +161,7 @@ A checkout with a method that does not map its payee fails with `ErrPayeeNotMapp
 
 ### 3. Instantiate the Registry
 
-The `GatewayRegistry` takes the loaded configuration and maps each method ID to its implementation.
+The `Registry` takes the loaded configuration and maps each method ID to its implementation.
 
 ```go
 factories := map[string]payment.Factory{
@@ -195,11 +195,11 @@ func (g refGenerator) GenerateReference(ctx context.Context, req payment.CreateC
 
 ### 5. Setup the Orchestrator
 
-The `PaymentService` acts as the orchestrator using the Registry as a lookup.
+The `Service` acts as the orchestrator using the Registry as a lookup.
 
 ```go
-repo := payment.NewPaymentRepository(db)
-service := payment.NewPaymentService(repo, registry, refGenerator{})
+repo := payment.NewRepository(db)
+service := payment.NewService(repo, registry, refGenerator{})
 
 handler := payment.NewHTTPHandler(service)
 ```
@@ -240,13 +240,13 @@ Conflating the two means an operational blip on your own side (not an attack) ca
 
 `VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This covers header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) directly — but some schemes need more: a signature computed over the HTTP method and request path, a check against query parameters, an IP allowlist against the remote address, or an mTLS client-certificate check against the TLS connection state.
 
-Rather than changing `VerifyWebhook`'s signature every time a scheme needs a different dimension of the request — which would mean a coordinated breaking change across every implementer, every time — that data is available via context: `HTTPHandler` attaches the full inbound `*http.Request` to the context (via `payment.ContextWithRequest`) before ever calling into `PaymentService`, on every request, so a gateway's `VerifyWebhook` can retrieve it with `payment.RequestFromContext(ctx)` and read whatever dimension its own scheme requires, without `core/payment` ever having to anticipate which one that is:
+Rather than changing `VerifyWebhook`'s signature every time a scheme needs a different dimension of the request — which would mean a coordinated breaking change across every implementer, every time — that data is available via context: `HTTPHandler` attaches the full inbound `*http.Request` to the context (via `payment.ContextWithRequest`) before ever calling into `Service`, on every request, so a gateway's `VerifyWebhook` can retrieve it with `payment.RequestFromContext(ctx)` and read whatever dimension its own scheme requires, without `core/payment` ever having to anticipate which one that is:
 
 ```go
 func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
     req := payment.RequestFromContext(ctx)
     if req == nil {
-        // Not available — e.g. PaymentService was invoked directly,
+        // Not available — e.g. Service was invoked directly,
         // bypassing HTTPHandler (a unit test, say). Fall back to whatever
         // the explicit body/headers params allow, or fail closed if this
         // scheme can't verify without the request.
@@ -281,8 +281,8 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 ### Core Interfaces
 
 - **Gateway**: Interface for gateway implementations
-- **PaymentService**: Main orchestrator service
-- **PaymentRepository**: Database persistence layer
+- **Service**: Main orchestrator service
+- **Repository**: Database persistence layer
 
 ### Data Types
 
@@ -299,9 +299,9 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 ### Constructor Functions
 
 - `NewRegistry(configPath string, factories map[string]Factory)`: Create a gateway registry
-- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry, refGen ReferenceGenerator)`: Create payment service
-- `NewPaymentRepository(db *gorm.DB)`: Create payment repository
-- `NewHTTPHandler(service PaymentService)`: Create HTTP handler
+- `NewService(repo Repository, registry Registry, refGen ReferenceGenerator)`: Create payment service
+- `NewRepository(db *gorm.DB)`: Create payment repository
+- `NewHTTPHandler(service Service)`: Create HTTP handler
 
 ### Context Helpers
 
@@ -342,8 +342,8 @@ func setupPayments(db *gorm.DB) *payment.HTTPHandler {
     }
     
     // Setup service, with your ReferenceGenerator
-    repo := payment.NewPaymentRepository(db)
-    service := payment.NewPaymentService(repo, registry, yourRefGen)
+    repo := payment.NewRepository(db)
+    service := payment.NewService(repo, registry, yourRefGen)
     
     // Return handler for HTTP endpoints
     return payment.NewHTTPHandler(service)

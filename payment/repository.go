@@ -12,8 +12,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// PaymentRepository defines the interface for managing payment Transactions.
-type PaymentRepository interface {
+// Repository defines the interface for managing payment Transactions.
+type Repository interface {
 	// Create stores a new transaction. A reference another transaction holds
 	// returns ErrDuplicateReference.
 	Create(ctx context.Context, tx *Transaction) error
@@ -22,30 +22,30 @@ type PaymentRepository interface {
 	// write lock (SELECT ... FOR UPDATE). Must be called inside RunInTransaction.
 	GetByReferenceNumberForUpdate(ctx context.Context, referenceNumber string) (*Transaction, error)
 	Update(ctx context.Context, tx *Transaction) error
-	UpdateStatus(ctx context.Context, referenceNumber string, status PaymentStatus) error
+	UpdateStatus(ctx context.Context, referenceNumber string, status Status) error
 	// RunInTransaction runs fn inside a DB transaction, passing a repository bound
 	// to that transaction. The transaction commits when fn returns nil and rolls
 	// back on error.
-	RunInTransaction(ctx context.Context, fn func(repo PaymentRepository) error) error
-	WithTx(tx *gorm.DB) PaymentRepository
+	RunInTransaction(ctx context.Context, fn func(repo Repository) error) error
+	WithTx(tx *gorm.DB) Repository
 }
 
 type paymentRepository struct {
 	db *gorm.DB
 }
 
-// NewPaymentRepository creates a new instance of PaymentRepository.
-func NewPaymentRepository(db *gorm.DB) PaymentRepository {
+// NewRepository creates a new instance of Repository.
+func NewRepository(db *gorm.DB) Repository {
 	return &paymentRepository{db: db}
 }
 
 // WithTx enables transaction propagation.
-func (r *paymentRepository) WithTx(tx *gorm.DB) PaymentRepository {
-	return NewPaymentRepository(tx)
+func (r *paymentRepository) WithTx(tx *gorm.DB) Repository {
+	return NewRepository(tx)
 }
 
 // RunInTransaction runs fn within a single DB transaction.
-func (r *paymentRepository) RunInTransaction(ctx context.Context, fn func(repo PaymentRepository) error) error {
+func (r *paymentRepository) RunInTransaction(ctx context.Context, fn func(repo Repository) error) error {
 	return r.db.WithContext(ctx).Transaction(func(txDB *gorm.DB) error {
 		return fn(r.WithTx(txDB))
 	})
@@ -119,6 +119,6 @@ func (r *paymentRepository) Update(ctx context.Context, ptx *Transaction) error 
 }
 
 // UpdateStatus updates only the status field of a Transaction.
-func (r *paymentRepository) UpdateStatus(ctx context.Context, referenceNumber string, status PaymentStatus) error {
+func (r *paymentRepository) UpdateStatus(ctx context.Context, referenceNumber string, status Status) error {
 	return r.db.WithContext(ctx).Model(&Transaction{}).Where("reference_number = ?", referenceNumber).Updates(map[string]interface{}{"status": status}).Error
 }

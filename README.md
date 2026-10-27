@@ -123,7 +123,7 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     paymentRegistry, _ := payment.NewRegistry(cfg.Payment, map[string]payment.Factory{
         "govpay": govpay.NewGovPayGateway,
     })
-    paymentService := payment.NewPaymentService(paymentRepo, paymentRegistry)
+    paymentService := payment.NewService(paymentRepo, paymentRegistry)
 
     // 4. Temporal client
     temporalClient, _ := temporal.NewClient(cfg.Temporal)

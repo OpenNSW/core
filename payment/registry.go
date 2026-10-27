@@ -13,8 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// GatewayRegistry manages the discovery and lookup of payment gateways.
-type GatewayRegistry interface {
+// Registry manages the discovery and lookup of payment gateways.
+type Registry interface {
 	// Get retrieves a gateway implementation by its ID.
 	Get(id string) (Gateway, error)
 
@@ -61,7 +61,7 @@ type MethodConfig struct {
 // implementation, so gateways are immutable after init. Each of a gateway's
 // payee mappings is checked with its ValidatePayeeMapping here, so a bad
 // mapping fails startup rather than a payer's checkout.
-func NewRegistry(cfg Config, factories map[string]Factory) (GatewayRegistry, error) {
+func NewRegistry(cfg Config, factories map[string]Factory) (Registry, error) {
 	registry := &paymentRegistry{
 		gateways: make(map[string]Gateway),
 		infos:    make(map[string]GatewayInfo),
