@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenNSW/core/shared/audit"
 	"github.com/google/uuid"
 )
 
@@ -101,6 +102,9 @@ type PaymentService interface {
 	// SetTaskCompleter injects the dependency used to advance the workflow when
 	// a payment settles. Wired post-construction to avoid an import cycle with taskv2.
 	SetTaskCompleter(completer TaskCompleter)
+
+	// WithAuditor injects an optional auditor for recording payment audit events.
+	WithAuditor(auditor audit.Auditor)
 }
 
 type paymentService struct {
@@ -108,6 +112,7 @@ type paymentService struct {
 	registry      GatewayRegistry
 	refGen        ReferenceGenerator
 	taskCompleter TaskCompleter
+	auditor       audit.Auditor
 }
 
 // NewPaymentService initializes a payment service that takes each checkout's
@@ -125,6 +130,30 @@ func NewPaymentService(repo PaymentRepository, registry GatewayRegistry, refGen 
 
 func (s *paymentService) SetTaskCompleter(completer TaskCompleter) {
 	s.taskCompleter = completer
+}
+
+// WithAuditor injects an optional auditor for recording payment audit events.
+// Passing nil disables auditing.
+func (s *paymentService) WithAuditor(auditor audit.Auditor) {
+	s.auditor = auditor
+}
+
+const eventTypePayment = "PAYMENT"
+
+// auditPayment is a nil-safe helper that emits a payment audit event.
+func (s *paymentService) auditPayment(ctx context.Context, action audit.Action, status audit.Status, d AuditDetails) {
+	if s.auditor == nil {
+		return
+	}
+	s.auditor.Audit(ctx, audit.Event{
+		Timestamp:  time.Now().UTC(),
+		EventType:  eventTypePayment,
+		Action:     action,
+		Status:     status,
+		TargetType: "RESOURCE",
+		TargetID:   d.Reference,
+		Details:    d,
+	})
 }
 
 func (s *paymentService) ListAvailableMethods(ctx context.Context, payee Payee) ([]GatewayInfo, error) {
@@ -203,7 +232,14 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 			slog.ErrorContext(ctx, "payment: failed to mark transaction failed after gateway error",
 				"reference", tx.ReferenceNumber, "error", uerr)
 		}
-		return nil, fmt.Errorf("gateway failed to create session: %w", err)
+		err = fmt.Errorf("gateway failed to create session: %w", err)
+		s.auditPayment(ctx, audit.ActionCreate, audit.StatusFailure, AuditDetails{
+			GatewayID: req.GatewayID,
+			Reference: tx.ReferenceNumber,
+			Status:    string(PaymentStatusFailed),
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// 4. Persist the gateway-assigned session id.
@@ -218,6 +254,11 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		return nil, errors.New("gateway returned nil session response")
 	}
 
+	s.auditPayment(ctx, audit.ActionCreate, audit.StatusSuccess, AuditDetails{
+		GatewayID: req.GatewayID,
+		Reference: generatedRef,
+		Status:    string(PaymentStatusPending),
+	})
 	return &CreateCheckoutResponse{
 		ReferenceNumber: generatedRef,
 		SessionID:       sessionResp.SessionID,
@@ -234,26 +275,46 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 	// 1. Get the gateway from the registry using the ID from the URL
 	gateway, err := s.registry.Get(gatewayID)
 	if err != nil {
-		return nil, fmt.Errorf("gateway %s not found: %w", gatewayID, err)
+		err = fmt.Errorf("gateway %s not found: %w", gatewayID, err)
+		s.auditPayment(ctx, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// 2. Verify the caller before any gateway-specific parsing runs. No
 	// reference lookup, and no presentment info, may be disclosed to an
 	// unverified caller.
 	if err := verifyCaller(ctx, gateway, gatewayID, rawBody, headers); err != nil {
+		s.auditPayment(ctx, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
 		return nil, err
 	}
 
 	// 3. Extract reference number from raw body
 	refNo, err := gateway.ExtractReferenceNumber(ctx, rawBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract reference number: %w", err)
+		err = fmt.Errorf("failed to extract reference number: %w", err)
+		s.auditPayment(ctx, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// 4. Look up the transaction metadata from the DB
 	tx, err := s.repo.GetByReferenceNumber(ctx, refNo)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve payment reference: %w", err)
+		err = fmt.Errorf("failed to retrieve payment reference: %w", err)
+		s.auditPayment(ctx, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: refNo,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// 5. Map the internal record to the gateway DTO and decide payability.
@@ -286,8 +347,39 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 		}
 	}
 
+	// Domain status is known once the transaction has been mapped, including on
+	// subsequent gateway formatting failures. Leave it empty only when there is
+	// no usable domain transaction (unknown reference or gateway mismatch).
+	status := ""
+	if validationTx != nil {
+		status = validationTx.Status
+	}
+
 	// 5. Delegate the protocol-specific response formatting to the gateway.
-	return gateway.HandleValidateReference(ctx, validationTx, isPayable, rawBody)
+	resp, err := gateway.HandleValidateReference(ctx, validationTx, isPayable, rawBody)
+	if err != nil {
+		s.auditPayment(ctx, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: refNo,
+			Status:    status,
+			Error:     err.Error(),
+		})
+		return nil, err
+	}
+	if resp == nil {
+		err = errors.New("gateway returned nil validation response")
+		s.auditPayment(ctx, audit.ActionRead, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: refNo,
+			Status:    status,
+			Error:     err.Error(),
+		})
+		return nil, err
+	}
+	s.auditPayment(ctx, audit.ActionRead, audit.StatusSuccess, AuditDetails{
+		GatewayID: gatewayID, Reference: refNo, Status: status,
+	})
+	return resp, nil
 }
 
 // payeeLookup resolves, for the gateway gatewayID, the mapping of the payee a
@@ -312,29 +404,54 @@ func (s *paymentService) payeeLookup(gatewayID string) PayeeLookup {
 func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) (*WebhookResponse, error) {
 	gateway, err := s.registry.Get(gatewayID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get gateway %s: %w", gatewayID, err)
+		err = fmt.Errorf("failed to get gateway %s: %w", gatewayID, err)
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// Verify the caller before any gateway-specific parsing runs. No
 	// transaction may be settled on the strength of an unverified caller.
 	if err := verifyCaller(ctx, gateway, gatewayID, body, headers); err != nil {
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
 		return nil, err
 	}
 
 	gwPayload, webhookResp, err := gateway.ParseWebhook(ctx, body, headers, s.payeeLookup(gatewayID))
 	if err != nil {
-		return nil, fmt.Errorf("gateway failed to parse webhook: %w", err)
+		err = fmt.Errorf("gateway failed to parse webhook: %w", err)
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	if gwPayload == nil {
-		return nil, fmt.Errorf("gateway returned nil webhook payload")
+		err = fmt.Errorf("gateway returned nil webhook payload")
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// Translate the canonical gateway status into our domain status, rejecting
 	// anything unrecognized (defense-in-depth against a misbehaving gateway).
 	newStatus, err := toDomainStatus(gwPayload.Status)
 	if err != nil {
-		return nil, fmt.Errorf("webhook for %s: %w", gwPayload.ReferenceNumber, err)
+		err = fmt.Errorf("webhook for %s: %w", gwPayload.ReferenceNumber, err)
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: gwPayload.ReferenceNumber,
+			Error:     err.Error(),
+		})
+		return nil, err
 	}
 
 	// Claim and apply the status transition atomically. A row-level lock makes
@@ -362,6 +479,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		// concurrent delivery that committed first) — nothing more to do.
 		if tx.Status == PaymentStatusSuccess || tx.Status == PaymentStatusFailed {
 			slog.InfoContext(ctx, "webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
+			finalStatus = tx.Status
 			return nil
 		}
 
@@ -396,6 +514,11 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		return nil
 	})
 	if err != nil {
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: gwPayload.ReferenceNumber,
+			Error:     err.Error(),
+		})
 		return nil, err
 	}
 
@@ -404,6 +527,11 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 	// Already terminal / nothing claimed — don't advance again.
 	if !advance {
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusSuccess, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: gwPayload.ReferenceNumber,
+			Status:    string(finalStatus),
+		})
 		return webhookResp, nil
 	}
 
@@ -414,6 +542,11 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	// task signal; any other status leaves the task untouched so a non-terminal or
 	// unrecognized gateway status can't be misread as paid.
 	if s.taskCompleter == nil {
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusSuccess, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: gwPayload.ReferenceNumber,
+			Status:    string(finalStatus),
+		})
 		return webhookResp, nil
 	}
 
@@ -427,6 +560,11 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	if statusStr == "" {
 		slog.WarnContext(ctx, "payment: non-terminal webhook status, not advancing task",
 			"reference", gwPayload.ReferenceNumber, "status", finalStatus)
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusSuccess, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: gwPayload.ReferenceNumber,
+			Status:    string(finalStatus),
+		})
 		return webhookResp, nil
 	}
 
@@ -443,8 +581,20 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		// The transaction is already persisted; log and let the gateway retry
 		// drive a re-attempt rather than masking the failure as success.
 		slog.ErrorContext(ctx, "payment: failed to advance task step", "reference", refNum, "error", err)
+		s.auditPayment(ctx, audit.ActionUpdate, audit.StatusFailure, AuditDetails{
+			GatewayID: gatewayID,
+			Reference: gwPayload.ReferenceNumber,
+			Status:    string(finalStatus),
+			Error:     err.Error(),
+		})
 		return nil, fmt.Errorf("failed to advance task step for payment %s: %w", refNum, err)
 	}
+
+	s.auditPayment(ctx, audit.ActionUpdate, audit.StatusSuccess, AuditDetails{
+		GatewayID: gatewayID,
+		Reference: gwPayload.ReferenceNumber,
+		Status:    string(finalStatus),
+	})
 
 	return webhookResp, nil
 }
