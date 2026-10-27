@@ -27,19 +27,21 @@ type Activities struct {
 
 	// FetchWorkflowDefinitionHandler is invoked to dynamically retrieve the workflow definition structure
 	// for a given template ID during SPLIT_TASK execution.
-	FetchWorkflowDefinitionHandler func(templateID string) (WorkflowDefinition, error)
+	FetchWorkflowDefinitionHandler DefinitionHandler
 
 	// AdminParkHandler is invoked whenever a node parks for admin intervention. See the
 	// AdminParkHandler type doc for what a nil handler means.
 	AdminParkHandler AdminParkHandler
 }
 
-// FetchWorkflowDefinitionActivity is a Temporal activity that retrieves the workflow definition for a template ID.
-func (a *Activities) FetchWorkflowDefinitionActivity(_ context.Context, templateID string) (WorkflowDefinition, error) {
+// FetchWorkflowDefinitionActivity is a Temporal activity that retrieves the workflow definition for
+// a template ID, from the artifact manifest version the calling workflow resolves through (see
+// VarManifestVersion).
+func (a *Activities) FetchWorkflowDefinitionActivity(_ context.Context, templateID string, manifestVersion int) (WorkflowDefinition, error) {
 	if a.FetchWorkflowDefinitionHandler == nil {
 		return WorkflowDefinition{}, fmt.Errorf("FetchWorkflowDefinitionHandler is not initialized on Activities wrapper")
 	}
-	return a.FetchWorkflowDefinitionHandler(templateID)
+	return a.FetchWorkflowDefinitionHandler(manifestVersion, templateID)
 }
 
 // ActivationRef is what the workflow tells ExecuteTaskActivity about the run it is starting, beyond what
@@ -49,20 +51,23 @@ type ActivationRef struct {
 	NodeID string `json:"node_id"`
 	// Seq is the workflow-wide step counter value for this run.
 	Seq int64 `json:"seq"`
+	// ManifestVersion is the workflow's artifact manifest version (see VarManifestVersion).
+	ManifestVersion int `json:"manifest_version,omitempty"`
 }
 
 // ExecuteTaskActivity pushes the task to your application and sleeps waiting for it or completes synchronously
 func (a *Activities) ExecuteTaskActivity(ctx context.Context, taskTemplateID string, inputs map[string]any, caseID string, step ActivationRef) (map[string]any, error) {
 	info := activity.GetInfo(ctx)
 	payload := TaskPayload{
-		WorkflowID:     info.WorkflowExecution.ID,
-		RunID:          info.WorkflowExecution.RunID,
-		NodeID:         step.NodeID,
-		ActivationID:   info.ActivityID, // the step ID the workflow passed as the ActivityID
-		Seq:            step.Seq,
-		TaskTemplateID: taskTemplateID,
-		Inputs:         inputs,
-		CaseID:         caseID,
+		WorkflowID:      info.WorkflowExecution.ID,
+		RunID:           info.WorkflowExecution.RunID,
+		NodeID:          step.NodeID,
+		ActivationID:    info.ActivityID, // the step ID the workflow passed as the ActivityID
+		Seq:             step.Seq,
+		TaskTemplateID:  taskTemplateID,
+		ManifestVersion: step.ManifestVersion,
+		Inputs:          inputs,
+		CaseID:          caseID,
 	}
 
 	// Trigger custom code block. ExecuteTaskActivityHandler can return error ErrResultPending to pause the workflow
