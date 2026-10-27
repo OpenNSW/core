@@ -147,6 +147,7 @@ type TaskRecord struct {
 | `PersistSubmission`  | `CompleteTaskStep`    | active step is `A` and `seq = n`        | data, `ADVANCING`, `seq = n+1`                     |
 | `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING` or `COMPLETED`) | data only |
 | `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m`                       | `COMPLETED`, `seq = m`                             |
+| `CancelTask`         | `CancelTask`          | state is not `COMPLETED` or `CANCELLED` | `CANCELLED`, `seq = seq + 1`                       |
 
 `InitTask` still exists for creating the row and for coarse fields, but it never writes `ActiveStepID` or `Seq`, so a stale full-record save cannot move them.
 
