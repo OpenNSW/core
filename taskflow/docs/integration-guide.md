@@ -84,6 +84,8 @@ ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS active_step_id UUID NULL;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_by TEXT NULL;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NULL;
+ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS task_template_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_records_v2 DROP COLUMN IF EXISTS render_config;
 ```
 
 `InitTask` leaves the claim columns out of its insert, so tasks can still be created before they exist. Add them before anything calls `ClaimTask` or `ReleaseTask`.
@@ -116,9 +118,9 @@ This is read-only from the orchestrator's perspective. How definitions get *into
 | `GetTaskTemplate`    | `payload.TaskTemplateID` from the parent workflow | `StartTask`                                              |
 | `GetStepTemplate` | `payload.TaskTemplateID` from the child workflow  | `StartTaskStep`                                           |
 | `GetWorkflow`        | `TaskTemplate.WorkflowID`                         | `StartTask`                                              |
-| `GetGenericTemplate` | `TaskTemplate.RenderConfigID`                     | `StartTask` (snapshotted into `TaskRecord.RenderConfig`) |
+| `GetGenericTemplate` | `TaskTemplate.RenderConfigID`                     | `StartTask`, and each render (through `TaskRecord.TaskTemplateID`) |
 
-The render config is **snapshotted** into the `TaskRecord` at start time. If you mutate a render config in the registry, existing tasks keep their original view — which is the desired behaviour for audit and replay.
+The `TaskRecord` keeps only the render config's **id**. Every render resolves it again through the task's `ManifestVersion` (`renderconfig.Load`), so a task keeps the view of the manifest it started on, whatever is published later. Published artifacts never change, and the artifact `Set` keeps the files it loads, so this costs no fetch after the first.
 
 See [`template-reference.md`](template-reference.md) for the JSON shapes.
 
@@ -237,13 +239,13 @@ type Renderer interface {
 }
 ```
 
-The renderer turns a snapshotted render config + the task's current `(state, data)` into a `json.RawMessage` (e.g. a map of UI slot → component, a custom layout config, or schema). The library is deliberately agnostic about what your config or UI representation looks like — `Render` receives raw JSON and decides what to do.
+The renderer turns the task's render config + the task's current `(state, data)` into a `json.RawMessage` (e.g. a map of UI slot → component, a custom layout config, or schema). The library is deliberately agnostic about what your config or UI representation looks like — `Render` receives raw JSON and decides what to do.
 
 `Facts` also carries `Claims map[string]bool` — authorization decisions the *caller* resolved before rendering, which a renderer may use to decide what this particular caller is allowed to see. taskflow makes no policy decision of its own; it only forwards them. Callers supply them per request through `ZoneViewAssembler.Assemble(ctx, record, claims)` and pass `nil` when their render configs gate nothing on a claim.
 
 `demo/renderer.go` is a minimal state-keyed renderer: the config is `{state: {slot: component}}` and it picks the entry matching the current `State` (falling back to a `default` entry). Most real consumers will want something richer — templated payloads, schema lookups, role-based slot selection.
 
-The render config is snapshotted into the `TaskRecord` at `StartTask` time. Once a task is running, mutating the registry entry won't affect it.
+The render config is resolved through the task's manifest version (`renderconfig.Load`) on every render, so a manifest published after the task started does not change it.
 
 ---
 
@@ -306,7 +308,7 @@ func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, er
     // 2. Reject if the child workflow has parallel gateways
     // 3. taskID := payload.ActivationID (the parent's step ID); taskWorkflowID := "task-wf-" + taskID
     // 4. Build the initial Data map from payload.Inputs (setNestedKey for dotted keys)
-    // 5. Persist TaskRecord (state=STARTING, parent coords, render config snapshot)
+    // 5. Persist TaskRecord (state=STARTING, parent coords, render config id)
     // 6. Start the child task workflow on the task queue
     // 7. Return activity.ErrResultPending — the parent activity parks
 }

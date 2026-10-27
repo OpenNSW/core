@@ -22,6 +22,7 @@ import (
 	"github.com/OpenNSW/core/taskflow/callbacktoken"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
+	"github.com/OpenNSW/core/taskflow/renderconfig"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
 	engine "github.com/OpenNSW/core/workflow"
@@ -191,8 +192,10 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, err)
 	}
 
-	renderConfig, err := generictemplate.Load(ctx, reg, template.RenderConfigID)
-	if err != nil {
+	// The record keeps only the task template id, and every render resolves the config through it
+	// (see renderconfig.Load).
+	// Loading it here fails the task at start, not at its first render, when it is missing.
+	if _, err := generictemplate.Load(ctx, reg, template.RenderConfigID); err != nil {
 		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
 
@@ -217,7 +220,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		TaskID:           taskID,
 		TaskType:         template.Type,
 		State:            "STARTING",
-		RenderConfig:     renderConfig,
+		TaskTemplateID:   template.ID,
 		ParentWorkflowID: payload.WorkflowID,
 		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
 		CaseID:           payload.CaseID,       // the same at every level of nesting (see engine.VarCaseID)
@@ -626,10 +629,14 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		return TaskView{}, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
+	renderConfig, err := renderconfig.Load(context, tm.artifacts, record)
+	if err != nil {
+		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
+	}
 	// The renderer's template provider resolves the render config's templates through the task's
 	// version, so a form does not change under an open task.
 	renderCtx := artifact.WithManifestVersion(context, record.ManifestVersion)
-	view, err := tm.renderer.Render(renderCtx, record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
+	view, err := tm.renderer.Render(renderCtx, renderConfig, renderer.Facts{State: record.State, Data: record.Data})
 	if err != nil {
 		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
 	}

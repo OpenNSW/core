@@ -83,6 +83,9 @@ func TestStartTask_PinsTheParentsManifestVersion(t *testing.T) {
 	if rec.TaskType != "TYPE_V1" {
 		t.Errorf("task type = %q, want TYPE_V1 from manifest v1 (v2 is current)", rec.TaskType)
 	}
+	if rec.TaskTemplateID != "apply" {
+		t.Errorf("record TaskTemplateID = %q, want apply", rec.TaskTemplateID)
+	}
 	if started[engine.VarManifestVersion] != 1 {
 		t.Errorf("task workflow started with %s = %v, want 1", engine.VarManifestVersion, started[engine.VarManifestVersion])
 	}
@@ -202,7 +205,7 @@ func (r *versionRecordingRenderer) Render(ctx context.Context, _ json.RawMessage
 func TestGetTaskRenderInfo_PassesTheTasksManifestVersion(t *testing.T) {
 	ctx := context.Background()
 	db := newSafeMockTaskStore()
-	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: "task-r", State: "PENDING_USER", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: "task-r", TaskTemplateID: "apply", State: "PENDING_USER", Data: map[string]any{}})
 	r := &versionRecordingRenderer{}
 	tm := NewTaskManager(db, twoManifestSet(t), newTestPluginsRegistry(), nil, &mockTemporalManager{}, noopCallback, r)
 

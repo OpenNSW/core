@@ -928,7 +928,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 // The task view and the list carry the step to act on and the version.
 func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
+	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", TaskTemplateID: "test_template", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(context.Background(), "task-v")
@@ -949,7 +949,7 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 func TestTaskViews_CarryTheClaim(t *testing.T) {
 	db := newSafeMockTaskStore()
 	ctx := context.Background()
-	db.InitTask(ctx, store.TaskRecord{TaskID: "task-c", TaskType: "TEST", State: "PENDING_USER", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: "task-c", TaskType: "TEST", TaskTemplateID: "test_template", State: "PENDING_USER", Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(ctx, "task-c")

@@ -43,7 +43,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 	// types SQLite's driver understands: it only parses times for TIMESTAMP columns, so the model's
 	// timestamptz cannot be used here. The guards under test are portable SQL.
 	if err := db.Exec(`CREATE TABLE task_records_v2 (
-		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, render_config TEXT,
+		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, task_template_id TEXT NOT NULL DEFAULT '',
 		parent_workflow_id TEXT, parent_step_id TEXT,
 		task_workflow_id TEXT,
 		active_task_template_id TEXT, case_id TEXT NOT NULL DEFAULT '',
