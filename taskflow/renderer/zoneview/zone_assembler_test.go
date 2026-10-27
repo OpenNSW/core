@@ -6,18 +6,39 @@ package zoneview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/OpenNSW/core/artifact"
+	"github.com/OpenNSW/core/artifact/testutil"
+	"github.com/OpenNSW/core/taskflow/renderconfig"
 	"github.com/OpenNSW/core/taskflow/store"
 	"github.com/OpenNSW/core/uiprojector"
 )
 
-func newTestAssembler(t *testing.T) *ZoneViewAssembler {
+func newTestAssembler(t *testing.T, config string) *ZoneViewAssembler {
 	t.Helper()
-	return NewZoneViewAssembler(newTestRenderer(t))
+	return NewZoneViewAssembler(newTestRenderer(t), testSet(t, config, 1))
+}
+
+// testSet is an artifact set of manifest versions 1 to versions, each listing config as the
+// render config "test:render".
+func testSet(t *testing.T, config string, versions int) *artifact.Set {
+	t.Helper()
+	files := testutil.MemLoader{
+		"task.json":   []byte(`{"id":"test:task","type":"APPLICATION","workflow_id":"test:flow","render_config_id":"test:render"}`),
+		"render.json": []byte(config),
+	}
+	for v := 1; v <= versions; v++ {
+		files[artifact.ManifestPath(v)] = []byte(`{"artifacts":[{"id":"test:task","kind":"task_template","path":"task.json"},{"id":"test:render","kind":"generic_template","path":"render.json"}]}`)
+	}
+	set, err := artifact.LoadSet(context.Background(), files)
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	return set
 }
 
 // claimGatedConfig is the shape a per-role task template uses: one section per
@@ -42,19 +63,20 @@ const claimGatedConfig = `{
   "states": { "PENDING_USER": { "actions": [{ "command": "submit" }] } }
 }`
 
-func pendingRecord(config string) store.TaskRecord {
+func pendingRecord() store.TaskRecord {
 	return store.TaskRecord{
-		TaskID:       "task-1",
-		TaskType:     "APPLICATION",
-		State:        "PENDING_USER",
-		RenderConfig: json.RawMessage(config),
+		TaskID:          "task-1",
+		TaskType:        "APPLICATION",
+		State:           "PENDING_USER",
+		TaskTemplateID:  "test:task",
+		ManifestVersion: 1,
 	}
 }
 
 // A denied claim must hide the section *and* the handles it claims: the handles
 // only reach the wire through a section the projector emitted.
 func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
-	a := newTestAssembler(t)
+	a := newTestAssembler(t, claimGatedConfig)
 
 	tests := []struct {
 		name        string
@@ -78,7 +100,7 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			zv, err := a.Assemble(context.Background(), pendingRecord(claimGatedConfig), tt.claims)
+			zv, err := a.Assemble(context.Background(), pendingRecord(), tt.claims)
 			if err != nil {
 				t.Fatalf("Assemble: %v", err)
 			}
@@ -99,10 +121,10 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 // A claim the config references but the caller never resolved is a caller bug,
 // not a silent deny — uiprojector fails and the assembler must surface it.
 func TestAssemble_ClaimNotResolvedByCallerErrors(t *testing.T) {
-	a := newTestAssembler(t)
+	a := newTestAssembler(t, claimGatedConfig)
 
 	for _, claims := range []map[string]bool{nil, {"role:cha": true}} {
-		_, err := a.Assemble(context.Background(), pendingRecord(claimGatedConfig), claims)
+		_, err := a.Assemble(context.Background(), pendingRecord(), claims)
 		if err == nil {
 			t.Fatalf("claims %v: want an error, got none", claims)
 		}
@@ -114,7 +136,6 @@ func TestAssemble_ClaimNotResolvedByCallerErrors(t *testing.T) {
 
 // Configs that gate nothing on a claim keep working with nil claims.
 func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
-	a := newTestAssembler(t)
 	const config = `{
 	  "id": "test:render",
 	  "sections": {
@@ -129,7 +150,8 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	  "states": { "PENDING_USER": { "actions": [{ "command": "submit" }] } }
 	}`
 
-	zv, err := a.Assemble(context.Background(), pendingRecord(config), nil)
+	a := newTestAssembler(t, config)
+	zv, err := a.Assemble(context.Background(), pendingRecord(), nil)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -145,10 +167,10 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 // The view carries the step to act on and the version, and offers no action while the task is
 // ADVANCING: the submission was accepted and a second one would only be rejected as stale.
 func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testing.T) {
-	a := newTestAssembler(t)
+	a := newTestAssembler(t, claimGatedConfig)
 	claims := map[string]bool{"role:trader": false, "role:cha": true}
 
-	pending := pendingRecord(claimGatedConfig)
+	pending := pendingRecord()
 	pending.ActiveStepID, pending.Seq = "0a0a0a0a-0000-4000-8000-00000000000a", 4
 	zv, err := a.Assemble(context.Background(), pending, claims)
 	if err != nil {
@@ -176,10 +198,10 @@ func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testi
 
 // The view carries the claim the record holds, and leaves it out of the JSON when there is none.
 func TestAssemble_CarriesTheClaim(t *testing.T) {
-	a := newTestAssembler(t)
+	a := newTestAssembler(t, claimGatedConfig)
 	claims := map[string]bool{"role:trader": false, "role:cha": true}
 
-	zv, err := a.Assemble(context.Background(), pendingRecord(claimGatedConfig), claims)
+	zv, err := a.Assemble(context.Background(), pendingRecord(), claims)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -192,7 +214,7 @@ func TestAssemble_CarriesTheClaim(t *testing.T) {
 	}
 
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	claimed := pendingRecord(claimGatedConfig)
+	claimed := pendingRecord()
 	claimed.ClaimedBy, claimed.ClaimedAt = "user-a", &at
 	zv, err = a.Assemble(context.Background(), claimed, claims)
 	if err != nil {
@@ -219,9 +241,9 @@ func TestAssemble_ResolvesTemplatesThroughTheTasksManifestVersion(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := pendingRecord(claimGatedConfig)
+	record := pendingRecord()
 	record.ManifestVersion = 7
-	if _, err := NewZoneViewAssembler(NewTaskRenderer(asm)).Assemble(context.Background(), record, map[string]bool{"role:trader": true, "role:cha": true}); err != nil {
+	if _, err := NewZoneViewAssembler(NewTaskRenderer(asm), testSet(t, claimGatedConfig, 7)).Assemble(context.Background(), record, map[string]bool{"role:trader": true, "role:cha": true}); err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
 	if len(probe.seen) == 0 {
@@ -231,5 +253,14 @@ func TestAssemble_ResolvesTemplatesThroughTheTasksManifestVersion(t *testing.T) 
 		if v != 7 {
 			t.Errorf("template fetched with manifest version %d, want 7", v)
 		}
+	}
+}
+
+// A record that names no task template cannot be rendered.
+func TestAssemble_RecordWithoutTaskTemplateErrors(t *testing.T) {
+	record := pendingRecord()
+	record.TaskTemplateID = ""
+	if _, err := newTestAssembler(t, claimGatedConfig).Assemble(context.Background(), record, nil); !errors.Is(err, renderconfig.ErrNoTaskTemplate) {
+		t.Fatalf("Assemble err = %v, want %v", err, renderconfig.ErrNoTaskTemplate)
 	}
 }

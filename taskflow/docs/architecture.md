@@ -107,10 +107,10 @@ A single `store.TaskRecord` holds what is needed to render a task, plus the coor
 ```go
 type TaskRecord struct {
     // 1. Identity
-    TaskID       string          // = the parent's step ID (a UUID); how external callers address this task
-    TaskType     string          // user-facing category from the TaskTemplate (e.g. "APPLICATION")
-    State        string          // current lifecycle state (drives rendering)
-    RenderConfig json.RawMessage // snapshotted render config for this task
+    TaskID         string // = the parent's step ID (a UUID); how external callers address this task
+    TaskType       string // user-facing category from the TaskTemplate (e.g. "APPLICATION")
+    State          string // current lifecycle state (drives rendering)
+    TaskTemplateID string // the task template it started from; its render config is resolved through it and ManifestVersion (renderconfig.Load)
 
     // 2. Parent coordinates — used to wake the parent workflow on completion. No ParentRunID: the
     // parent workflow never has more than one run, so "" always addresses the current one.

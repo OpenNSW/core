@@ -5,7 +5,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/OpenNSW/core/shared/deepcopy"
@@ -15,10 +14,14 @@ import (
 // It stores both Parent (macro journey) and Task (active sub-process) coordinates separately,
 // and holds dynamic task execution data as a generic key-value map.
 type TaskRecord struct {
-	TaskID       string          `json:"task_id"`
-	TaskType     string          `json:"task_type"`
-	State        string          `json:"status"` // State drives UI rendering ("PENDING_USER", "QUEUED_EXTERNALLY", "COMPLETED")
-	RenderConfig json.RawMessage `json:"render_config"`
+	TaskID   string `json:"task_id"`
+	TaskType string `json:"task_type"`
+	State    string `json:"status"` // State drives UI rendering ("PENDING_USER", "QUEUED_EXTERNALLY", "COMPLETED")
+	// TaskTemplateID is the id of the task template the task started from, resolved through
+	// ManifestVersion. Its render config is read from it on every render (see renderconfig.Load);
+	// the record never holds the config. Not to be confused with ActiveTaskTemplateID, the step
+	// template of the active step.
+	TaskTemplateID string `json:"task_template_id"`
 
 	// Parent coordinates — used to wake the parent workflow when this task finishes.
 	// There is no ParentRunID: the parent workflow never has more than one run (this engine never
@@ -67,26 +70,17 @@ type TaskRecord struct {
 }
 
 // DeepCopy returns a copy of the record that shares no mutable reference state
-// (maps, slices, raw-JSON byte buffers) with the original. Scalar fields are
+// (maps, slices) with the original. Scalar fields are
 // duplicated by the value copy; the reference-typed fields are cloned
 // explicitly so a caller handed the copy cannot mutate the source.
 func (r TaskRecord) DeepCopy() TaskRecord {
 	cp := r // value copy duplicates all scalar fields
-	cp.RenderConfig = copyBytes(r.RenderConfig)
 	cp.Data = deepcopy.Map(r.Data)
 	if r.ClaimedAt != nil {
 		at := *r.ClaimedAt
 		cp.ClaimedAt = &at
 	}
 	return cp
-}
-
-// copyBytes returns a copy of b, or nil if b is nil.
-func copyBytes(b json.RawMessage) json.RawMessage {
-	if b == nil {
-		return nil
-	}
-	return append(json.RawMessage(nil), b...)
 }
 
 // Task states written by the guarded step statements.
