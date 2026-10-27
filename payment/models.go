@@ -10,16 +10,16 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type PaymentStatus string
+type Status string
 
 const (
-	PaymentStatusPending PaymentStatus = "PENDING"
-	PaymentStatusSuccess PaymentStatus = "SUCCESS"
-	PaymentStatusFailed  PaymentStatus = "FAILED"
+	StatusPending Status = "PENDING"
+	StatusSuccess Status = "SUCCESS"
+	StatusFailed  Status = "FAILED"
 )
 
-// PaymentTransaction represents the internal state of a payment
-type PaymentTransaction struct {
+// Transaction represents the internal state of a payment
+type Transaction struct {
 	ID              string `json:"id" gorm:"type:text;not null;primaryKey"`
 	ReferenceNumber string `json:"reference_number" gorm:"uniqueIndex"` // From the service's ReferenceGenerator
 	// CallbackToken is the opaque address of the workflow step this payment completes
@@ -34,13 +34,17 @@ type PaymentTransaction struct {
 	SessionID       string            `json:"session_id"` // Gateway-specific session identifier
 	Amount          decimal.Decimal   `json:"amount"`
 	Currency        string            `json:"currency"`       // "LKR" or foreign currency
-	Status          PaymentStatus     `json:"status"`         // PENDING, SUCCESS, FAILED, EXPIRED
+	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, EXPIRED
 	PaymentMethod   string            `json:"payment_method"` // CC, BANK_TRANSFER (populated on webhook)
 	ExpiryDate      time.Time         `json:"expiry_date"`
 	GatewayMetadata map[string]string `json:"gateway_metadata" gorm:"serializer:json"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 }
+
+// TableName keeps the table, and the index names GORM derives from it, that
+// this type mapped to as PaymentTransaction, so renaming it moved no data.
+func (Transaction) TableName() string { return "payment_transactions" }
 
 // --------------------------------------------------------
 // Gateway Session API Contracts (Outbound to GovPay)

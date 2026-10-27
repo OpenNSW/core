@@ -43,36 +43,29 @@ func (p Payee) String() string {
 // payee its reference was issued for. found is false for an unknown reference.
 type PayeeLookup func(ctx context.Context, referenceNumber string) (mapping json.RawMessage, found bool, err error)
 
-// orgPayees is one org's entry in a payment method's "payees" config. Each
+// OrgPayees is one org's entry in a payment method's "payees" config. Each
 // service's entry is merged over the org's defaults, keys in the service entry
-// winning. Both are JSON objects whose keys the method's gateway defines.
-type orgPayees struct {
-	Defaults json.RawMessage            `json:"defaults,omitempty"`
-	Services map[string]json.RawMessage `json:"services"`
+// winning. Both are objects whose keys the method's gateway defines.
+type OrgPayees struct {
+	Defaults map[string]any            `yaml:"defaults,omitempty"`
+	Services map[string]map[string]any `yaml:"services"`
 }
 
 // resolvePayees flattens a method's "payees" config into one merged mapping per
-// payee. Only a service listed under its org is mapped: the defaults alone map
-// nothing.
-func resolvePayees(payees map[string]orgPayees) (map[Payee]json.RawMessage, error) {
+// payee, encoded as a JSON object for the gateway. Only a service listed under
+// its org is mapped: the defaults alone map nothing.
+func resolvePayees(payees map[string]OrgPayees) (map[Payee]json.RawMessage, error) {
 	resolved := make(map[Payee]json.RawMessage)
 	for orgID, org := range payees {
 		if strings.TrimSpace(orgID) == "" {
 			return nil, errors.New("payees: org id is empty")
 		}
-		defaults, err := jsonObject(org.Defaults)
-		if err != nil {
-			return nil, fmt.Errorf("payees.%s.defaults: %w", orgID, err)
-		}
-		for serviceID, raw := range org.Services {
+		for serviceID, entry := range org.Services {
 			if strings.TrimSpace(serviceID) == "" {
 				return nil, fmt.Errorf("payees.%s.services: service id is empty", orgID)
 			}
-			entry, err := jsonObject(raw)
-			if err != nil {
-				return nil, fmt.Errorf("payees.%s.services.%s: %w", orgID, serviceID, err)
-			}
-			merged := maps.Clone(defaults)
+			merged := make(map[string]any, len(org.Defaults)+len(entry))
+			maps.Copy(merged, org.Defaults)
 			maps.Copy(merged, entry)
 			mapping, err := json.Marshal(merged)
 			if err != nil {
@@ -82,20 +75,4 @@ func resolvePayees(payees map[string]orgPayees) (map[Payee]json.RawMessage, erro
 		}
 	}
 	return resolved, nil
-}
-
-// jsonObject decodes raw as a JSON object. Absent or null decodes to an empty
-// object; anything else that is not an object is an error.
-func jsonObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
-	obj := map[string]json.RawMessage{}
-	if len(raw) == 0 {
-		return obj, nil
-	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, errors.New("must be a JSON object")
-	}
-	if obj == nil {
-		obj = map[string]json.RawMessage{}
-	}
-	return obj, nil
 }
