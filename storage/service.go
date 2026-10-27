@@ -10,8 +10,6 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/OpenNSW/core/storage/drivers"
@@ -80,10 +78,9 @@ type Service struct {
 	// maxUploadSize is the largest file Upload accepts; 0 means
 	// defaultMaxUploadSize.
 	maxUploadSize int64
-	// extensions lists, per media type, the extensions Upload accepts in a
-	// file name, the first being the one a name without an extension gets;
-	// nil checks no name.
-	extensions map[string][]string
+	// extensions is the extensions Upload accepts in a file name, by media
+	// type; nil checks no name.
+	extensions extensionPolicy
 	// inline is the set of types a download opens in the browser with. It is
 	// nil unless WithInlineTypes set it, and then the default list applies.
 	inline inlinePolicy
@@ -129,39 +126,10 @@ func WithUploadTypeExtensions(byType map[string][]string) ServiceOption {
 	if err := CheckUploadTypeExtensions(byType); err != nil {
 		panic(fmt.Sprintf("storage: WithUploadTypeExtensions: %v", err))
 	}
-	extensions := make(map[string][]string, len(byType))
-	for t, exts := range byType {
-		extensions[t] = slices.Clone(exts)
-	}
+	extensions := newExtensionPolicy(byType)
 	return func(s *Service) {
 		s.extensions = extensions
 	}
-}
-
-// extensionRx matches an extension WithUploadTypeExtensions accepts: a dot and
-// lower-case letters or digits, which a storage key can end in.
-var extensionRx = regexp.MustCompile(`^\.[a-z0-9]+$`)
-
-// CheckUploadTypeExtensions returns an error unless every type in byType is one
-// ValidMediaType accepts and lists at least one extension, each a dot followed
-// by lower-case letters or digits, such as ".pdf". WithUploadTypeExtensions
-// makes the same check; a host calls this first to report a bad configuration
-// without a panic.
-func CheckUploadTypeExtensions(byType map[string][]string) error {
-	for t, exts := range byType {
-		if err := ValidMediaType(t); err != nil {
-			return err
-		}
-		if len(exts) == 0 {
-			return fmt.Errorf("%q lists no extensions", t)
-		}
-		for _, ext := range exts {
-			if !extensionRx.MatchString(ext) {
-				return fmt.Errorf("%q: %q is not a lower-case extension such as \".pdf\"", t, ext)
-			}
-		}
-	}
-	return nil
 }
 
 // WithInlineTypes sets the media types a download opens in the browser with;
@@ -267,7 +235,7 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 			return nil, fmt.Errorf("%w: %q", ErrContentTypeNotAllowed, mime)
 		}
 	}
-	filename, err := s.matchExtension(filename, mime)
+	filename, err := s.extensions.match(filename, mime)
 	if err != nil {
 		return nil, err
 	}
@@ -320,28 +288,6 @@ func (s *Service) Save(ctx context.Context, filename, mime string, body io.Reade
 		Size:     size,
 		MimeType: mime,
 	}, nil
-}
-
-// matchExtension returns filename as Upload keeps it: unchanged when its
-// extension is one the type lists, with the type's first extension when it has
-// none, and an *ExtensionMismatchError otherwise. A type without an entry is
-// not checked. The type is read as a download reads it (mediaType), so
-// malformed parameters don't hide it.
-func (s *Service) matchExtension(filename, contentType string) (string, error) {
-	mt := mediaType(contentType)
-	exts := s.extensions[mt]
-	if len(exts) == 0 {
-		return filename, nil
-	}
-	// The extension newKey keeps in the key.
-	switch ext := filepath.Ext(filename); {
-	case ext == "":
-		return filename + exts[0], nil
-	case slices.Contains(exts, strings.ToLower(ext)):
-		return filename, nil
-	default:
-		return "", &ExtensionMismatchError{Extension: ext, MediaType: mt}
-	}
 }
 
 // newKey creates the ID and storage key for a file named filename, for both
