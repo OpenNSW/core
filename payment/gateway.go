@@ -131,13 +131,15 @@ type WebhookResponse struct {
 	HTTPStatus int
 }
 
-// Factory constructs a configured, ready-to-use gateway from its raw config.
-// One factory per gateway type; the registry calls it once at init so gateways
-// are immutable after construction (no post-init config mutation).
-type Factory func(config json.RawMessage) (PaymentGateway, error)
+// Factory constructs a configured, ready-to-use gateway from its method's
+// config. decode decodes that config into v, a pointer to the gateway's own
+// config type (with yaml struct tags); a method with no config leaves v
+// untouched. One factory per gateway type; the registry calls it once at init
+// so gateways are immutable after construction (no post-init config mutation).
+type Factory func(decode func(v any) error) (Gateway, error)
 
-// PaymentGateway defines the interface for external payment gateway integration.
-type PaymentGateway interface {
+// Gateway defines the interface for external payment gateway integration.
+type Gateway interface {
 	// GetFlowType returns the flow type of the gateway (REDIRECT or INSTRUCTION).
 	GetFlowType() InteractionType
 

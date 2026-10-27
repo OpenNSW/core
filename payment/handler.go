@@ -12,11 +12,11 @@ import (
 
 // HTTPHandler handles public HTTP requests for the Payment Service.
 type HTTPHandler struct {
-	service PaymentService
+	service Service
 }
 
 // NewHTTPHandler creates a new handler.
-func NewHTTPHandler(service PaymentService) *HTTPHandler {
+func NewHTTPHandler(service Service) *HTTPHandler {
 	return &HTTPHandler{service: service}
 }
 
