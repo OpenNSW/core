@@ -154,3 +154,84 @@ func (e *mutatingEmail) Parse(raw []byte) error {
 	}
 	return err
 }
+
+func TestSetFileCacheLimit(t *testing.T) {
+	ctx := context.Background()
+	// Each file is 20 bytes: {"subject":"Hello"} padded with spaces.
+	file := func(subject string) []byte {
+		b := []byte(`{"subject":"` + subject + `"}`)
+		for len(b) < 20 {
+			b = append(b, ' ')
+		}
+		return b
+	}
+	src := func() *countingLoader {
+		return counting(testutil.MemLoader{
+			"manifest_v1.json": manifest(
+				row("a", "email", "", "a.json"),
+				row("b", "email", "", "b.json"),
+				row("c", "email", "", "c.json"),
+			),
+			"a.json": file("A"),
+			"b.json": file("B"),
+			"c.json": file("C"),
+		})
+	}
+	get := func(t *testing.T, set *artifact.Set, id string) {
+		t.Helper()
+		reg, err := set.Registry(ctx, 1)
+		if err != nil {
+			t.Fatalf("Registry(1): %v", err)
+		}
+		if _, err := artifact.Latest[fakeEmail](ctx, reg, id); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+
+	t.Run("evicts the least recently used file to stay within the limit", func(t *testing.T) {
+		loads := src()
+		set, err := artifact.LoadSet(ctx, loads, artifact.WithFileCacheBytes(40)) // room for two files
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		get(t, set, "a")
+		get(t, set, "b")
+		get(t, set, "a") // a is now the most recently used
+		get(t, set, "c") // evicts b
+		get(t, set, "a")
+		get(t, set, "c")
+		get(t, set, "b")
+		want := map[string]int{"a.json": 1, "b.json": 2, "c.json": 1}
+		for path, n := range want {
+			if got := loads.count(path); got != n {
+				t.Errorf("%s loaded %d times, want %d", path, got, n)
+			}
+		}
+	})
+
+	t.Run("a file larger than the limit is never kept", func(t *testing.T) {
+		loads := src()
+		set, err := artifact.LoadSet(ctx, loads, artifact.WithFileCacheBytes(10))
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		get(t, set, "a")
+		get(t, set, "a")
+		if got := loads.count("a.json"); got != 2 {
+			t.Errorf("a.json loaded %d times, want 2", got)
+		}
+	})
+
+	t.Run("a limit of zero turns the cache off", func(t *testing.T) {
+		loads := src()
+		set, err := artifact.LoadSet(ctx, loads, artifact.WithFileCacheBytes(0))
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		get(t, set, "a")
+		get(t, set, "a")
+		if got := loads.count("a.json"); got != 2 {
+			t.Errorf("a.json loaded %d times, want 2", got)
+		}
+	})
+}
