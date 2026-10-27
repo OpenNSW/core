@@ -112,11 +112,11 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
         return nil, err
     }
 
-    // 2. Artifact registry — one loader is the single source of truth
+    // 2. Artifacts — one loader is the single source of truth. LoadSet reads
+    //    configs/manifest_v1.json, manifest_v2.json, … (or configs/manifest.json)
     artifactLoader, _ := local.New(local.Config{Root: "configs"})
-    registry := artifact.NewRegistry(artifactLoader)
-    manifest, _ := artifact.LoadManifest(ctx, artifactLoader) // reads configs/manifest.json
-    artifact.RegisterFromConfig(registry, manifest)
+    artifacts, _ := artifact.LoadSet(ctx, artifactLoader)
+    registry := artifacts.CurrentRegistry()
 
     // 3. Payment
     paymentRepo := NewPaymentRepo(db)
