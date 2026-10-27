@@ -59,6 +59,7 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	var tooLarge *FileTooLargeError
+	var mismatch *ExtensionMismatchError
 	switch {
 	case errors.Is(err, ErrInvalidSize):
 		writeJSONError(w, http.StatusBadRequest, "size must be greater than 0")
@@ -68,6 +69,9 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrContentTypeNotAllowed):
 		writeJSONError(w, http.StatusUnsupportedMediaType, "invalid or prohibited file type")
+		return
+	case errors.As(err, &mismatch):
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("the file name's extension (%q) does not match its type (%s)", mismatch.Extension, mismatch.MediaType))
 		return
 	}
 	if err != nil {

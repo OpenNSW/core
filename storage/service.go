@@ -50,6 +50,22 @@ func (e *FileTooLargeError) Error() string {
 	return fmt.Sprintf("storage: file size exceeds %s limit", formatSize(e.Limit))
 }
 
+// ExtensionMismatchError is returned by Upload for a file name whose extension
+// is not one WithUploadTypeExtensions lists for the upload's type, such as
+// "setup.exe" sent as application/pdf. The key keeps the name's extension, and
+// the file is downloaded under it.
+type ExtensionMismatchError struct {
+	// Extension is the file name's, with its dot, as sent, cut to 16
+	// characters and ended with "…" when longer.
+	Extension string
+	// MediaType is the upload's type, lower case and without parameters.
+	MediaType string
+}
+
+func (e *ExtensionMismatchError) Error() string {
+	return fmt.Sprintf("storage: file name extension %q does not match type %q", e.Extension, e.MediaType)
+}
+
 // defaultMaxUploadSize is the largest file Upload accepts unless
 // WithMaxUploadSize sets another limit.
 const defaultMaxUploadSize int64 = 32 << 20
@@ -63,6 +79,9 @@ type Service struct {
 	// maxUploadSize is the largest file Upload accepts; 0 means
 	// defaultMaxUploadSize.
 	maxUploadSize int64
+	// extensions is the extensions Upload accepts in a file name, by media
+	// type; nil checks no name.
+	extensions extensionPolicy
 	// inline is the set of types a download opens in the browser with. It is
 	// nil unless WithInlineTypes set it, and then the default list applies.
 	inline inlinePolicy
@@ -93,6 +112,24 @@ func WithMaxUploadSize(n int64) ServiceOption {
 	}
 	return func(s *Service) {
 		s.maxUploadSize = n
+	}
+}
+
+// WithUploadTypeExtensions sets, per media type, the extensions Upload accepts
+// in a file name, in order of preference. A name whose extension (compared
+// without case) is not listed for the upload's type is rejected with
+// *ExtensionMismatchError; a name without an extension is given the type's
+// first. The type is compared without parameters or case. A type with no entry
+// is not checked: which types may be uploaded at all is WithAllowedUploadTypes'
+// to decide. It does not apply to Save. It panics on a map
+// CheckUploadTypeExtensions refuses.
+func WithUploadTypeExtensions(byType map[string][]string) ServiceOption {
+	if err := CheckUploadTypeExtensions(byType); err != nil {
+		panic(fmt.Sprintf("storage: WithUploadTypeExtensions: %v", err))
+	}
+	extensions := newExtensionPolicy(byType)
+	return func(s *Service) {
+		s.extensions = extensions
 	}
 }
 
@@ -181,7 +218,9 @@ func formatSize(n int64) string {
 // Upload handles the preparation of a file upload by generating a unique key
 // and a presigned/upload URL via the storage driver. The size and type are
 // checked against the Service's limits here, because the presigned URL is
-// what binds the upload to them.
+// what binds the upload to them, and the file name against the type, because
+// the key keeps its extension. The returned Name is the file name as checked:
+// with its type's extension when it had none.
 func (s *Service) Upload(ctx context.Context, filename string, size int64, mime string) (*FileMetadata, error) {
 	if size <= 0 {
 		return nil, ErrInvalidSize
@@ -196,6 +235,10 @@ func (s *Service) Upload(ctx context.Context, filename string, size int64, mime 
 		if _, ok := s.allowedUploadTypes[mime]; !ok {
 			return nil, fmt.Errorf("%w: %q", ErrContentTypeNotAllowed, mime)
 		}
+	}
+	filename, err := s.extensions.match(filename, mime)
+	if err != nil {
+		return nil, err
 	}
 	id, key := newKey(filename)
 
