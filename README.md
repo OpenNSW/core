@@ -142,8 +142,8 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     var tm *orchestrator.TaskManager
     microRunner := workflow.NewTemporalManager(
         temporalClient, cfg.Temporal.Namespace, "MICRO_WORKFLOW_QUEUE",
-        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
-        func(c workflow.WorkflowCompletion) error { return tm.HandleTaskCompletion(ctx, c) },
+        func(ctx context.Context, p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
+        func(ctx context.Context, c workflow.WorkflowCompletion) error { return tm.HandleTaskCompletion(ctx, c) },
     )
     onTaskCompleted := func(parentWorkflowID, parentStepID string, vars map[string]any) error {
         return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentStepID, vars)

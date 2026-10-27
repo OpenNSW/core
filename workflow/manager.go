@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -222,9 +223,12 @@ type UpdateEvent struct {
 // 2. Asynchronous Execution:
 //   - If the work is long-running (e.g. awaits external API callback, human UI interaction, etc.),
 //     return a nil map and an ErrResultPending error.
-//   - The workflow activity pauses and awaits completion. The host application must eventually resume
-//     it by calling Manager.CompleteActivation() with the matching workflow, run, and step IDs.
-type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
+//   - The Activity ends, and the node waits in the workflow, for as long as it takes, until the host
+//     application calls Manager.CompleteActivation() with the matching workflow, run, and step IDs.
+//
+// ctx is the Activity's: it carries the attempt's deadline (taskActivityTimeout), and is cancelled
+// when the attempt times out, so a call made with it doesn't outlive the attempt.
+type TaskActivationHandler func(ctx context.Context, payload TaskPayload) (map[string]any, error)
 
 // WorkflowCompletion is what the engine reports when a top-level workflow reaches its END node.
 type WorkflowCompletion struct {
@@ -240,8 +244,9 @@ type WorkflowCompletion struct {
 
 // WorkflowCompletionHandler is invoked when the generic DAG workflow successfully reaches an "End" node,
 // providing the final, accumulated state of the workflow variables. It may be invoked more than once
-// for the same workflow (Temporal retries the Activity), so it must be idempotent.
-type WorkflowCompletionHandler func(WorkflowCompletion) error
+// for the same workflow (Temporal retries the Activity), so it must be idempotent. ctx is the
+// Activity's, with the attempt's deadline.
+type WorkflowCompletionHandler func(ctx context.Context, completion WorkflowCompletion) error
 
 // AdminParkHandler is invoked once every time a node parks in NodeStatusAwaitingAdmin —
 // including a re-park after a failed AdminActionRetry, since that's newly actionable
@@ -265,9 +270,10 @@ type Manager interface {
 	// CompleteActivation is called by the external system to resume a paused workflow node.
 	// It routes the output data back into the specific workflow's WorkflowVariables using the
 	// workflowID and activationID (TaskPayload.ActivationID) that were originally emitted via the
-	// TaskActivationHandler. runID may be empty to address the workflow's current run. It fails if
-	// that step is not pending, so a call for a step that has already completed, or that never
-	// existed, is rejected rather than applied to whichever step is active now.
+	// TaskActivationHandler. runID may be empty to address the workflow's current run. It fails with
+	// ErrActivationNotPending if that step is not waiting, so a call for a step that has already
+	// completed, or that never existed, is rejected rather than applied to whichever step is active
+	// now. Of several calls for the same step, exactly one succeeds.
 	CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error
 
 	// TaskUpdate is used to send an update about the task to the workflow.
@@ -327,8 +333,7 @@ type temporalManagerImpl struct {
 
 // NewTemporalManager creates a new instance of TemporalManager.
 //
-// namespace must be the namespace c was dialed with. client.Client does not expose it, and
-// some calls (e.g. CompleteActivityByID) require it explicitly.
+// namespace must be the namespace c was dialed with. client.Client does not expose it.
 func NewTemporalManager(
 	c client.Client,
 	namespace string,
@@ -394,18 +399,39 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 	return nil
 }
 
-// CompleteActivation is invoked by the external application to complete a dormant asynchronous Temporal Activity.
-// WorkflowID is the ID of the workflow
-// runID is the ID of the run
-// activationID is the ID of the step (TaskPayload.ActivationID), which is the Activity's ID
-// output is the key valye pairs that should be added to the global context
+// CompleteActivation delivers a suspended step's output to the workflow waiting on it, as the
+// workflow's CompleteActivation Update (see registerCompletionHandler), and waits for the workflow
+// to accept it. A step that isn't waiting, or a workflow that has ended or doesn't exist, is
+// ErrActivationNotPending.
+//
+// The Update gets no ID of its own: Temporal would answer a second Update with the same ID with the
+// first one's result, so a duplicate completion would succeed instead of being rejected.
 func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error {
-	err := m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, activationID, output, nil)
-	var notFound *serviceerror.NotFound
-	if errors.As(err, &notFound) {
+	handle, err := m.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		RunID:        runID,
+		UpdateName:   completeActivationUpdate,
+		Args:         []any{activationID, output},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err == nil {
+		err = handle.Get(ctx, nil)
+	}
+	if isActivationNotPending(err) {
 		return fmt.Errorf("%w: %w", ErrActivationNotPending, err)
 	}
 	return err
+}
+
+// isActivationNotPending reports whether err is the workflow rejecting a completion for a step that
+// isn't waiting, or the workflow having ended or never existed.
+func isActivationNotPending(err error) bool {
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) && appErr.Type() == activationNotPendingErrorType {
+		return true
+	}
+	var notFound *serviceerror.NotFound
+	return errors.As(err, &notFound)
 }
 
 func (m *temporalManagerImpl) TaskUpdate(ctx context.Context, workflowID, runID string, event UpdateEvent) error {

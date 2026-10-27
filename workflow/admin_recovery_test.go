@@ -296,7 +296,7 @@ func TestAdminRetryResolvesInputMappingError(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_WITH_MISSING_INPUT", mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]any{}, nil).Once()
+		Return(TaskResult{Output: map[string]any{}}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.RegisterDelayedCallback(func() {
@@ -339,7 +339,7 @@ func TestAdminCompleteResolvesOutputMappingErrorWithoutReinvokingActivity(t *tes
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]any{}, nil).Once()
+		Return(TaskResult{Output: map[string]any{}}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Confirm the parked LastError explicitly warns that the Activity already ran, before
@@ -401,9 +401,9 @@ func TestAdminRetryRefreshesCachedTaskResultWithoutStaleData(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]any{"attempt": "first"}, nil).Once()
+		Return(TaskResult{Output: map[string]any{"attempt": "first"}}, nil).Once()
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_MISSING_REQUIRED_OUTPUT", mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]any{"attempt": "second"}, nil).Once()
+		Return(TaskResult{Output: map[string]any{"attempt": "second"}}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Retry without fixing anything — the Activity runs again, output mapping fails again.
@@ -645,7 +645,7 @@ func TestAdminCompleteRejectedForParkedGatewayNode(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.WorkflowCompletedActivity, activity.RegisterOptions{Name: "WorkflowCompletedActivity"})
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_PASS", mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]any{}, nil).Once()
+		Return(TaskResult{Output: map[string]any{}}, nil).Once()
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Rejecting a GATEWAY's Complete just continues parkNodeForAdmin's loop without re-minting, so
@@ -728,9 +728,9 @@ func TestAdminParkingIsolatesParallelBranches(t *testing.T) {
 	env.RegisterActivityWithOptions(acts.AdminParkActivity, activity.RegisterOptions{Name: "AdminParkActivity"})
 
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_A", mock.Anything, mock.Anything, mock.Anything).
-		Return(nil, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
+		Return(TaskResult{}, temporal.NewNonRetryableApplicationError("boom", "TaskFailure", nil)).Once()
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, "TASK_B", mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]any{}, nil).Once()
+		Return(TaskResult{Output: map[string]any{}}, nil).Once()
 
 	branchWorkflowID := FormatChildWorkflowID("default-test-workflow-id", "default-test-workflow-id", "split", "e2")
 

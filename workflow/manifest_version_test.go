@@ -60,20 +60,20 @@ func runRecordingActivations(t *testing.T, def WorkflowDefinition, vars map[stri
 	var mu sync.Mutex
 	seen := make(map[string][]int)
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, templateID string, inputs map[string]any, _ string, ref ActivationRef) (map[string]any, error) {
+		func(_ context.Context, templateID string, inputs map[string]any, _ string, ref ActivationRef) (TaskResult, error) {
 			mu.Lock()
 			seen[templateID] = append(seen[templateID], ref.ManifestVersion)
 			mu.Unlock()
 			if templateID == "LOAD_ITEMS" {
-				return map[string]any{"items": []any{
+				return TaskResult{Output: map[string]any{"items": []any{
 					map[string]any{"id": "i1", "type": "food"},
 					map[string]any{"id": "i2", "type": "goods"},
-				}}, nil
+				}}}, nil
 			}
 			if c, ok := inputs["commodities"]; ok {
-				return map[string]any{"commodities": c}, nil
+				return TaskResult{Output: map[string]any{"commodities": c}}, nil
 			}
-			return map[string]any{}, nil
+			return TaskResult{Output: map[string]any{}}, nil
 		})
 
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "manifest-test"})

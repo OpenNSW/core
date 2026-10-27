@@ -57,13 +57,13 @@ func startPendingLoop(t *testing.T) (TemporalManager, string, <-chan TaskPayload
 	runs := make(chan TaskPayload, 8)
 	var mu sync.Mutex
 	mgr := NewTemporalManager(c, "default", "task-done-it-"+uuid.NewString(),
-		func(p TaskPayload) (map[string]any, error) {
+		func(_ context.Context, p TaskPayload) (map[string]any, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			runs <- p
 			return nil, activity.ErrResultPending
 		},
-		func(WorkflowCompletion) error { return nil })
+		func(context.Context, WorkflowCompletion) error { return nil })
 	require.NoError(t, mgr.StartWorker())
 	t.Cleanup(mgr.StopWorker)
 
@@ -92,13 +92,12 @@ func TestCompleteStepRejectsAnEarlierRunOfALoopingNode(t *testing.T) {
 	ctx := context.Background()
 
 	first := nextRun(t, runs)
-	require.Equal(t, int64(1), first.Seq)
 	require.NoError(t, mgr.CompleteActivation(ctx, workflowID, "", first.ActivationID, map[string]any{"delivered": false}))
 
 	second := nextRun(t, runs) // the loop came back to the same node
 	require.Equal(t, first.NodeID, second.NodeID, "same node in the definition")
 	require.NotEqual(t, first.ActivationID, second.ActivationID, "but a new step")
-	require.Equal(t, int64(2), second.Seq)
+	require.Greater(t, second.Seq, first.Seq, "a later run of the node has a higher Seq")
 
 	// A late or duplicate completion for the first pass is rejected and must not touch the second.
 	err := mgr.CompleteActivation(ctx, workflowID, "", first.ActivationID, map[string]any{"delivered": true})
@@ -135,4 +134,34 @@ func TestCompleteStepAfterTheWorkflowEndedIsNotPending(t *testing.T) {
 	err := mgr.CompleteActivation(context.Background(), workflowID, "", first.ActivationID, map[string]any{"delivered": true})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrActivationNotPending), "got %v", err)
+}
+
+// Of two completions for the same step sent at once, exactly one is accepted and the other is
+// ErrActivationNotPending. CompleteTaskStep relies on this to let only one submission write.
+func TestCompleteStepConcurrentCompletionsOneWins(t *testing.T) {
+	mgr, workflowID, runs := startPendingLoop(t)
+	first := nextRun(t, runs)
+
+	const callers = 5
+	errs := make(chan error, callers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for range callers {
+		go func() {
+			start.Wait()
+			errs <- mgr.CompleteActivation(context.Background(), workflowID, "", first.ActivationID, map[string]any{"delivered": true})
+		}()
+	}
+	start.Done()
+
+	accepted := 0
+	for range callers {
+		err := <-errs
+		if err == nil {
+			accepted++
+			continue
+		}
+		require.ErrorIs(t, err, ErrActivationNotPending)
+	}
+	require.Equal(t, 1, accepted)
 }

@@ -35,6 +35,10 @@ type graphInterpreter struct {
 	// pendingAdminResolutions holds a Settable for each node currently parked in
 	// NodeStatusAwaitingAdmin, keyed by that park's ActivationID. See admin_recovery.go.
 	pendingAdminResolutions map[string]workflow.Settable
+
+	// pendingCompletions holds a Settable for each TASK step that may be completed through
+	// CompleteActivation, keyed by its ActivationID. See completion.go.
+	pendingCompletions map[string]workflow.Settable
 }
 
 // GraphInterpreterWorkflow is the entry point for the Temporal workflow that interprets a graph definition.
@@ -99,6 +103,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		instance:                instance,
 		edgeTokens:              make(map[string]int),
 		pendingAdminResolutions: make(map[string]workflow.Settable),
+		pendingCompletions:      make(map[string]workflow.Settable),
 	}
 	interp.buildIndexes()
 
@@ -131,6 +136,9 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	})
 
 	interp.startAdminResolutionDispatcher(ctx)
+	if err := interp.registerCompletionHandler(ctx); err != nil {
+		return nil, fmt.Errorf("failed to set %s update handler: %w", completeActivationUpdate, err)
+	}
 
 	// The END node's WorkflowCompletedActivity runs with these options. Every other Activity sets its
 	// own (handleTaskNode's ExecuteTaskActivity among them).
@@ -463,10 +471,10 @@ func (g *graphInterpreter) caseID() string {
 	return g.instance.ID
 }
 
-// taskActivityTimeout bounds one attempt of a task's Activity. It is long because a step that waits
-// for a person (ErrResultPending) holds its Activity open until CompleteActivation, and that wait
-// counts against this timeout.
-const taskActivityTimeout = 24 * time.Hour * 365
+// taskActivityTimeout bounds one attempt of a task's Activity: running the step's plugin. A step that
+// waits for a person ends its Activity first (see completion.go), so the wait doesn't count against
+// it. An attempt whose worker died or whose call hangs is retried when this runs out.
+const taskActivityTimeout = 10 * time.Minute
 
 // completionActivityTimeout bounds one attempt of WorkflowCompletedActivity. The completion hook does
 // its work and returns without waiting for anyone, so a few minutes is ample, and a worker that dies
@@ -495,20 +503,34 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 		return err
 	}
 
-	var result map[string]any
+	// The step may be completed from the moment its Activity starts: a host can complete a step it
+	// suspended before the Activity has reported back.
+	completion, unregister := g.expectCompletion(ctx, nodeInfo.ActivationID)
 
 	// nodeInfo.ActivationID was minted by the caller (mintActivation, via executeNode or an admin
-	// retry) before dispatching here; the Activity is addressed by that same ID so a stale
-	// completion from an earlier run of this node no longer matches.
+	// retry) before dispatching here; the Activity is addressed by that same ID, and so is the step's
+	// completion, so a stale completion from an earlier run of this node no longer matches.
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		ActivityID:          nodeInfo.ActivationID,
 		StartToCloseTimeout: taskActivityTimeout,
 		RetryPolicy:         taskRetryPolicy,
 	})
 
+	var taskResult TaskResult
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
-		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq, ManifestVersion: g.manifestVersion()}).Get(ctx, &result)
+		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq, ManifestVersion: g.manifestVersion()}).Get(ctx, &taskResult)
+	result := taskResult.Output
+	if err == nil && taskResult.Suspended {
+		// Wait, outside any Activity, for CompleteActivation to deliver the step's output.
+		err = completion.Get(ctx, &result)
+	}
+	// The step now takes no completion: it completed, failed or was cancelled. This must happen
+	// here, not on return, since the node returns only after the rest of the graph has run.
+	unregister()
 	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
 		return withCategory(ParkCategoryTaskFailure, err)
 	}
 
