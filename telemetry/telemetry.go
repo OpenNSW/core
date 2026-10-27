@@ -175,7 +175,9 @@ func WithTrustedParentFunc(trusted func(*http.Request) bool) HandlerOption {
 
 // Handler wraps next with otelhttp: one server span and HTTP metrics per
 // request, with http.route taken from the ServeMux pattern. The response
-// carries the trace ID in the X-Trace-ID header.
+// carries the trace ID in the X-Trace-ID header. Make Handler the outermost
+// layer so other middleware runs inside the span; if any of it replaces the
+// request, wrap the mux with Routes.
 func (p *Provider) Handler(operation string, next http.Handler, opts ...HandlerOption) http.Handler {
 	var hc handlerConfig
 	for _, opt := range opts {
@@ -187,14 +189,7 @@ func (p *Provider) Handler(operation string, next http.Handler, opts ...HandlerO
 			w.Header().Set(TraceIDHeader, id)
 		}
 		next.ServeHTTP(w, r)
-		// otelhttp does not set http.route on metrics from the ServeMux
-		// pattern; tag it via the Labeler after next runs (the mux has set
-		// Pattern by then, and otelhttp records after this returns).
-		if route := routeFromPattern(r.Pattern); route != "" {
-			if labeler, ok := otelhttp.LabelerFromContext(r.Context()); ok {
-				labeler.Add(semconv.HTTPRoute(route))
-			}
-		}
+		labelRoute(r)
 	})
 
 	otelOpts := []otelhttp.Option{
@@ -208,6 +203,35 @@ func (p *Provider) Handler(operation string, next http.Handler, opts ...HandlerO
 	}
 	otelOpts = append(otelOpts, otelhttp.WithPublicEndpointFn(public))
 	return otelhttp.NewHandler(inner, operation, otelOpts...)
+}
+
+// Routes wraps a mux so its matched pattern reaches Handler's metrics as
+// http.route. Handler does this itself when it wraps the mux directly. When
+// middleware between them replaces the request (r.WithContext), the mux sets
+// Pattern on a copy Handler never sees, so wrap the mux with Routes:
+//
+//	tel.Handler("api", middleware(telemetry.Routes(mux)))
+//
+// Outside a Handler it only calls next.
+func Routes(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		labelRoute(r)
+	})
+}
+
+// labelRoute adds http.route from r.Pattern to the metrics of the request's
+// Handler. otelhttp does not set it on metrics; it records after the wrapped
+// handler returns, and the labeler travels in the context, so adding it once
+// the mux has set Pattern is in time.
+func labelRoute(r *http.Request) {
+	route := routeFromPattern(r.Pattern)
+	if route == "" {
+		return
+	}
+	if labeler, ok := otelhttp.LabelerFromContext(r.Context()); ok {
+		labeler.Add(semconv.HTTPRoute(route))
+	}
 }
 
 // Transport wraps base so outgoing calls get a client span and HTTP client

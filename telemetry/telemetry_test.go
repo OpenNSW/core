@@ -239,6 +239,76 @@ func TestHandlerRecordsRoutePattern(t *testing.T) {
 	}
 }
 
+func TestRoutesLabelsThroughReplacedRequest(t *testing.T) {
+	type ctxKey struct{}
+	// replaceRequest stands in for middleware that derives a new request, as
+	// authentication or request logging middleware do.
+	replaceRequest := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, true)))
+		})
+	}
+	newMux := func() *http.ServeMux {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /api/v1/tasks/{id}", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		return mux
+	}
+
+	tests := []struct {
+		name      string
+		wrap      func(*http.ServeMux) http.Handler
+		wantRoute string
+	}{
+		{
+			name:      "without Routes the pattern is lost",
+			wrap:      func(mux *http.ServeMux) http.Handler { return replaceRequest(mux) },
+			wantRoute: "",
+		},
+		{
+			name:      "Routes inside the middleware",
+			wrap:      func(mux *http.ServeMux) http.Handler { return replaceRequest(Routes(mux)) },
+			wantRoute: "/api/v1/tasks/{id}",
+		},
+		{
+			name:      "Routes directly under Handler",
+			wrap:      func(mux *http.ServeMux) http.Handler { return Routes(mux) },
+			wantRoute: "/api/v1/tasks/{id}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, reader, _ := testProvider(t)
+			h := p.Handler("api", tt.wrap(newMux()))
+			for _, id := range []string{"a", "b"} {
+				h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil))
+			}
+
+			points := durationDataPoints(t, reader)
+			if len(points) != 1 {
+				t.Fatalf("got %d series, want 1", len(points))
+			}
+			got, _ := points[0].Attributes.Value(semconv.HTTPRouteKey)
+			if got.AsString() != tt.wantRoute {
+				t.Fatalf("http.route = %q, want %q", got.AsString(), tt.wantRoute)
+			}
+		})
+	}
+}
+
+func TestRoutesOutsideHandler(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	rec := httptest.NewRecorder()
+	Routes(mux).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
 func TestHandlerDropsServerAddressFromHost(t *testing.T) {
 	p, reader, _ := testProvider(t)
 	mux := http.NewServeMux()

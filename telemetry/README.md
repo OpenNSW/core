@@ -170,6 +170,24 @@ Keep in mind:
 - **Only `traceparent` is read.** `X-Trace-ID` is a response header; a request's
   `X-Trace-ID` is ignored.
 
+### Middleware and `http.route`
+
+Make `Handler` the outermost layer, so other middleware runs inside the span
+and its logs carry the trace ID. If any of that middleware replaces the request
+(`r = r.WithContext(...)`, common in authentication and request logging), the
+mux sets the matched pattern on a copy `Handler` never sees, and metrics lose
+`http.route`. Wrap the mux with `Routes` to keep it:
+
+```go
+handler := tel.Handler("my-service",
+    requestLog(cors(telemetry.Routes(mux))),
+)
+```
+
+`Routes` is only needed when middleware sits between `Handler` and the mux;
+`Handler(…, mux)` tags the route itself. Outside a `Handler`, `Routes` just
+calls the mux.
+
 ### Log export
 
 When logs are exported, `SlogHandler` returns an `slog.Handler` that sends records
@@ -180,7 +198,8 @@ records already carry the span context.
 ## Behavior
 
 - **HTTP metrics.** `http.route` is taken from the `ServeMux` pattern (method
-  and host stripped), since otelhttp doesn't set it on metrics.
+  and host stripped), since otelhttp doesn't set it on metrics. Routers that
+  don't set `r.Pattern` get no route label.
   `server.address` and `server.port` are dropped from `http.server.*` metrics
   because otelhttp reads them from the client-controlled `Host` header.
 - **Globals.** `Start` registers the tracer provider and the W3C trace context
