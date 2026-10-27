@@ -566,6 +566,21 @@ func TestCheckUploadTypeExtensions(t *testing.T) {
 	}
 }
 
+// With several mistakes, the first type in sorted order is reported, every time.
+func TestCheckUploadTypeExtensions_ReportsTheSameMistake(t *testing.T) {
+	byType := map[string][]string{
+		"image/png":       {"png"},
+		"application/pdf": {},
+		"text/plain":      {".TXT"},
+	}
+	for range 20 {
+		err := CheckUploadTypeExtensions(byType)
+		if err == nil || !strings.Contains(err.Error(), `"application/pdf" lists no extensions`) {
+			t.Fatalf("CheckUploadTypeExtensions() = %v, want the mistake in application/pdf", err)
+		}
+	}
+}
+
 func TestExtensionMismatchError_Message(t *testing.T) {
 	err := &ExtensionMismatchError{Extension: ".exe", MediaType: "application/pdf"}
 	if got, want := err.Error(), `storage: file name extension ".exe" does not match type "application/pdf"`; got != want {

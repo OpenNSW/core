@@ -5,6 +5,7 @@ package storage
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -19,9 +20,11 @@ var extensionRx = regexp.MustCompile(`^\.[a-z0-9]+$`)
 // ValidMediaType accepts and lists at least one extension, each a dot followed
 // by lower-case letters or digits, such as ".pdf". WithUploadTypeExtensions
 // makes the same check; a host calls this first to report a bad configuration
-// without a panic.
+// without a panic. The types are checked in sorted order, so a map with several
+// mistakes reports the same one every time.
 func CheckUploadTypeExtensions(byType map[string][]string) error {
-	for t, exts := range byType {
+	for _, t := range slices.Sorted(maps.Keys(byType)) {
+		exts := byType[t]
 		if err := ValidMediaType(t); err != nil {
 			return err
 		}
