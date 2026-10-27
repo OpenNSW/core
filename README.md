@@ -132,7 +132,7 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     taskStore := gormstore.New(db)
     pluginRegistry := plugins.NewRegistry()
     pluginRegistry.Register("USER_INPUT",      plugins.NewUserInputPlugin())
-    pluginRegistry.Register("PAYMENT",         NewPaymentPlugin(paymentService))
+    pluginRegistry.Register("PAYMENT",         plugins.NewPaymentPlugin(paymentService))
     pluginRegistry.Register("EXTERNAL_REVIEW", NewExternalReviewPlugin(remoteManager))
     pluginRegistry.Register("MY_PLUGIN",       &MyPlugin{})
 
