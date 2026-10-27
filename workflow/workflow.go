@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/OpenNSW/core/shared/maputil"
@@ -131,7 +132,9 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 
 	interp.startAdminResolutionDispatcher(ctx)
 
-	ao := workflow.ActivityOptions{StartToCloseTimeout: 24 * time.Hour * 365}
+	// The END node's WorkflowCompletedActivity runs with these options. Every other Activity sets its
+	// own (handleTaskNode's ExecuteTaskActivity among them).
+	ao := workflow.ActivityOptions{StartToCloseTimeout: completionActivityTimeout, RetryPolicy: taskRetryPolicy}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
 	// Begin Execution
@@ -460,6 +463,32 @@ func (g *graphInterpreter) caseID() string {
 	return g.instance.ID
 }
 
+// taskActivityTimeout bounds one attempt of a task's Activity. It is long because a step that waits
+// for a person (ErrResultPending) holds its Activity open until CompleteActivation, and that wait
+// counts against this timeout.
+const taskActivityTimeout = 24 * time.Hour * 365
+
+// completionActivityTimeout bounds one attempt of WorkflowCompletedActivity. The completion hook does
+// its work and returns without waiting for anyone, so a few minutes is ample, and a worker that dies
+// during an attempt is noticed when it runs out.
+const completionActivityTimeout = 5 * time.Minute
+
+// taskRetryPolicy bounds the retries of a task's Activity, of WorkflowCompletedActivity and of a
+// split's FetchWorkflowDefinitionActivity, so an error that never clears ends in a park for an admin
+// instead of retrying forever. An attempt that
+// times out is retried like one that failed. Retries back off from 1s, doubling to a cap of 1h,
+// and stop after taskMaxAttempts: about 24h of retrying in all. A non-retryable error parks at once.
+var taskRetryPolicy = &temporal.RetryPolicy{
+	InitialInterval:    time.Second,
+	BackoffCoefficient: 2,
+	MaximumInterval:    time.Hour,
+	MaximumAttempts:    taskMaxAttempts,
+}
+
+// taskMaxAttempts is how many times a task's Activity runs before it parks: 13 attempts doubling from
+// 1s to the 1h cap (about 68 minutes), then 23 more an hour apart.
+const taskMaxAttempts = 36
+
 func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	inputs, err := g.mapTaskInputs(node.InputMapping)
 	if err != nil {
@@ -473,7 +502,8 @@ func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeIn
 	// completion from an earlier run of this node no longer matches.
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		ActivityID:          nodeInfo.ActivationID,
-		StartToCloseTimeout: 24 * time.Hour * 365,
+		StartToCloseTimeout: taskActivityTimeout,
+		RetryPolicy:         taskRetryPolicy,
 	})
 
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
