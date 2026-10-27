@@ -31,15 +31,15 @@ func setupTestDB(t *testing.T) (*gorm.DB, sqlmock.Sqlmock) {
 
 func TestRepository_Create(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
-	tx := &PaymentTransaction{
+	tx := &Transaction{
 		ID:              "uuid-1",
 		ReferenceNumber: "TNSW1",
 		GatewayID:       "govpay",
 		Amount:          decimal.NewFromInt(1500),
 		Currency:        "LKR",
-		Status:          PaymentStatusPending,
+		Status:          StatusPending,
 		ExpiryDate:      time.Now().Add(time.Hour),
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
@@ -90,7 +90,7 @@ func TestRepository_Create_DuplicateReference(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, mock := setupTestDB(t)
-			repo := NewPaymentRepository(db)
+			repo := NewRepository(db)
 
 			mock.ExpectBegin()
 			mock.ExpectExec(`INSERT INTO "payment_transactions"`).WillReturnError(tc.dbErr)
@@ -99,7 +99,7 @@ func TestRepository_Create_DuplicateReference(t *testing.T) {
 				tc.lookup(mock)
 			}
 
-			err := repo.Create(context.Background(), &PaymentTransaction{ID: "uuid-1", ReferenceNumber: "REF-1"})
+			err := repo.Create(context.Background(), &Transaction{ID: "uuid-1", ReferenceNumber: "REF-1"})
 			require.Error(t, err)
 			assert.Equal(t, tc.duplicate, errors.Is(err, ErrDuplicateReference), "err = %v", err)
 			if !tc.duplicate {
@@ -112,11 +112,11 @@ func TestRepository_Create_DuplicateReference(t *testing.T) {
 
 func TestRepository_GetByReferenceNumber(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	t.Run("found", func(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"id", "reference_number", "status"}).
-			AddRow("uuid-1", "TNSW1", PaymentStatusPending)
+			AddRow("uuid-1", "TNSW1", StatusPending)
 		mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE reference_number = \$1`).
 			WillReturnRows(rows)
 
@@ -148,11 +148,11 @@ func TestRepository_GetByReferenceNumber(t *testing.T) {
 
 func TestRepository_GetByReferenceNumberForUpdate(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	t.Run("emits FOR UPDATE lock", func(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"id", "reference_number", "status"}).
-			AddRow("uuid-1", "TNSW1", PaymentStatusPending)
+			AddRow("uuid-1", "TNSW1", StatusPending)
 		// The query must carry the row-level write lock so concurrent webhooks serialize.
 		mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE reference_number = \$1.*FOR UPDATE`).
 			WillReturnRows(rows)
@@ -177,16 +177,16 @@ func TestRepository_GetByReferenceNumberForUpdate(t *testing.T) {
 
 func TestRepository_Update(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE "payment_transactions" SET`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	err := repo.Update(context.Background(), &PaymentTransaction{
+	err := repo.Update(context.Background(), &Transaction{
 		ID:              "uuid-1",
 		ReferenceNumber: "TNSW1",
-		Status:          PaymentStatusSuccess,
+		Status:          StatusSuccess,
 	})
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -194,29 +194,29 @@ func TestRepository_Update(t *testing.T) {
 
 func TestRepository_UpdateStatus(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE "payment_transactions" SET "status"=\$1,"updated_at"=\$2 WHERE reference_number = \$3`).
-		WithArgs(PaymentStatusSuccess, sqlmock.AnyArg(), "TNSW1").
+		WithArgs(StatusSuccess, sqlmock.AnyArg(), "TNSW1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, repo.UpdateStatus(context.Background(), "TNSW1", PaymentStatusSuccess))
+	require.NoError(t, repo.UpdateStatus(context.Background(), "TNSW1", StatusSuccess))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestRepository_RunInTransaction_Commit(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	// The fn runs an Update through the tx-bound repo; expect it between BEGIN/COMMIT.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE "payment_transactions" SET`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	err := repo.RunInTransaction(context.Background(), func(r PaymentRepository) error {
-		return r.Update(context.Background(), &PaymentTransaction{ID: "uuid-1", ReferenceNumber: "TNSW1", Status: PaymentStatusSuccess})
+	err := repo.RunInTransaction(context.Background(), func(r Repository) error {
+		return r.Update(context.Background(), &Transaction{ID: "uuid-1", ReferenceNumber: "TNSW1", Status: StatusSuccess})
 	})
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -224,13 +224,13 @@ func TestRepository_RunInTransaction_Commit(t *testing.T) {
 
 func TestRepository_RunInTransaction_Rollback(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
 	wantErr := errors.New("boom")
-	err := repo.RunInTransaction(context.Background(), func(r PaymentRepository) error {
+	err := repo.RunInTransaction(context.Background(), func(r Repository) error {
 		return wantErr
 	})
 	require.ErrorIs(t, err, wantErr)
@@ -239,13 +239,13 @@ func TestRepository_RunInTransaction_Rollback(t *testing.T) {
 
 func TestRepository_WithTx(t *testing.T) {
 	db, _ := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 	assert.NotNil(t, repo.WithTx(db))
 }
 
 func TestRepository_GetByReferenceNumberForUpdate_DBError(t *testing.T) {
 	db, mock := setupTestDB(t)
-	repo := NewPaymentRepository(db)
+	repo := NewRepository(db)
 
 	mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE reference_number = \$1.*FOR UPDATE`).
 		WillReturnError(errors.New("connection reset"))

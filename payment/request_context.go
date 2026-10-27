@@ -18,7 +18,7 @@ const requestContextKey contextKey = "payment_inbound_request"
 
 // ContextWithRequest returns a new context with the given inbound HTTP
 // request attached. HTTPHandler calls this — for every request, on both
-// HandleValidateReference and HandleWebhook — before invoking PaymentService,
+// HandleValidateReference and HandleWebhook — before invoking Service,
 // so that by the time a gateway's VerifyWebhook runs, anything about the
 // request beyond the explicit body and headers parameters (method, URL,
 // query parameters, TLS connection state, remote address, cookies, trailers,
@@ -43,13 +43,13 @@ func ContextWithRequest(ctx context.Context, r *http.Request) context.Context {
 
 // RequestFromContext extracts the inbound *http.Request previously attached
 // via ContextWithRequest, or nil if none was ever attached — e.g. when
-// PaymentService is invoked directly, bypassing HTTPHandler (as most unit
+// Service is invoked directly, bypassing HTTPHandler (as most unit
 // tests do). Callers (typically a gateway's VerifyWebhook) must treat a nil
 // return as "not available" and fall back to whatever the explicit
 // body/headers parameters allow, rather than treating nil as a zero-value
 // request. The returned *http.Request must not be mutated: HTTPHandler is
 // still using the underlying request to serve the response after
-// PaymentService returns, and other callers may hold their own copy.
+// Service returns, and other callers may hold their own copy.
 //
 // The returned request is rewrapped via r.WithContext(ctx) using the exact
 // ctx this function is called with, so its own .Context() is that same ctx
