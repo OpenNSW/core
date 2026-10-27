@@ -306,6 +306,30 @@ func TestHoldTask(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepB, 5, "PENDING_USER")
 }
 
+// A step that parks after its submission (say a required output is missing) parks at its own seq,
+// while PersistSubmission has already moved the row to ADVANCING at seq+1.
+func TestHoldTask_StepParkedAfterItsSubmission(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+	_, _ = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", nil)
+	_, _ = s.PersistSubmission(ctx, task1, stepA, 4, map[string]any{"a": 1.0})
+
+	n, err := s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 1)
+	// seq stays 5, so a repeated submission of step A is still stale.
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateOnHold)
+	n, err = s.PersistSubmission(ctx, task1, stepA, 4, map[string]any{"a": 2.0})
+	wantRows(t, n, err, 0)
+
+	// The next step claims seq 5 and submits: the row is ADVANCING at 6, and a late park
+	// notification for seq 4 is dropped.
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	_, _ = s.PersistSubmission(ctx, task1, stepB, 5, nil)
+	n, err = s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateAdvancing)
+}
+
 func TestHoldTask_TerminalTasksAreNotHeld(t *testing.T) {
 	for _, state := range []string{store.StateCompleted, store.StateCancelled} {
 		t.Run(state, func(t *testing.T) {

@@ -165,9 +165,10 @@ type TaskStore interface {
 	// cancelled task matches again.
 	CancelTask(context context.Context, taskID string) (int64, error)
 	// HoldTask sets StateOnHold and seq when a node in the task's workflow parks at seq. Guard: the
-	// stored seq is <= seq and the state is neither StateCompleted nor StateCancelled, so a late
-	// park notification cannot overwrite a step that claimed the row after the park was resolved,
-	// or a task that has ended.
+	// stored seq is <= seq, or the row is StateAdvancing at seq+1 (the step parked after its
+	// submission, which keeps seq+1), and the state is neither StateCompleted nor StateCancelled,
+	// so a late park notification cannot overwrite a step that claimed the row after the park was
+	// resolved, or a task that has ended.
 	HoldTask(context context.Context, taskID string, seq int64) (int64, error)
 
 	// ClaimTask sets the claim to holder. Guard: the task is unclaimed or already claimed by

@@ -237,10 +237,11 @@ func (s *safeMockTaskStore) HoldTask(_ context.Context, taskID string, seq int64
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tasks[taskID]
-	if !ok || t.Seq > seq || t.State == store.StateCompleted || t.State == store.StateCancelled {
+	advanced := t.State == store.StateAdvancing && t.Seq == seq+1
+	if !ok || (t.Seq > seq && !advanced) || t.State == store.StateCompleted || t.State == store.StateCancelled {
 		return 0, nil
 	}
-	t.State, t.Seq = store.StateOnHold, seq
+	t.State, t.Seq = store.StateOnHold, max(t.Seq, seq)
 	s.tasks[taskID] = t
 	return 1, nil
 }

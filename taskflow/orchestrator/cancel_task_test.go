@@ -182,3 +182,22 @@ func TestHoldTask_MarksTaskOnHoldAndDropsLateNotifications(t *testing.T) {
 		t.Fatalf("HoldTask unknown workflow: %v", err)
 	}
 }
+
+func TestHoldTask_HoldsAStepThatParkedAfterItsSubmission(t *testing.T) {
+	tm, db, _ := cancelFixture(t, nil)
+	ctx := context.Background()
+
+	// The step's submission moved the row to ADVANCING at seq 4; the step then parks at seq 3.
+	_, _ = db.PersistSubmission(ctx, cancelTaskID, cancelStepID, 3, map[string]any{"a": 1})
+	if got, _ := db.GetTask(ctx, cancelTaskID); got.State != store.StateAdvancing || got.Seq != 4 {
+		t.Fatalf("fixture row = (%s, %d), want (%s, 4)", got.State, got.Seq, store.StateAdvancing)
+	}
+
+	if err := tm.HoldTask(ctx, engine.AdminParkPayload{WorkflowID: cancelWorkflowID, NodeID: "step-1", Seq: 3}); err != nil {
+		t.Fatalf("HoldTask: %v", err)
+	}
+	got, _ := db.GetTask(ctx, cancelTaskID)
+	if got.State != store.StateOnHold || got.Seq != 4 {
+		t.Fatalf("row = (%s, %d), want (%s, 4)", got.State, got.Seq, store.StateOnHold)
+	}
+}

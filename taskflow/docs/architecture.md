@@ -148,7 +148,7 @@ type TaskRecord struct {
 | `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING`, `COMPLETED`, `CANCELLED` or `ON_HOLD`) | data only |
 | `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m` and not `CANCELLED`   | `COMPLETED`, `seq = m`                             |
 | `CancelTask`         | `CancelTask`          | state is not `COMPLETED`                | `CANCELLED`, `seq = seq+1`                         |
-| `HoldTask`           | `HoldTask`            | stored `seq <= n` and not `COMPLETED` or `CANCELLED` | `ON_HOLD`, `seq = n`                  |
+| `HoldTask`           | `HoldTask`            | stored `seq <= n`, or `ADVANCING` at `seq = n+1` (the step parked after its submission), and not `COMPLETED` or `CANCELLED` | `ON_HOLD`, `seq = max(stored, n)` |
 
 `InitTask` still exists for creating the row and for coarse fields, but it never writes `ActiveStepID` or `Seq`, so a stale full-record save cannot move them.
 

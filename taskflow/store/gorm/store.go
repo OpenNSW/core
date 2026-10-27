@@ -174,11 +174,13 @@ func (s *TaskStore) CancelTask(ctx context.Context, taskID string) (int64, error
 func (s *TaskStore) HoldTask(ctx context.Context, taskID string, seq int64) (int64, error) {
 	// No active_step_id check: a gateway parking inside a task workflow has no step row of its own.
 	// seq <= ? drops a late park notification after a resolved step moved on to a higher seq, and
-	// state NOT IN keeps it from overwriting a completed or cancelled task.
-	return s.stepUpdate(ctx, taskID, "seq <= ? AND state NOT IN ?",
-		[]any{seq, []string{store.StateCompleted, store.StateCancelled}}, map[string]any{
+	// state NOT IN keeps it from overwriting a completed or cancelled task. A step that parks after
+	// its submission finds the row ADVANCING at seq+1 (PersistSubmission advanced it), so that row
+	// is held too, and keeps seq+1 so a repeated submission of the step stays stale.
+	return s.stepUpdate(ctx, taskID, "(seq <= ? OR (state = ? AND seq = ?)) AND state NOT IN ?",
+		[]any{seq, store.StateAdvancing, seq + 1, []string{store.StateCompleted, store.StateCancelled}}, map[string]any{
 			"state": store.StateOnHold,
-			"seq":   seq,
+			"seq":   gorm.Expr("CASE WHEN seq > ? THEN seq ELSE ? END", seq, seq),
 		})
 }
 
