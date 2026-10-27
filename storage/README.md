@@ -101,21 +101,28 @@ err := svc.Delete(ctx, fileKey)
 
 ### Upload limits
 
-By default, `Upload` accepts any MIME type and caps files at 32MB. Pass options to `NewService` to restrict the types or change the cap:
+By default, `Upload` accepts any MIME type and any file name, and caps files at 32MB. Pass options to `NewService` to restrict the types, match file names to them, or change the cap:
 
 ```go
 svc := storage.NewService(driver,
     storage.WithAllowedUploadTypes("application/pdf", "image/png"), // others: ErrContentTypeNotAllowed
     storage.WithMaxUploadSize(10<<20),                              // bytes; default 32MB
+    storage.WithUploadTypeExtensions(map[string][]string{           // others: *ExtensionMismatchError
+        "application/pdf": {".pdf"},
+        "image/png":       {".png"},
+    }),
 )
 ```
 
-| Option                             | Default           | Effect                                                                                                        |
-|------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|
-| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload |
-| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                        |
+| Option                             | Default           | Effect                                                                                                                                                                                              |
+|------------------------------------|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload                                                                                       |
+| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                                                                                                              |
+| `WithUploadTypeExtensions(byType)` | any name accepted | `Upload` returns `*ExtensionMismatchError` for a name whose extension isn't listed for its type, and gives a name without one the type's first. Panics on a map `CheckUploadTypeExtensions` refuses |
 
 `Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400. The limits apply to `Upload` only, not to `Save`.
+
+The key keeps the file name's extension, and a download is named by it, so a name and a type that disagree, such as `setup.exe` sent as `application/pdf`, would be saved by whoever downloads it as a program. `WithUploadTypeExtensions` takes, per media type, the extensions a name may end in, in order of preference: the first is the one a name without an extension gets, and returned as `Name`. Types are compared without parameters or case, extensions without case. A type with no entry isn't checked, and core lists none itself: which types and extensions a service accepts is the host's policy. A host that wants every uploadable type covered checks its own lists, and reports a malformed map without a panic with `CheckUploadTypeExtensions(byType)`.
 
 ## Implementing a custom driver
 

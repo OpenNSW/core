@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -444,6 +445,131 @@ func TestUploadService_Policy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// testExtensions lists more than one extension for a type, so the order and the
+// first entry matter.
+var testExtensions = map[string][]string{
+	"application/pdf": {".pdf"},
+	"image/jpeg":      {".jpg", ".jpeg"},
+	"text/html":       {".html", ".htm"},
+}
+
+func TestUploadService_TypeExtensions(t *testing.T) {
+	withExtensions := []ServiceOption{WithUploadTypeExtensions(testExtensions)}
+
+	accepted := []struct {
+		name, filename, mimeType, want string
+		opts                           []ServiceOption
+	}{
+		{name: "the type's extension", filename: "report.pdf", mimeType: "application/pdf", want: "report.pdf"},
+		{name: "a later extension of several", filename: "photo.jpeg", mimeType: "image/jpeg", want: "photo.jpeg"},
+		{name: "the extension in capitals", filename: "PHOTO.JPG", mimeType: "image/jpeg", want: "PHOTO.JPG"},
+		{name: "the type in capitals, with parameters", filename: "page.htm", mimeType: "Text/HTML; charset=utf-8", want: "page.htm"},
+		{name: "no extension: the type's first", filename: "photo", mimeType: "image/jpeg", want: "photo.jpg"},
+		{name: "a type with no entry is not checked", filename: "data.bin", mimeType: "application/zip", want: "data.bin"},
+		{name: "no map: nothing is checked", filename: "setup.exe", mimeType: "application/pdf", want: "setup.exe", opts: []ServiceOption{}},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := withExtensions
+			if tt.opts != nil {
+				opts = tt.opts
+			}
+			meta, err := NewService(&MockDriver{}, opts...).Upload(context.Background(), tt.filename, 1024, tt.mimeType)
+			if err != nil {
+				t.Fatalf("Upload: %v", err)
+			}
+			if meta.Name != tt.want || filepath.Ext(meta.Key) != filepath.Ext(tt.want) {
+				t.Errorf("name %q, key %q, want both to end like %q", meta.Name, meta.Key, tt.want)
+			}
+		})
+	}
+
+	refused := []struct {
+		name, filename, mimeType, wantExt, wantType string
+		opts                                        []ServiceOption
+	}{
+		{name: "a program sent as a PDF", filename: "setup.exe", mimeType: "application/pdf", wantExt: ".exe", wantType: "application/pdf"},
+		{name: "another type's extension", filename: "report.pdf", mimeType: "image/jpeg", wantExt: ".pdf", wantType: "image/jpeg"},
+		{name: "a name ending in a dot", filename: "report.", mimeType: "application/pdf", wantExt: ".", wantType: "application/pdf"},
+		{name: "the type with parameters", filename: "page.pdf", mimeType: "text/html; charset=utf-8", wantExt: ".pdf", wantType: "text/html"},
+		{name: "the type with a malformed parameter", filename: "setup.exe", mimeType: "application/pdf;x", wantExt: ".exe", wantType: "application/pdf"},
+		{name: "with an allowlist that admits the type", filename: "setup.exe", mimeType: "application/pdf", wantExt: ".exe", wantType: "application/pdf",
+			opts: []ServiceOption{WithAllowedUploadTypes("application/pdf"), WithUploadTypeExtensions(testExtensions)}},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := withExtensions
+			if tt.opts != nil {
+				opts = tt.opts
+			}
+			_, err := NewService(&MockDriver{}, opts...).Upload(context.Background(), tt.filename, 1024, tt.mimeType)
+			var mismatch *ExtensionMismatchError
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("expected *ExtensionMismatchError, got %v", err)
+			}
+			if mismatch.Extension != tt.wantExt || mismatch.MediaType != tt.wantType {
+				t.Errorf("mismatch %+v, want extension %q and type %q", *mismatch, tt.wantExt, tt.wantType)
+			}
+		})
+	}
+
+	t.Run("the type is checked before the name", func(t *testing.T) {
+		svc := NewService(&MockDriver{}, WithAllowedUploadTypes("application/pdf"), WithUploadTypeExtensions(testExtensions))
+		if _, err := svc.Upload(context.Background(), "page.pdf", 1024, "text/html"); !errors.Is(err, ErrContentTypeNotAllowed) {
+			t.Fatalf("expected ErrContentTypeNotAllowed, got %v", err)
+		}
+	})
+
+	t.Run("Save keeps the name as given", func(t *testing.T) {
+		svc := NewService(&MockDriver{}, withExtensions...)
+		meta, err := svc.Save(context.Background(), "setup.exe", "application/pdf", strings.NewReader("x"), 1)
+		if err != nil || meta.Name != "setup.exe" {
+			t.Fatalf("Save: %+v, %v", meta, err)
+		}
+	})
+}
+
+func TestCheckUploadTypeExtensions(t *testing.T) {
+	tests := []struct {
+		name    string
+		byType  map[string][]string
+		wantErr bool
+	}{
+		{name: "none", byType: nil},
+		{name: "several types and extensions", byType: testExtensions},
+		{name: "a type with parameters", byType: map[string][]string{"text/html; charset=utf-8": {".html"}}, wantErr: true},
+		{name: "a type in capitals", byType: map[string][]string{"Application/PDF": {".pdf"}}, wantErr: true},
+		{name: "a wildcard", byType: map[string][]string{"image/*": {".png"}}, wantErr: true},
+		{name: "no extensions", byType: map[string][]string{"application/pdf": {}}, wantErr: true},
+		{name: "an extension without its dot", byType: map[string][]string{"application/pdf": {"pdf"}}, wantErr: true},
+		{name: "an extension in capitals", byType: map[string][]string{"application/pdf": {".PDF"}}, wantErr: true},
+		{name: "an extension a key can't end in", byType: map[string][]string{"application/gzip": {".tar.gz"}}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckUploadTypeExtensions(tt.byType)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("CheckUploadTypeExtensions() = %v, want error %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				defer func() {
+					if recover() == nil {
+						t.Error("WithUploadTypeExtensions did not panic")
+					}
+				}()
+				WithUploadTypeExtensions(tt.byType)
+			}
+		})
+	}
+}
+
+func TestExtensionMismatchError_Message(t *testing.T) {
+	err := &ExtensionMismatchError{Extension: ".exe", MediaType: "application/pdf"}
+	if got, want := err.Error(), `storage: file name extension ".exe" does not match type "application/pdf"`; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
 
