@@ -120,7 +120,7 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
 
     // 3. Payment
     paymentRepo := NewPaymentRepo(db)
-    paymentRegistry, _ := payment.NewRegistry("configs/payment_methods.json", map[string]payment.Factory{
+    paymentRegistry, _ := payment.NewRegistry(cfg.Payment, map[string]payment.Factory{
         "govpay": govpay.NewGovPayGateway,
     })
     paymentService := payment.NewPaymentService(paymentRepo, paymentRegistry)

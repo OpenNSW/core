@@ -121,16 +121,16 @@ func TestHandleValidateReference_VerificationFailureIs401(t *testing.T) {
 // newRealServiceForGateway wires a real PaymentService (not the shallow
 // mockService above) around a single registered gateway, for tests that
 // need to prove behavior all the way through PaymentService into a
-// PaymentGateway — e.g. that HTTPHandler's context enrichment actually
+// Gateway — e.g. that HTTPHandler's context enrichment actually
 // reaches VerifyWebhook. repo is nil: safe here only because these tests
 // drive gateway.VerifyWebhook to fail before any repository call happens.
-func newRealServiceForGateway(t *testing.T, gatewayID string, gw PaymentGateway) PaymentService {
+func newRealServiceForGateway(t *testing.T, gatewayID string, gw Gateway) PaymentService {
 	t.Helper()
-	path := writeTempConfig(t, fmt.Sprintf(`{"version":"1.0","methods":[{"id":%q,"is_active":true}]}`, gatewayID))
+	cfg := Config{Methods: []MethodConfig{{GatewayInfo: GatewayInfo{ID: gatewayID, IsActive: true}}}}
 	factories := map[string]Factory{
-		gatewayID: func(json.RawMessage) (PaymentGateway, error) { return gw, nil },
+		gatewayID: func(func(any) error) (Gateway, error) { return gw, nil },
 	}
-	registry, err := NewRegistry(path, factories)
+	registry, err := NewRegistry(cfg, factories)
 	require.NoError(t, err)
 	return NewPaymentService(nil, registry, &fakeReferences{})
 }

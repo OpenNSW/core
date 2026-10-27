@@ -7,7 +7,7 @@ The `payment` package provides a modular and extensible payment orchestration sy
 The system consists of several key components:
 
 1.  **PaymentGateway**: An interface for gateway-specific integrations (e.g., LankaPay, GovPay). It handles session creation, webhook parsing, and real-time validation formatting.
-2.  **GatewayRegistry**: A pure discovery and lookup service. It manages gateway registration, configuration injection, and provides sanitized metadata for the UI.
+2.  **GatewayRegistry**: A pure discovery and lookup service. It is built from a `payment.Config` value (it reads no files), manages gateway registration and configuration injection, and provides sanitized metadata for the UI.
 3.  **PaymentRepository**: Handles persistence for `PaymentTransaction` records using GORM.
 4.  **PaymentService**: The high-level orchestrator. It uses the Registry to find the correct Gateway and coordinates between the gateway logic, database, and internal events.
 5.  **HTTPHandler**: Exposes the payment service via RESTful endpoints for both public and internal use.
@@ -27,13 +27,23 @@ import "github.com/OpenNSW/core/payment"
 Each payment gateway requires a dedicated implementation of the `PaymentGateway` interface.
 
 ```go
-type MyGateway struct {}
+type MyGateway struct{ cfg Config }
+
+// Config is this gateway's own config: the method's "config" block.
+type Config struct {
+    BaseURL      string `yaml:"base_url"`
+    ClientSecret string `yaml:"client_secret"`
+}
 
 // NewMyGateway is this gateway's Factory, called once by the registry at
-// init time with its raw config from payment_methods.json.
-func NewMyGateway(config json.RawMessage) (payment.PaymentGateway, error) {
-    // Unmarshal gateway-specific settings from JSON.
-    return &MyGateway{}, nil
+// init time. decode decodes the method's "config" block into this gateway's
+// own config type.
+func NewMyGateway(decode func(v any) error) (payment.PaymentGateway, error) {
+    var cfg Config
+    if err := decode(&cfg); err != nil {
+        return nil, err
+    }
+    return &MyGateway{cfg: cfg}, nil
 }
 
 func (g *MyGateway) GetFlowType() payment.InteractionType {
@@ -107,35 +117,35 @@ func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[s
 
 ### 2. Configure Payment Methods
 
-The `payment_methods.json` file is the source of truth for available methods.
+A `payment.Config` lists the available methods. It is plain data with `yaml` struct tags: the package reads no files, so the host loads it as part of its own config, typically with [`configyaml`](../configyaml), which also resolves `{{env:NAME}}` / `{{file:/path}}` placeholders so secrets stay out of the file.
 
-```json
-{
-  "version": "1.0",
-  "methods": [
-    {
-      "id": "lankapay",
-      "is_active": true,
-      "render_info": {
-        "display_name": "Credit/Debit Card (LankaPay)",
-        "description": "Pay securely using your card.",
-        "display_order": 1
-      },
-      "config": {
-        "base_url": "https://sandbox.govpay.lk"
-      },
-      "payees": {
-        "org_a": {
-          "defaults": { "merchant_id": "M-100" },
-          "services": {
-            "certificate_fee": {},
-            "lab_fee": { "merchant_id": "M-200" }
-          }
-        }
-      }
-    }
-  ]
-}
+```yaml
+payment:
+  methods:
+    - id: lankapay
+      is_active: true
+      render_info:
+        display_name: Credit/Debit Card (LankaPay)
+        description: Pay securely using your card.
+        display_order: 1
+      config:
+        base_url: https://sandbox.govpay.lk
+        client_secret: "{{env:LANKAPAY_CLIENT_SECRET}}"
+      payees:
+        org_a:
+          defaults: { merchant_id: M-100 }
+          services:
+            certificate_fee: {}
+            lab_fee: { merchant_id: M-200 }
+```
+
+Each method's `config` block is handed to its gateway's `Factory` undecoded, for the gateway to decode into its own config type. Because it lands in a typed struct, a placeholder resolves to the field's type: `"{{env:MERCHANT_ID}}"` set to `00123` stays the string `"00123"` in a `string` field.
+
+JSON is valid YAML, so a JSON file with the same shape loads the same way:
+
+```go
+var cfg payment.Config
+err := configyaml.LoadAndExpand("configs/payment_methods.json", &cfg)
 ```
 
 #### Payees
@@ -144,13 +154,14 @@ A checkout names its **payee** in the host's own terms: an `org_id` and a `servi
 
 - `payees.<org_id>.services.<service_id>` lists a payee. Only listed services are mapped: an org's `defaults` alone map nothing.
 - A payee's mapping is its service entry merged over its org's `defaults`, keys in the service entry winning. Above, `org_a/certificate_fee` maps to `{"merchant_id":"M-100"}` and `org_a/lab_fee` to `{"merchant_id":"M-200"}`.
-- Both are JSON objects whose keys the method's gateway defines, as deep as its account structure needs. Core never reads them; the gateway checks each one in `ValidatePayeeMapping` at startup.
+- Both are objects whose keys the method's gateway defines, as deep as its account structure needs. Core never reads them; it hands the gateway each merged mapping as a JSON object, which the gateway checks in `ValidatePayeeMapping` at startup.
+- Payee ids are decoded without a target type, so YAML infers each value's type. Quote an id that looks like a number (`merchant_id: "00123"`), and don't use placeholders in payee entries: a resolved value's type is inferred too.
 
 A checkout with a method that does not map its payee fails with `ErrPayeeNotMapped` before a reference is issued or anything is persisted, and `ListInfo` / `ListAvailableMethods` only return the methods that map the payee they are asked about.
 
 ### 3. Instantiate the Registry
 
-The `GatewayRegistry` loads the configuration and maps each method ID to its implementation.
+The `GatewayRegistry` takes the loaded configuration and maps each method ID to its implementation.
 
 ```go
 factories := map[string]payment.Factory{
@@ -158,7 +169,16 @@ factories := map[string]payment.Factory{
     "govpay":   govpay.NewGateway,
 }
 
-registry, err := payment.NewRegistry("configs/payment_methods.json", factories)
+type AppConfig struct {
+    Payment payment.Config `yaml:"payment"`
+}
+
+var appCfg AppConfig
+if err := configyaml.LoadAndExpand("config.yaml", &appCfg); err != nil {
+    log.Fatal(err)
+}
+
+registry, err := payment.NewRegistry(appCfg.Payment, factories)
 ```
 
 ### 4. Supply a ReferenceGenerator
