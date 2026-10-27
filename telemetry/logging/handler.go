@@ -29,6 +29,9 @@ func NewHandler(next slog.Handler) *Handler {
 
 func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		// Copies of a Record share attribute storage; clone so adding ours
+		// can't reach a copy another handler holds.
+		record = record.Clone()
 		record.AddAttrs(
 			slog.String("trace_id", sc.TraceID().String()),
 			slog.String("span_id", sc.SpanID().String()),

@@ -5,9 +5,12 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 )
@@ -101,5 +104,64 @@ func TestHandler_WithAttrsAndGroupKeepDecorator(t *testing.T) {
 	}
 	if record["trace_id"] != traceID {
 		t.Errorf("trace_id = %v, want %q", record["trace_id"], traceID)
+	}
+}
+
+// captureHandler keeps the attributes of every record it handles.
+type captureHandler struct {
+	attrs [][]slog.Attr
+}
+
+func (*captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	var attrs []slog.Attr
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	h.attrs = append(h.attrs, attrs)
+	return nil
+}
+
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestHandler_DoesNotModifySharedRecord(t *testing.T) {
+	ctx := trace.ContextWithSpanContext(t.Context(), spanContext(t))
+	// A Record stores five attributes inline and the rest in a slice that its
+	// copies share. Whether that slice has room for more depends on how it
+	// grew, so try a range of sizes; several leave spare capacity.
+	for n := 6; n <= 20; n++ {
+		t.Run(fmt.Sprintf("%d attrs", n), func(t *testing.T) {
+			record := slog.NewRecord(time.Now(), slog.LevelInfo, "test message", 0)
+			for i := range n {
+				record.AddAttrs(slog.Int(fmt.Sprintf("a%d", i), i))
+			}
+
+			// A fan-out that hands the same Record to each handler without
+			// cloning it.
+			first, second := &captureHandler{}, &captureHandler{}
+			for _, h := range []slog.Handler{NewHandler(first), NewHandler(second)} {
+				if err := h.Handle(ctx, record); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			for name, got := range map[string]*captureHandler{"first": first, "second": second} {
+				attrs := got.attrs[0]
+				if len(attrs) != n+2 {
+					t.Errorf("%s: got %d attrs, want %d (own + trace_id + span_id)", name, len(attrs), n+2)
+				}
+				for _, a := range attrs {
+					if a.Key == "!BUG" {
+						t.Errorf("%s: record modified through a shared copy: %v", name, a.Value)
+					}
+				}
+			}
+			if got := record.NumAttrs(); got != n {
+				t.Errorf("caller's record has %d attrs, want %d", got, n)
+			}
+		})
 	}
 }
