@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/OpenNSW/core/artifact"
@@ -77,9 +79,15 @@ func TestLoadSet(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSet: %v", err)
 		}
-		// Manifests above the pin are not read.
+		// Manifests above the pin are not read at load time, but still load on demand.
 		if set.Current() != 1 || set.Latest() != 1 {
 			t.Errorf("current, latest = %d, %d; want 1, 1", set.Current(), set.Latest())
+		}
+		if _, err := set.Registry(context.Background(), 2); err != nil {
+			t.Errorf("Registry(2) on demand: %v", err)
+		}
+		if set.Current() != 1 {
+			t.Errorf("current = %d after an on-demand load, want the pinned 1", set.Current())
 		}
 	})
 
@@ -96,8 +104,8 @@ func TestLoadSet(t *testing.T) {
 		if set.Current() != 2 || set.Latest() != 2 {
 			t.Errorf("current, latest = %d, %d; want 2, 2", set.Current(), set.Latest())
 		}
-		if _, err := set.Registry(ctx, 3); !errors.Is(err, artifact.ErrUnknownManifestVersion) {
-			t.Errorf("Registry(3): expected ErrUnknownManifestVersion, got %v", err)
+		if _, err := set.Registry(ctx, 3); err == nil {
+			t.Error("the broken manifest_v3.json should still be refused on demand")
 		}
 	})
 
@@ -228,6 +236,87 @@ func TestSetRegistry(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("loads a manifest published after the set was loaded", func(t *testing.T) {
+		src := twoVersions()
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		src["manifest_v3.json"] = manifest(row("welcome", "email", "", "welcome_v3.json"))
+		src["welcome_v3.json"] = []byte(`{"subject":"Third"}`)
+
+		reg, err := set.Registry(ctx, 3)
+		if err != nil {
+			t.Fatalf("Registry(3): %v", err)
+		}
+		got, err := artifact.Latest[fakeEmail](ctx, reg, "welcome")
+		if err != nil || got.Subject != "Third" {
+			t.Fatalf("v3 resolved %q, %v; want Third", got.Subject, err)
+		}
+		if set.Current() != 2 || set.Latest() != 3 {
+			t.Errorf("current, latest = %d, %d; want 2, 3 (an on-demand load must not move current)", set.Current(), set.Latest())
+		}
+	})
+
+	t.Run("a bad manifest found on demand is reported and not cached", func(t *testing.T) {
+		src := twoVersions()
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		src["manifest_v3.json"] = []byte(`{`)
+		if _, err := set.Registry(ctx, 3); err == nil || errors.Is(err, artifact.ErrUnknownManifestVersion) {
+			t.Fatalf("expected the parse error for a malformed manifest_v3.json, got %v", err)
+		}
+		if set.Latest() != 2 {
+			t.Errorf("latest = %d after a rejected manifest, want 2", set.Latest())
+		}
+	})
+
+	t.Run("a probe stops at the version asked for", func(t *testing.T) {
+		src := twoVersions()
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		src["manifest_v3.json"] = manifest(row("welcome", "email", "", "welcome.json"))
+		src["manifest_v4.json"] = []byte(`{`) // broken, and not asked for
+		if _, err := set.Registry(ctx, 3); err != nil {
+			t.Fatalf("Registry(3) should not fail on a later broken manifest, got %v", err)
+		}
+		if set.Latest() != 3 {
+			t.Errorf("latest = %d, want 3", set.Latest())
+		}
+	})
+
+	t.Run("is safe for concurrent use", func(t *testing.T) {
+		src := twoVersions()
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		// Published before the goroutines start, so they race to load it on demand.
+		src["manifest_v3.json"] = manifest(row("welcome", "email", "", "welcome.json"))
+
+		var wg sync.WaitGroup
+		var failures atomic.Int32
+		for i := range 32 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := set.Registry(ctx, 1+i%3); err != nil {
+					failures.Add(1)
+				}
+				_ = set.Current()
+				_ = set.Versions()
+			}()
+		}
+		wg.Wait()
+		if n := failures.Load(); n != 0 {
+			t.Errorf("%d concurrent Registry calls failed", n)
+		}
+	})
 }
 
 func TestGetExplicit(t *testing.T) {
@@ -272,5 +361,31 @@ func TestLatestPrefersTheUnversionedRow(t *testing.T) {
 	old, err := artifact.GetExplicit[fakeEmail](ctx, set, "welcome", "1")
 	if err != nil || old.Subject != "old" {
 		t.Fatalf("GetExplicit(1) = %q, %v; want the explicit row", old.Subject, err)
+	}
+}
+
+// A version only a manifest published after the set loaded lists is found by probing.
+func TestGetExplicitFindsAVersionInANewerManifest(t *testing.T) {
+	ctx := context.Background()
+	src := testutil.MemLoader{
+		"manifest_v1.json": manifest(row("ports", "email", "1", "ports.json")),
+		"ports.json":       []byte(`{"subject":"one"}`),
+	}
+	set, err := artifact.LoadSet(ctx, src)
+	if err != nil {
+		t.Fatalf("LoadSet: %v", err)
+	}
+	src["manifest_v2.json"] = manifest(row("ports", "email", "1", "ports.json"), row("ports", "email", "2", "ports_v2.json"))
+	src["ports_v2.json"] = []byte(`{"subject":"two"}`)
+
+	got, err := artifact.GetExplicit[fakeEmail](ctx, set, "ports", "2")
+	if err != nil || got.Subject != "two" {
+		t.Fatalf("GetExplicit(2) = %q, %v; want the v2 file", got.Subject, err)
+	}
+	if set.Current() != 1 || set.Latest() != 2 {
+		t.Errorf("current, latest = %d, %d; want 1, 2", set.Current(), set.Latest())
+	}
+	if _, err := artifact.GetExplicit[fakeEmail](ctx, set, "ports", "9"); !errors.Is(err, artifact.ErrNotFound) {
+		t.Errorf("an unpublished version: expected ErrNotFound, got %v", err)
 	}
 }
