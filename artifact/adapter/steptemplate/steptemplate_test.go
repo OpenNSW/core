@@ -36,6 +36,36 @@ func TestStepTemplateAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("Load returns the draft config", func(t *testing.T) {
+		m := testutil.MemLoader{
+			"subtask_v1.json": []byte(`{"id": "test_step", "task_type": "USER_INPUT", "output_namespace": "out", "draft": {"command": "save_as_draft"}}`),
+		}
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("test_step", "subtask_template", "", "subtask_v1.json")
+
+		template, err := steptemplate.Load(context.Background(), reg, "test_step")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if template.Draft == nil || template.Draft.Command != "save_as_draft" {
+			t.Errorf("Draft = %+v, want command save_as_draft", template.Draft)
+		}
+	})
+
+	for name, raw := range map[string]string{
+		"draft without a command":   `{"id": "test_step", "task_type": "USER_INPUT", "output_namespace": "out", "draft": {}}`,
+		"draft without a namespace": `{"id": "test_step", "task_type": "USER_INPUT", "draft": {"command": "save_as_draft"}}`,
+	} {
+		t.Run("Load rejects a "+name, func(t *testing.T) {
+			reg := artifact.NewRegistry(testutil.MemLoader{"subtask_v1.json": []byte(raw)})
+			reg.RegisterArtifact("test_step", "subtask_template", "", "subtask_v1.json")
+
+			if _, err := steptemplate.Load(context.Background(), reg, "test_step"); err == nil {
+				t.Error("expected an error, got nil")
+			}
+		})
+	}
+
 	t.Run("Load missing returns ErrNotFound", func(t *testing.T) {
 		reg := artifact.NewRegistry(testutil.MemLoader{})
 		_, err := steptemplate.Load(context.Background(), reg, "missing")

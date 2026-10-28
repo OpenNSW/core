@@ -48,6 +48,8 @@ The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskMan
     "state": "PENDING_USER",
     "step_id": "0a0a0a0a-0000-4000-8000-00000000000a",
     "version": 4,
+    "claimed_by": "4c1d2e3f-0000-4000-8000-000000000001",
+    "claimed_at": "2026-05-18T09:20:02Z",
     "created_at": "2026-05-18T09:14:11Z",
     "updated_at": "2026-05-18T09:14:11Z"
   }
@@ -79,6 +81,10 @@ The `view` key is omitted (the JSON tag is `omitempty`). Listing is intentionall
 ```
 
 `step_id` is the step the task is on; send it back when you act on the view. `version` goes up every time the task moves on. It is read-only — never send it — and is there so you can keep the newest of several views you fetched.
+
+`claimed_by` and `claimed_at` say who is working the task and since when. Both are left out when nobody has claimed it. `claimed_by` is whatever your server recorded, usually an internal user ID, so don't show it as is or compare it with values from your login token. Show them so two people can avoid working the same task. Submitting a step does not require the claim. Your server will normally add a display name and whether the claim is yours.
+
+Claiming and releasing do not change `version`, so `version` cannot tell you whether the claim changed. Take the claim fields from the most recent response you received, not from the one with the higher `version`, and refetch the task after your own claim or release. If responses for the same task can arrive out of order, a stale response with the same `version` can still overwrite a newer claim. Treat that as a known limit: the robust fix is a revision that changes on every claim change, which core does not expose yet.
 
 ### `View` JSON structure
 
@@ -208,6 +214,10 @@ If the user-input step's template declares `"output_namespace": "userform"`, the
 
 The server **logs a warning and drops the payload**, then resumes the workflow as if the body were empty. This is intentional: a misconfigured template shouldn't break a running task, but data must never land in unscoped top-level keys (that would let a caller overwrite slots owned by other steps). If you see a submission silently fail to appear in the next render, check that the active step's template declares an output namespace.
 
+### Drafts
+
+A step whose template declares `draft` also accepts a draft: the host's draft route calls `SaveDraft` with the same inner object. The draft is stored under the same namespace, so the next render shows it, but the step stays where it is: the state, `step_id` and `version` do not change, so other open views are not made stale. Drafts can be partial; nothing checks them for completeness. A draft for a step that has been submitted or has moved on is rejected as stale (`409`), and one for a step without `draft` is rejected (`400`).
+
 ### Empty bodies
 
 A `POST` with an empty body (or no JSON object) is valid — it acts as a **resume signal** with no data attached. Useful for wait-for-event steps where the resume itself is the event.
@@ -249,7 +259,7 @@ These are not magic — they're strings written by plugins. Your application can
 By design, these are hidden from the frontend:
 
 - **Temporal coordinates** — `TaskWorkflowID`, parent coordinates, etc. They're internal to the orchestrator and never serialised in `TaskView`. The only step-related fields a client sees are `step_id` (to send back) and `version` (read-only).
-- **Render config** — the JSON snapshot in `TaskRecord.RenderConfig` is server-side only; the FE sees the rendered output, not the template.
+- **Render config** — the config a task's task template names is server-side only; the FE sees the rendered output, not the template.
 - **Which plugin handled a step** — irrelevant to the UI.
 - **Workflow / task definitions** — also internal.
 

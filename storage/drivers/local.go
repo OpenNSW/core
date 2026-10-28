@@ -194,13 +194,33 @@ func (d *LocalFSDriver) Get(ctx context.Context, key string) (io.ReadCloser, str
 		return nil, "", fmt.Errorf("failed to get file: %w", err)
 	}
 
-	metaPath := fullAbs + ".meta"
-	contentType := DefaultMime
-	if metaBytes, err := os.ReadFile(metaPath); err == nil {
-		contentType = string(metaBytes)
-	}
+	return f, storedContentType(fullAbs), nil
+}
 
-	return f, contentType, nil
+// storedContentType returns the type the file at fullAbs was saved with, or
+// DefaultMime when none was recorded.
+func storedContentType(fullAbs string) string {
+	if metaBytes, err := os.ReadFile(fullAbs + ".meta"); err == nil && len(metaBytes) > 0 {
+		return string(metaBytes)
+	}
+	return DefaultMime
+}
+
+// Stat returns the type and size the file was saved with. It returns an error
+// wrapping ErrNotFound for a file the driver does not hold.
+func (d *LocalFSDriver) Stat(_ context.Context, key string) (ObjectInfo, error) {
+	fullAbs, err := d.resolveAndValidate(key)
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	fi, err := os.Stat(fullAbs)
+	if errors.Is(err, os.ErrNotExist) {
+		return ObjectInfo{}, fmt.Errorf("%w: %s", ErrNotFound, key)
+	}
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+	return ObjectInfo{ContentType: storedContentType(fullAbs), Size: fi.Size()}, nil
 }
 
 func (d *LocalFSDriver) Delete(ctx context.Context, key string) error {
@@ -215,26 +235,34 @@ func (d *LocalFSDriver) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-func (d *LocalFSDriver) GetDownloadURL(_ context.Context, key string) (string, error) {
+// GetDownloadURL returns a URL on the content route that serves the file with
+// the given disposition. The token signs the disposition, so the route serves
+// the file only as the URL was issued.
+func (d *LocalFSDriver) GetDownloadURL(_ context.Context, key, disposition string) (string, error) {
 	if d.PublicURL == "" {
 		return "", fmt.Errorf("public URL not configured for local storage")
+	}
+	if !ValidDisposition(disposition) {
+		return "", fmt.Errorf("unknown disposition %q", disposition)
 	}
 
 	ttl := d.presignTTL
 	expiresAt := time.Now().Add(ttl).Unix()
-	token := GenerateDownloadToken(key, d.secretKey, expiresAt)
+	token := GenerateDownloadToken(key, d.secretKey, expiresAt, disposition)
 
-	// Returns a URL with security token and expiration
+	// Returns a URL with security token, expiration and disposition
 	v := url.Values{}
 	v.Set("token", token)
 	v.Set("expiresAt", strconv.FormatInt(expiresAt, 10))
+	v.Set("disposition", disposition)
 
 	return d.contentURL(key, v), nil
 }
 
-// VerifyDownloadToken checks if a provided download token is valid and not expired.
-func (d *LocalFSDriver) VerifyDownloadToken(key, token string, expiresAt int64) bool {
-	return VerifyDownloadToken(key, token, d.secretKey, expiresAt)
+// VerifyDownloadToken checks if a provided download token is valid for the
+// disposition and not expired.
+func (d *LocalFSDriver) VerifyDownloadToken(key, token string, expiresAt int64, disposition string) bool {
+	return VerifyDownloadToken(key, token, d.secretKey, expiresAt, disposition)
 }
 
 // GetUploadURL returns a presigned URL pointing to the PUT route on ContentPattern.

@@ -69,12 +69,12 @@ jobs:
         continue-on-error: true
 
       - name: Run Gosec
-        uses: securego/gosec@v2.29.0
+        uses: securego/gosec@v2.30.0
         with:
           args: -no-fail -fmt sarif -out results.sarif ./...
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v4.38.2
+        uses: github/codeql-action/upload-sarif@v4.39.1
         with:
           sarif_file: results.sarif
         if: always()
@@ -575,6 +575,111 @@ jobs:
           version: v2.11.2
           args: --timeout=5m
           working-directory: httputil
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+  # The telemetry/ package is its own Go module, so the root ./... jobs above do
+  # not cover it. Run its quality checks and tests independently.
+  telemetry-module:
+    name: Telemetry Module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: telemetry
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'telemetry/go.mod'
+          cache-dependency-path: telemetry/go.sum
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: telemetry
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+  # The cors/ package is its own Go module, so the root ./... jobs above do not
+  # cover it. Run its quality checks and tests independently.
+  cors-module:
+    name: CORS Module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cors
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'cors/go.mod'
+          cache-dependency-path: cors/go.sum
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: cors
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+  # The temporal/ package is its own Go module, so the root ./... jobs above do
+  # not cover it. Run its quality checks and tests independently.
+  temporal-module:
+    name: Temporal Module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: temporal
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'temporal/go.mod'
+          cache-dependency-path: temporal/go.sum
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: temporal
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...

@@ -35,6 +35,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`shared`](shared/README.md)               | Small, dependency-free helpers (deep copy, nested map access, config validation) used across other modules                                                                                    |
 | [`storage`](storage/README.md)             | File storage abstraction (local filesystem and AWS S3) with presigned URLs                                                                                                                    |
 | [`taskflow`](taskflow/README.md)           | Micro-interactive task orchestration — the core engine for human-in-the-loop steps                                                                                                            |
+| [`telemetry`](telemetry/README.md)         | OpenTelemetry setup: tracing, HTTP metrics and OTLP export, with the span trace ID as correlation ID (includes [`telemetry/logging`](telemetry/logging/handler.go))                           |
 | [`temporal`](temporal/README.md)           | Temporal client factory                                                                                                                                                                       |
 | [`trace`](trace/README.md)                 | HTTP request trace propagation and context-based trace ID correlation                                                                                                                         |
 | [`uiprojector`](uiprojector/README.md)     | Zone-based, metadata-driven UI rendering from workflow state and business data                                                                                                                |
@@ -112,18 +113,17 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
         return nil, err
     }
 
-    // 2. Artifact registry — one loader is the single source of truth
+    // 2. Artifacts — one loader is the single source of truth. LoadSet reads
+    //    configs/manifest_v1.json, manifest_v2.json, … (or configs/manifest.json)
     artifactLoader, _ := local.New(local.Config{Root: "configs"})
-    registry := artifact.NewRegistry(artifactLoader)
-    manifest, _ := artifact.LoadManifest(ctx, artifactLoader) // reads configs/manifest.json
-    artifact.RegisterFromConfig(registry, manifest)
+    artifacts, _ := artifact.LoadSet(ctx, artifactLoader)
 
     // 3. Payment
     paymentRepo := NewPaymentRepo(db)
-    paymentRegistry, _ := payment.NewRegistry("configs/payment_methods.json", map[string]payment.Factory{
+    paymentRegistry, _ := payment.NewRegistry(cfg.Payment, map[string]payment.Factory{
         "govpay": govpay.NewGovPayGateway,
     })
-    paymentService := payment.NewPaymentService(paymentRepo, paymentRegistry)
+    paymentService := payment.NewService(paymentRepo, paymentRegistry)
 
     // 4. Temporal client
     temporalClient, _ := temporal.NewClient(cfg.Temporal)
@@ -142,13 +142,14 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
     var tm *orchestrator.TaskManager
     microRunner := workflow.NewTemporalManager(
         temporalClient, cfg.Temporal.Namespace, "MICRO_WORKFLOW_QUEUE",
-        func(p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
-        func(c workflow.WorkflowCompletion) error { return tm.HandleTaskCompletion(ctx, c) },
+        func(ctx context.Context, p workflow.TaskPayload) (map[string]any, error) { return tm.StartTaskStep(ctx, p) },
+        func(ctx context.Context, c workflow.WorkflowCompletion) error { return tm.HandleTaskCompletion(ctx, c) },
     )
     onTaskCompleted := func(parentWorkflowID, parentStepID string, vars map[string]any) error {
         return consignmentService.HandleTaskCompletion(ctx, parentWorkflowID, parentStepID, vars)
     }
-    tm = orchestrator.NewTaskManager(taskStore, registry, pluginRegistry, microRunner, onTaskCompleted, taskRenderer)
+    // Each task resolves its templates through the manifest version its workflow carries.
+    tm = orchestrator.NewTaskManager(taskStore, artifacts, pluginRegistry, nil /* extensions */, microRunner, onTaskCompleted, taskRenderer)
     microRunner.StartWorker()
 
     // 6. Macro workflow runner
@@ -157,6 +158,10 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
         onMacroTaskActivation, onMacroCompletion,
     )
     macroRunner.StartWorker()
+    // Start each top-level workflow on the current manifest; the engine carries the version to
+    // every child workflow and task:
+    //   vars[workflow.VarManifestVersion] = artifacts.Current()
+    //   macroRunner.StartWorkflow(ctx, id, def, vars)
 
     // 7. Auth
     authnManager, _ := authn.NewManager(userProfileSvc, cfg.Authn)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/OpenNSW/core/taskflow/store"
 	"gorm.io/gorm"
@@ -21,20 +22,23 @@ type TaskStore struct {
 	db *gorm.DB
 }
 
+var _ store.TaskStore = (*TaskStore)(nil)
+
 func New(db *gorm.DB) *TaskStore {
 	return &TaskStore{db: db}
 }
 
 func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) error {
-	// active_step_id and seq are owned by the guarded step statements below. Omitting them keeps a
-	// full-record save from moving them, and lets this write work before the columns exist.
+	// active_step_id and seq are owned by the guarded step statements below, and claimed_by and
+	// claimed_at by ClaimTask and ReleaseTask. Omitting them keeps a full-record save from moving
+	// them, and lets this write work before the columns exist.
 	model := FromDomain(record)
 	// On conflict, do nothing rather than overwrite: TaskID is the parent's ActivationID, unique
 	// per invocation of the parent's node, so a conflict can only be a retry of this exact
 	// StartTask call (Temporal Activities can be retried) — never a different task. The existing
 	// row is already correct, and by the time a retry lands, guarded writes below (ClaimStep etc.)
 	// may have already moved it forward; overwriting state/data here would silently rewind it.
-	err := s.db.WithContext(ctx).Omit("active_step_id", "seq").Clauses(clause.OnConflict{
+	err := s.db.WithContext(ctx).Omit("active_step_id", "seq", "claimed_by", "claimed_at").Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "task_id"}},
 		DoNothing: true,
 	}).Create(&model).Error
@@ -68,14 +72,14 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	return model.ToDomain(), true
 }
 
-func (s *TaskStore) GetAllTasks(ctx context.Context, parentWorkflowID string) []store.TaskRecord {
+func (s *TaskStore) GetAllTasks(ctx context.Context, caseID string) []store.TaskRecord {
 	var models []TaskRecordModel
 	query := s.db.WithContext(ctx)
-	if parentWorkflowID != "" {
-		query = query.Where("root_workflow_id = ?", parentWorkflowID)
+	if caseID != "" {
+		query = query.Where("case_id = ?", caseID)
 	}
 	if err := query.Find(&models).Error; err != nil {
-		slog.ErrorContext(ctx, "taskflow gorm store: GetAllTasks db error", "parent_workflow_id", parentWorkflowID, "error", err)
+		slog.ErrorContext(ctx, "taskflow gorm store: GetAllTasks db error", "case_id", caseID, "error", err)
 		return nil
 	}
 
@@ -110,9 +114,10 @@ func (s *TaskStore) ClaimStep(ctx context.Context, taskID string, claim store.St
 	}
 	// No active_step_id check: a claim's job is to replace whatever step is currently active with
 	// claim.StepID, so the row's current active_step_id is expected to differ and isn't relevant.
-	// seq <= claim.Seq alone detects staleness, since seq is workflow-wide and monotonic — "<=" (not
-	// "<") also lets a retry of this exact claim (same seq) match again.
-	return s.stepUpdate(ctx, taskID, "seq <= ?", []any{claim.Seq}, map[string]any{
+	// seq <= claim.Seq detects staleness across steps ("<=" lets a retry of this exact claim match
+	// again), and state <> StateCancelled keeps an in-flight step claim from resurrecting a
+	// cancelled task when claim.Seq is higher than the cancelled row's seq.
+	return s.stepUpdate(ctx, taskID, "seq <= ? AND state <> ?", []any{claim.Seq, store.StateCancelled}, map[string]any{
 		"active_step_id":          claim.StepID,
 		"seq":                     claim.Seq,
 		"active_task_template_id": claim.ActiveTaskTemplateID,
@@ -144,11 +149,51 @@ func (s *TaskStore) PersistSubmission(ctx context.Context, taskID, stepID string
 	})
 }
 
+func (s *TaskStore) WriteDraft(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error) {
+	encoded, err := jsonData(data)
+	if err != nil {
+		return 0, fmt.Errorf("encode task data: %w", err)
+	}
+	// Neither state nor seq moves: a draft does not advance the step, so it must not make the
+	// step's ID or the view's version stale.
+	return s.stepUpdate(ctx, taskID, "active_step_id = ? AND seq = ? AND state NOT IN ?",
+		[]any{stepID, seq, []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled}},
+		map[string]any{"data": encoded})
+}
+
+func (s *TaskStore) CancelTask(ctx context.Context, taskID string) (int64, error) {
+	// No active_step_id or seq check: cancelling isn't about any one step. Advancing seq is what
+	// drops a step write still in flight: WriteRenderState and PersistSubmission need seq to equal
+	// their step's, and a retried ClaimStep needs it to be no higher.
+	return s.stepUpdate(ctx, taskID, "state <> ?", []any{store.StateCompleted}, map[string]any{
+		"state": store.StateCancelled,
+		"seq":   gorm.Expr("seq + 1"),
+	})
+}
+
 func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error) {
 	// No active_step_id check, for the same reason as ClaimStep: completion isn't about which step
-	// is active, only about whether a later step has already superseded this seq.
-	return s.stepUpdate(ctx, taskID, "seq <= ?", []any{seq}, map[string]any{
+	// is active, only about whether a later step has already superseded this seq or the task was
+	// cancelled.
+	return s.stepUpdate(ctx, taskID, "seq <= ? AND state <> ?", []any{seq, store.StateCancelled}, map[string]any{
 		"state": store.StateCompleted,
 		"seq":   seq,
+	})
+}
+
+func (s *TaskStore) ClaimTask(ctx context.Context, taskID, holder string, at time.Time) (int64, error) {
+	// The holder matches the guard again on a repeat claim, which then succeeds without moving
+	// claimed_at: the CASE reads the row's value before this update, as SQL assignments do.
+	return s.stepUpdate(ctx, taskID, "(claimed_by IS NULL OR claimed_by = ?) AND state NOT IN ?",
+		[]any{holder, []string{store.StateCompleted, store.StateCancelled}}, map[string]any{
+			"claimed_by": holder,
+			"claimed_at": gorm.Expr("CASE WHEN claimed_by = ? THEN claimed_at ELSE ? END", holder, at),
+		})
+}
+
+func (s *TaskStore) ReleaseTask(ctx context.Context, taskID, holder string) (int64, error) {
+	return s.stepUpdate(ctx, taskID, "claimed_by = ?", []any{holder}, map[string]any{
+		"claimed_by": nil,
+		"claimed_at": nil,
 	})
 }

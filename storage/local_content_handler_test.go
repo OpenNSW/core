@@ -65,12 +65,16 @@ func TestLocalContentRoutes_RoundTrip(t *testing.T) {
 		name        string
 		key         string
 		contentType string
+		disposition string // what the download URL is issued with
 		opts        []drivers.LocalOption
 		wantPrefix  string
 	}{
-		{name: "pdf", key: routeTestKey, contentType: "application/pdf", wantPrefix: "/api/v1/storage/"},
-		{name: "html", key: "550e8400-e29b-41d4-a716-446655440000.html", contentType: "text/html", wantPrefix: "/api/v1/storage/"},
-		{name: "custom route prefix", key: routeTestKey, contentType: "application/pdf", opts: []drivers.LocalOption{drivers.WithRoutePrefix("/files")}, wantPrefix: "/files/"},
+		{name: "pdf", key: routeTestKey, contentType: "application/pdf", disposition: drivers.DispositionInline, wantPrefix: "/api/v1/storage/"},
+		{name: "pdf as an attachment", key: routeTestKey, contentType: "application/pdf", disposition: drivers.DispositionAttachment, wantPrefix: "/api/v1/storage/"},
+		{name: "xml as an attachment", key: "550e8400-e29b-41d4-a716-446655440000.xml", contentType: "text/xml", disposition: drivers.DispositionAttachment, wantPrefix: "/api/v1/storage/"},
+		// The route serves the file as its URL was issued; the Service decides.
+		{name: "html the URL says is inline", key: "550e8400-e29b-41d4-a716-446655440000.html", contentType: "text/html", disposition: drivers.DispositionInline, wantPrefix: "/api/v1/storage/"},
+		{name: "custom route prefix", key: routeTestKey, contentType: "application/pdf", disposition: drivers.DispositionInline, opts: []drivers.LocalOption{drivers.WithRoutePrefix("/files")}, wantPrefix: "/files/"},
 	}
 
 	for _, tt := range tests {
@@ -90,7 +94,15 @@ func TestLocalContentRoutes_RoundTrip(t *testing.T) {
 				t.Fatalf("PUT: expected 204, got %d", resp.StatusCode)
 			}
 
-			downloadURL, err := driver.GetDownloadURL(ctx, tt.key)
+			info, err := driver.Stat(ctx, tt.key)
+			if err != nil {
+				t.Fatalf("Stat: %v", err)
+			}
+			if info.ContentType != tt.contentType || info.Size != int64(len(content)) {
+				t.Errorf("Stat = %+v, want type %q and size %d", info, tt.contentType, len(content))
+			}
+
+			downloadURL, err := driver.GetDownloadURL(ctx, tt.key, tt.disposition)
 			if err != nil {
 				t.Fatalf("GetDownloadURL: %v", err)
 			}
@@ -106,6 +118,9 @@ func TestLocalContentRoutes_RoundTrip(t *testing.T) {
 			}
 			if got := resp.Header.Get("Content-Security-Policy"); got != "sandbox" {
 				t.Errorf("Content-Security-Policy = %q, want sandbox", got)
+			}
+			if got := resp.Header.Get("Content-Disposition"); got != tt.disposition {
+				t.Errorf("Content-Disposition = %q, want %q", got, tt.disposition)
 			}
 			got, _ := io.ReadAll(resp.Body)
 			if !bytes.Equal(got, content) {
@@ -160,10 +175,34 @@ func TestLocalContentRoutes_RejectsBadDownloads(t *testing.T) {
 		t.Fatalf("GetUploadURL: %v", err)
 	}
 
+	// A link for an attachment, to be changed after it was signed.
+	if err := driver.Save(ctx, routeTestKey, bytes.NewReader([]byte("data")), "application/pdf"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	attachmentURL, err := driver.GetDownloadURL(ctx, routeTestKey, drivers.DispositionAttachment)
+	if err != nil {
+		t.Fatalf("GetDownloadURL: %v", err)
+	}
+	asInline, _ := url.Parse(attachmentURL)
+	q := asInline.Query()
+	q.Set("disposition", drivers.DispositionInline)
+	asInline.RawQuery = q.Encode()
+	noDisposition, _ := url.Parse(attachmentURL)
+	q = noDisposition.Query()
+	q.Del("disposition")
+	noDisposition.RawQuery = q.Encode()
+
 	past := time.Now().Add(-time.Minute).Unix()
 	expired := contentURL(driver, routeTestKey, url.Values{
-		"token":     {drivers.GenerateDownloadToken(routeTestKey, "local-dev-secret", past)},
-		"expiresAt": {strconv.FormatInt(past, 10)},
+		"token":       {drivers.GenerateDownloadToken(routeTestKey, "local-dev-secret", past, drivers.DispositionInline)},
+		"expiresAt":   {strconv.FormatInt(past, 10)},
+		"disposition": {drivers.DispositionInline},
+	})
+	future := time.Now().Add(time.Hour).Unix()
+	unknownDisposition := contentURL(driver, routeTestKey, url.Values{
+		"token":       {drivers.GenerateDownloadToken(routeTestKey, "local-dev-secret", future, "form-data")},
+		"expiresAt":   {strconv.FormatInt(future, 10)},
+		"disposition": {"form-data"},
 	})
 
 	tests := []struct {
@@ -174,6 +213,9 @@ func TestLocalContentRoutes_RejectsBadDownloads(t *testing.T) {
 		{name: "upload token used to download", url: uploadURL, want: http.StatusUnauthorized},
 		{name: "expired link", url: expired, want: http.StatusForbidden},
 		{name: "no token", url: contentURL(driver, routeTestKey, url.Values{}), want: http.StatusUnauthorized},
+		{name: "disposition changed after signing", url: asInline.String(), want: http.StatusUnauthorized},
+		{name: "disposition removed", url: noDisposition.String(), want: http.StatusUnauthorized},
+		{name: "signed with a disposition the route does not serve", url: unknownDisposition, want: http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {

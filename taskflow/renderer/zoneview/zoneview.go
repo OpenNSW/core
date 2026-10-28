@@ -94,8 +94,13 @@ type ZoneView struct {
 	State    string `json:"state"`
 	// StepID is the step the task is on; actions taken on this view must send it back. Version
 	// increases every time the task moves on; it is read-only and never accepted as input.
-	StepID    string          `json:"step_id,omitempty"`
-	Version   int64           `json:"version"`
+	StepID  string `json:"step_id,omitempty"`
+	Version int64  `json:"version"`
+	// ClaimedBy is who holds the task's claim, as the host recorded it; empty when the task is
+	// unclaimed. ClaimedAt is when they claimed it. The view is the same whoever holds the claim:
+	// to show or hide sections by it, the host passes a claim fact to Assemble.
+	ClaimedBy string          `json:"claimed_by,omitempty"`
+	ClaimedAt *time.Time      `json:"claimed_at,omitempty"`
 	View      json.RawMessage `json:"view"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`

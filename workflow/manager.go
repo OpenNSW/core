@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -67,11 +68,19 @@ type TaskPayload struct {
 	TaskTemplateID string
 	// Inputs contains the specific subset of WorkflowVariables mapped to this task's requirements.
 	Inputs map[string]any
-	// RootWorkflowID is the workflow ID of the top-level execution. WorkflowID alone doesn't
-	// identify the root for a deeply nested child, so the engine propagates this explicitly from
-	// the root through every level of nesting (see VarRootWorkflowID).
-	RootWorkflowID string
+	// CaseID is the case the workflow belongs to (see VarCaseID). It is the same at every level
+	// of nesting, so it names the case of a task in a deeply nested child, which WorkflowID
+	// alone does not.
+	CaseID string
+	// ManifestVersion is the artifact manifest version to resolve TaskTemplateID and everything
+	// it leads to through (see VarManifestVersion). 0 if the host started the workflow without
+	// one.
+	ManifestVersion int
 }
+
+// DefinitionHandler returns the workflow definition templateID names in artifact manifest
+// manifestVersion (see VarManifestVersion). The engine calls it when a SPLIT_TASK node fans out.
+type DefinitionHandler func(manifestVersion int, templateID string) (WorkflowDefinition, error)
 
 // AdminParkPayload carries the context of a node parking in NodeStatusAwaitingAdmin, delivered
 // to an AdminParkHandler so the host application can decide how to surface the event — log it,
@@ -82,8 +91,12 @@ type AdminParkPayload struct {
 	WorkflowID string
 	// RunID is the unique identifier for this specific execution attempt.
 	RunID string
-	// RootWorkflowID is the workflow ID of the top-level execution (see TaskPayload.RootWorkflowID).
-	RootWorkflowID string
+	// CaseID is the case the parked workflow belongs to (see VarCaseID).
+	CaseID string
+	// ManifestVersion is the artifact manifest version the parked workflow resolves its
+	// templates through (see VarManifestVersion), so a handler that shows or checks the
+	// parked node's template uses the flow's own version. 0 if the host set none.
+	ManifestVersion int
 	// NodeID is the ID of the graph node that parked. It names the definition, not this one run of
 	// it; see ActivationID for a run.
 	NodeID string
@@ -210,9 +223,12 @@ type UpdateEvent struct {
 // 2. Asynchronous Execution:
 //   - If the work is long-running (e.g. awaits external API callback, human UI interaction, etc.),
 //     return a nil map and an ErrResultPending error.
-//   - The workflow activity pauses and awaits completion. The host application must eventually resume
-//     it by calling Manager.CompleteActivation() with the matching workflow, run, and step IDs.
-type TaskActivationHandler func(payload TaskPayload) (map[string]any, error)
+//   - The Activity ends, and the node waits in the workflow, for as long as it takes, until the host
+//     application calls Manager.CompleteActivation() with the matching workflow, run, and step IDs.
+//
+// ctx is the Activity's: it carries the attempt's deadline (taskActivityTimeout), and is cancelled
+// when the attempt times out, so a call made with it doesn't outlive the attempt.
+type TaskActivationHandler func(ctx context.Context, payload TaskPayload) (map[string]any, error)
 
 // WorkflowCompletion is what the engine reports when a top-level workflow reaches its END node.
 type WorkflowCompletion struct {
@@ -228,8 +244,9 @@ type WorkflowCompletion struct {
 
 // WorkflowCompletionHandler is invoked when the generic DAG workflow successfully reaches an "End" node,
 // providing the final, accumulated state of the workflow variables. It may be invoked more than once
-// for the same workflow (Temporal retries the Activity), so it must be idempotent.
-type WorkflowCompletionHandler func(WorkflowCompletion) error
+// for the same workflow (Temporal retries the Activity), so it must be idempotent. ctx is the
+// Activity's, with the attempt's deadline.
+type WorkflowCompletionHandler func(ctx context.Context, completion WorkflowCompletion) error
 
 // AdminParkHandler is invoked once every time a node parks in NodeStatusAwaitingAdmin —
 // including a re-park after a failed AdminActionRetry, since that's newly actionable
@@ -253,9 +270,10 @@ type Manager interface {
 	// CompleteActivation is called by the external system to resume a paused workflow node.
 	// It routes the output data back into the specific workflow's WorkflowVariables using the
 	// workflowID and activationID (TaskPayload.ActivationID) that were originally emitted via the
-	// TaskActivationHandler. runID may be empty to address the workflow's current run. It fails if
-	// that step is not pending, so a call for a step that has already completed, or that never
-	// existed, is rejected rather than applied to whichever step is active now.
+	// TaskActivationHandler. runID may be empty to address the workflow's current run. It fails with
+	// ErrActivationNotPending if that step is not waiting, so a call for a step that has already
+	// completed, or that never existed, is rejected rather than applied to whichever step is active
+	// now. Of several calls for the same step, exactly one succeeds.
 	CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error
 
 	// TaskUpdate is used to send an update about the task to the workflow.
@@ -284,12 +302,41 @@ type AdminInterventionResolver interface {
 	ResolveAdminIntervention(ctx context.Context, workflowID, runID string, resolution AdminResolutionSignal) error
 }
 
+// ForcedParkErrorType is the error type of the failure ForceParkActivation completes a step with.
+// It shows in the parked node's LastError.
+const ForcedParkErrorType = "AdminForcedPark"
+
+// ActivationParker is implemented by managers that can park a node that is waiting on its step, for
+// a node that is healthy but must be overridden by an admin. Like AdminInterventionResolver it is
+// kept separate from Manager; callers type-assert for it.
+type ActivationParker interface {
+	// ForceParkActivation fails the waiting step activationID of workflowID with an error of type
+	// ForcedParkErrorType, so the TASK node waiting on it parks in NodeStatusAwaitingAdmin with
+	// ParkCategoryAdminForced and can be resolved like any parked node. runID may be empty to
+	// address the workflow's current run. It returns an error wrapping ErrActivationNotPending if
+	// that step is not waiting.
+	//
+	// It only fails the step: whatever the step was waiting on, such as a task workflow, is still
+	// running and is the caller's to stop.
+	ForceParkActivation(ctx context.Context, workflowID, runID, activationID, reason string) error
+}
+
+// WorkflowTerminator is implemented by managers that can stop a running workflow outright. Like
+// AdminInterventionResolver it is kept separate from Manager; callers type-assert for it.
+type WorkflowTerminator interface {
+	// TerminateWorkflow stops workflowID immediately and runs nothing further of it: no node
+	// completes, and a workflow that is a task's never reports its completion. runID may be empty to
+	// address the current run. It returns an error wrapping ErrWorkflowNotFound if there is no
+	// running execution to stop, including one that has already closed.
+	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error
+}
+
 // TemporalManager extends the Manager interface with worker control methods.
 type TemporalManager interface {
 	Manager
 
 	// RegisterDefinitionHandler registers the handler function for fetching sub-workflow definitions.
-	RegisterDefinitionHandler(handler func(templateID string) (WorkflowDefinition, error))
+	RegisterDefinitionHandler(handler DefinitionHandler)
 
 	// RegisterAdminParkHandler registers the handler invoked whenever a node parks for admin
 	// intervention. Optional — see AdminParkHandler's doc for what a nil/unregistered handler
@@ -315,8 +362,7 @@ type temporalManagerImpl struct {
 
 // NewTemporalManager creates a new instance of TemporalManager.
 //
-// namespace must be the namespace c was dialed with. client.Client does not expose it, and
-// some calls (e.g. CompleteActivityByID) require it explicitly.
+// namespace must be the namespace c was dialed with. client.Client does not expose it.
 func NewTemporalManager(
 	c client.Client,
 	namespace string,
@@ -355,7 +401,7 @@ func NewTemporalManager(
 	return m
 }
 
-func (m *temporalManagerImpl) RegisterDefinitionHandler(handler func(templateID string) (WorkflowDefinition, error)) {
+func (m *temporalManagerImpl) RegisterDefinitionHandler(handler DefinitionHandler) {
 	m.activities.FetchWorkflowDefinitionHandler = handler
 }
 
@@ -382,18 +428,60 @@ func (m *temporalManagerImpl) StartWorkflow(ctx context.Context, ID string, def 
 	return nil
 }
 
-// CompleteActivation is invoked by the external application to complete a dormant asynchronous Temporal Activity.
-// WorkflowID is the ID of the workflow
-// runID is the ID of the run
-// activationID is the ID of the step (TaskPayload.ActivationID), which is the Activity's ID
-// output is the key valye pairs that should be added to the global context
+// CompleteActivation delivers a suspended step's output to the workflow waiting on it, as the
+// workflow's CompleteActivation Update (see registerCompletionHandler), and waits for the workflow
+// to accept it. A step that isn't waiting, or a workflow that has ended or doesn't exist, is
+// ErrActivationNotPending.
+//
+// The Update gets no ID of its own: Temporal would answer a second Update with the same ID with the
+// first one's result, so a duplicate completion would succeed instead of being rejected.
 func (m *temporalManagerImpl) CompleteActivation(ctx context.Context, workflowID, runID, activationID string, output map[string]any) error {
-	err := m.temporalClient.CompleteActivityByID(ctx, m.namespace, workflowID, runID, activationID, output, nil)
-	var notFound *serviceerror.NotFound
-	if errors.As(err, &notFound) {
+	return m.updatePendingActivation(ctx, workflowID, runID, completeActivationUpdate, activationID, output)
+}
+
+// ForceParkActivation fails a suspended step through the workflow's ForceParkActivation Update (see
+// registerCompletionHandler), so the node waiting on it parks in NodeStatusAwaitingAdmin with
+// ParkCategoryAdminForced. A step that isn't waiting, or a workflow that has ended or doesn't
+// exist, is ErrActivationNotPending.
+func (m *temporalManagerImpl) ForceParkActivation(ctx context.Context, workflowID, runID, activationID, reason string) error {
+	return m.updatePendingActivation(ctx, workflowID, runID, forceParkActivationUpdate, activationID, reason)
+}
+
+func (m *temporalManagerImpl) updatePendingActivation(ctx context.Context, workflowID, runID, updateName string, args ...any) error {
+	handle, err := m.temporalClient.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		RunID:        runID,
+		UpdateName:   updateName,
+		Args:         args,
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err == nil {
+		err = handle.Get(ctx, nil)
+	}
+	if isActivationNotPending(err) {
 		return fmt.Errorf("%w: %w", ErrActivationNotPending, err)
 	}
 	return err
+}
+
+func (m *temporalManagerImpl) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error {
+	err := m.temporalClient.TerminateWorkflow(ctx, workflowID, runID, reason)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return fmt.Errorf("%w: %w", ErrWorkflowNotFound, err)
+	}
+	return err
+}
+
+// isActivationNotPending reports whether err is the workflow rejecting a completion or force-park
+// for a step that isn't waiting, or the workflow having ended or never existed.
+func isActivationNotPending(err error) bool {
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) && appErr.Type() == activationNotPendingErrorType {
+		return true
+	}
+	var notFound *serviceerror.NotFound
+	return errors.As(err, &notFound)
 }
 
 func (m *temporalManagerImpl) TaskUpdate(ctx context.Context, workflowID, runID string, event UpdateEvent) error {

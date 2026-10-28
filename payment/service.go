@@ -5,11 +5,11 @@ package payment
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -26,17 +26,31 @@ var ErrTransactionNotFound = errors.New("payment transaction not found")
 // suspicious, so it is never marked paid and the gateway should not retry.
 var ErrAmountMismatch = errors.New("webhook amount/currency mismatch")
 
+// ErrDuplicateReference is returned, wrapped, when a transaction already holds
+// the reference the ReferenceGenerator issued. The host can generate another
+// and retry the checkout.
+var ErrDuplicateReference = errors.New("payment reference already in use")
+
+// ReferenceGenerator issues the reference a payer pays against for a checkout,
+// in the host's format. It receives the checkout request with a copy of its
+// metadata. Each reference it issues is unique; CreateCheckoutSession returns
+// ErrDuplicateReference for one a transaction already holds. It is safe for
+// concurrent use.
+type ReferenceGenerator interface {
+	GenerateReference(ctx context.Context, req CreateCheckoutRequest) (string, error)
+}
+
 // toDomainStatus maps a canonical gateway WebhookStatus onto the internal
-// PaymentStatus. It is total over the known statuses and rejects anything else
+// Status. It is total over the known statuses and rejects anything else
 // with gateways.ErrUnsupportedWebhookStatus so a bad value can't reach the DB.
-func toDomainStatus(s WebhookStatus) (PaymentStatus, error) {
+func toDomainStatus(s WebhookStatus) (Status, error) {
 	switch s {
 	case WebhookStatusPending:
-		return PaymentStatusPending, nil
+		return StatusPending, nil
 	case WebhookStatusSuccess:
-		return PaymentStatusSuccess, nil
+		return StatusSuccess, nil
 	case WebhookStatusFailed:
-		return PaymentStatusFailed, nil
+		return StatusFailed, nil
 	default:
 		return "", fmt.Errorf("status %q: %w", s, ErrUnsupportedWebhookStatus)
 	}
@@ -52,7 +66,7 @@ func toDomainStatus(s WebhookStatus) (PaymentStatus, error) {
 // gateway's own verification logic) propagates here unwrapped-by-us, so
 // it falls through to the generic transient/500 handling in HTTPHandler,
 // not a 401.
-func verifyCaller(ctx context.Context, gateway PaymentGateway, gatewayID string, body []byte, headers map[string][]string) error {
+func verifyCaller(ctx context.Context, gateway Gateway, gatewayID string, body []byte, headers map[string][]string) error {
 	if err := gateway.VerifyWebhook(ctx, body, headers); err != nil {
 		return fmt.Errorf("gateway %s: %w", gatewayID, err)
 	}
@@ -67,12 +81,14 @@ type TaskCompleter interface {
 	CompleteTaskStepByToken(ctx context.Context, token string, payload map[string]any) error
 }
 
-// PaymentService defines the high-level orchestration for payments.
-type PaymentService interface {
-	// ListAvailableMethods returns the rendering information for all active payment gateways.
-	ListAvailableMethods(ctx context.Context) ([]GatewayInfo, error)
+// Service defines the high-level orchestration for payments.
+type Service interface {
+	// ListAvailableMethods returns the rendering information for the active
+	// payment gateways that can collect payments for payee.
+	ListAvailableMethods(ctx context.Context, payee Payee) ([]GatewayInfo, error)
 
-	// CreateCheckoutSession initializes a payment session and generates a ReferenceNumber.
+	// CreateCheckoutSession initializes a payment session under a ReferenceNumber
+	// from the service's ReferenceGenerator.
 	CreateCheckoutSession(ctx context.Context, req CreateCheckoutRequest) (*CreateCheckoutResponse, error)
 
 	// ValidateReference is used for real-time validation requests from gateways.
@@ -88,16 +104,22 @@ type PaymentService interface {
 }
 
 type paymentService struct {
-	repo          PaymentRepository
-	registry      GatewayRegistry
+	repo          Repository
+	registry      Registry
+	refGen        ReferenceGenerator
 	taskCompleter TaskCompleter
 }
 
-// NewPaymentService initializes a new payment service.
-func NewPaymentService(repo PaymentRepository, registry GatewayRegistry) PaymentService {
+// NewService initializes a payment service that takes each checkout's
+// reference from refGen, which must be non-nil.
+func NewService(repo Repository, registry Registry, refGen ReferenceGenerator) Service {
+	if refGen == nil {
+		panic("payment: refGen is nil")
+	}
 	return &paymentService{
 		repo:     repo,
 		registry: registry,
+		refGen:   refGen,
 	}
 }
 
@@ -105,24 +127,8 @@ func (s *paymentService) SetTaskCompleter(completer TaskCompleter) {
 	s.taskCompleter = completer
 }
 
-func (s *paymentService) ListAvailableMethods(ctx context.Context) ([]GatewayInfo, error) {
-	return s.registry.ListInfo(), nil
-}
-
-const referenceCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-// generatePaymentReference returns a non-guessable NSW reference of the form
-// TNSWXXXXXXXX using crypto-grade randomness. Mirrors the generator in
-// internal/payments.
-func generatePaymentReference() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("failed to generate random bytes: %v", err))
-	}
-	for i := range b {
-		b[i] = referenceCharset[int(b[i])%len(referenceCharset)]
-	}
-	return fmt.Sprintf("TNSW%s", string(b))
+func (s *paymentService) ListAvailableMethods(ctx context.Context, payee Payee) ([]GatewayInfo, error) {
+	return s.registry.ListInfo(payee), nil
 }
 
 func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCheckoutRequest) (*CreateCheckoutResponse, error) {
@@ -136,42 +142,41 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		return nil, fmt.Errorf("failed to get gateway %s: %w", req.GatewayID, err)
 	}
 
-	// Let the gateway reject metadata it cannot operate without before any
-	// state is created: no reference is burned and no PENDING row has to be
-	// walked back to FAILED for what is purely a configuration error.
-	if err := gateway.ValidateMetadata(req.Metadata); err != nil {
-		return nil, fmt.Errorf("gateway %s rejected checkout metadata: %w", req.GatewayID, err)
+	// Resolve the gateway's ids for the payee before any state is created: a
+	// method that cannot pay this payee burns no reference and leaves no
+	// PENDING row to walk back to FAILED.
+	payeeMapping, err := s.registry.ResolvePayee(req.GatewayID, req.Payee)
+	if err != nil {
+		return nil, err
 	}
 
-	// 1. Generate a unique NSW ReferenceNumber, retrying on the rare collision.
-	var generatedRef string
-	const maxRetries = 10
-	for i := 0; i < maxRetries; i++ {
-		candidate := generatePaymentReference()
-		existing, err := s.repo.GetByReferenceNumber(ctx, candidate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check existing reference number: %w", err)
-		}
-		if existing == nil {
-			generatedRef = candidate
-			break
-		}
+	// 1. Take the ReferenceNumber from the host's generator, which gets the
+	// request with a copy of its metadata: the checkout persists and sends the
+	// metadata it was given. The store's unique index on reference_number guards
+	// against a duplicate.
+	refReq := req
+	refReq.Metadata = maps.Clone(req.Metadata)
+	generatedRef, err := s.refGen.GenerateReference(ctx, refReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate payment reference: %w", err)
 	}
 	if generatedRef == "" {
-		return nil, fmt.Errorf("failed to generate a unique payment reference after %d attempts", maxRetries)
+		return nil, errors.New("failed to generate payment reference: the generator returned an empty reference")
 	}
 
 	// 2. Write-ahead: persist a PENDING transaction BEFORE contacting the gateway.
 	// If the DB write fails we never create a gateway session (no orphan), and if
 	// an inbound validation/webhook races the response it can still find the row.
-	tx := &PaymentTransaction{
+	tx := &Transaction{
 		ID:              uuid.NewString(),
 		ReferenceNumber: generatedRef,
 		CallbackToken:   req.CallbackToken,
 		GatewayID:       req.GatewayID,
+		OrgID:           req.Payee.OrgID,
+		ServiceID:       req.Payee.ServiceID,
 		Amount:          req.Amount,
 		Currency:        req.Currency,
-		Status:          PaymentStatusPending,
+		Status:          StatusPending,
 		ExpiryDate:      req.ExpiresAt,
 		GatewayMetadata: req.Metadata,
 	}
@@ -185,13 +190,15 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		Currency:           req.Currency,
 		SuccessRedirectURL: req.SuccessRedirectURL,
 		CancelRedirectURL:  req.CancelRedirectURL,
+		Payee:              req.Payee,
+		PayeeMapping:       payeeMapping,
 		Metadata:           req.Metadata,
 	}
 	sessionResp, err := gateway.CreateSession(ctx, sessionReq)
 	if err != nil {
 		// Don't leave the row dangling as PENDING; mark it FAILED so a later
 		// webhook or reconciliation can't treat an uninitialized session as payable.
-		tx.Status = PaymentStatusFailed
+		tx.Status = StatusFailed
 		if uerr := s.repo.Update(ctx, tx); uerr != nil {
 			slog.ErrorContext(ctx, "payment: failed to mark transaction failed after gateway error",
 				"reference", tx.ReferenceNumber, "error", uerr)
@@ -259,6 +266,11 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 		if tx.GatewayID != gatewayID {
 			slog.WarnContext(ctx, "gateway mismatch during validation", "expected", tx.GatewayID, "received", gatewayID, "reference", tx.ReferenceNumber)
 		} else {
+			payee := Payee{OrgID: tx.OrgID, ServiceID: tx.ServiceID}
+			payeeMapping, err := s.registry.ResolvePayee(gatewayID, payee)
+			if err != nil {
+				return nil, fmt.Errorf("reference %s: %w", tx.ReferenceNumber, err)
+			}
 			validationTx = &ValidationTransaction{
 				ReferenceNumber: tx.ReferenceNumber,
 				Amount:          tx.Amount,
@@ -266,14 +278,35 @@ func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string
 				Status:          string(tx.Status),
 				ExpiryDate:      tx.ExpiryDate,
 				Metadata:        tx.GatewayMetadata,
+				Payee:           payee,
+				PayeeMapping:    payeeMapping,
 			}
 			// Payable = exists, owned by this gateway, still pending, not expired.
-			isPayable = tx.Status == PaymentStatusPending && time.Now().Before(tx.ExpiryDate)
+			isPayable = tx.Status == StatusPending && time.Now().Before(tx.ExpiryDate)
 		}
 	}
 
 	// 5. Delegate the protocol-specific response formatting to the gateway.
 	return gateway.HandleValidateReference(ctx, validationTx, isPayable, rawBody)
+}
+
+// payeeLookup resolves, for the gateway gatewayID, the mapping of the payee a
+// reference was issued for.
+func (s *paymentService) payeeLookup(gatewayID string) PayeeLookup {
+	return func(ctx context.Context, referenceNumber string) (json.RawMessage, bool, error) {
+		tx, err := s.repo.GetByReferenceNumber(ctx, referenceNumber)
+		if err != nil {
+			return nil, false, fmt.Errorf("looking up reference %s: %w", referenceNumber, err)
+		}
+		if tx == nil {
+			return nil, false, nil
+		}
+		mapping, err := s.registry.ResolvePayee(gatewayID, Payee{OrgID: tx.OrgID, ServiceID: tx.ServiceID})
+		if err != nil {
+			return nil, false, fmt.Errorf("reference %s: %w", referenceNumber, err)
+		}
+		return mapping, true, nil
+	}
 }
 
 func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) (*WebhookResponse, error) {
@@ -288,7 +321,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		return nil, err
 	}
 
-	gwPayload, webhookResp, err := gateway.ParseWebhook(ctx, body, headers)
+	gwPayload, webhookResp, err := gateway.ParseWebhook(ctx, body, headers, s.payeeLookup(gatewayID))
 	if err != nil {
 		return nil, fmt.Errorf("gateway failed to parse webhook: %w", err)
 	}
@@ -310,13 +343,13 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	var (
 		advance      bool
 		advanceToken string
-		finalStatus  PaymentStatus
+		finalStatus  Status
 		refNum       string
 		amount       string
 		currency     string
 	)
 
-	err = s.repo.RunInTransaction(ctx, func(repo PaymentRepository) error {
+	err = s.repo.RunInTransaction(ctx, func(repo Repository) error {
 		tx, err := repo.GetByReferenceNumberForUpdate(ctx, gwPayload.ReferenceNumber)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve transaction by reference: %w", err)
@@ -327,7 +360,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 		// Idempotency: a terminal status is already recorded (possibly by a
 		// concurrent delivery that committed first) — nothing more to do.
-		if tx.Status == PaymentStatusSuccess || tx.Status == PaymentStatusFailed {
+		if tx.Status == StatusSuccess || tx.Status == StatusFailed {
 			slog.InfoContext(ctx, "webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
 			return nil
 		}
@@ -335,7 +368,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		// Before accepting a payment as settled, verify the gateway-reported
 		// amount and currency match what we recorded at checkout. Reject on any
 		// mismatch (incl. a missing amount) rather than marking it paid.
-		if newStatus == PaymentStatusSuccess {
+		if newStatus == StatusSuccess {
 			if !gwPayload.Amount.Equal(tx.Amount) || !strings.EqualFold(gwPayload.Currency, tx.Currency) {
 				return fmt.Errorf("reference %s: expected %s %s, got %s %s: %w",
 					tx.ReferenceNumber, tx.Amount, tx.Currency, gwPayload.Amount, gwPayload.Currency, ErrAmountMismatch)
@@ -386,9 +419,9 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 	var statusStr string
 	switch finalStatus {
-	case PaymentStatusSuccess:
+	case StatusSuccess:
 		statusStr = "success"
-	case PaymentStatusFailed:
+	case StatusFailed:
 		statusStr = "fail"
 	}
 	if statusStr == "" {

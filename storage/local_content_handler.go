@@ -130,8 +130,9 @@ func (h *LocalContentHandler) download(w http.ResponseWriter, r *http.Request) {
 	// Extract and verify security constraints
 	token := r.URL.Query().Get("token")
 	expiresAtStr := r.URL.Query().Get("expiresAt")
-	if token == "" || expiresAtStr == "" {
-		writeJSONError(w, http.StatusUnauthorized, "missing security token or expiration")
+	disposition := r.URL.Query().Get("disposition")
+	if token == "" || expiresAtStr == "" || disposition == "" {
+		writeJSONError(w, http.StatusUnauthorized, "missing security token or constraints")
 		return
 	}
 
@@ -141,9 +142,13 @@ func (h *LocalContentHandler) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify HMAC signature
-	if !h.driver.VerifyDownloadToken(key, token, expiresAt) {
+	// Verify HMAC signature (it signs the disposition too)
+	if !h.driver.VerifyDownloadToken(key, token, expiresAt, disposition) {
 		writeJSONError(w, http.StatusUnauthorized, "invalid security token")
+		return
+	}
+	if !drivers.ValidDisposition(disposition) {
+		writeJSONError(w, http.StatusBadRequest, "invalid disposition")
 		return
 	}
 
@@ -169,8 +174,9 @@ func (h *LocalContentHandler) download(w http.ResponseWriter, r *http.Request) {
 	// sandbox policy (see its CSPWithSandboxDoesNotBlockPDF browser test).
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox")
+	// The URL says how the file is served, and its token signs that.
+	w.Header().Set("Content-Disposition", disposition)
 	// Check if the body can report its size (standard for files/drivers)
-	w.Header().Set("Content-Disposition", "inline")
 	if stater, ok := body.(interface{ Stat() (os.FileInfo, error) }); ok {
 		if fi, err := stater.Stat(); err == nil {
 			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))

@@ -107,10 +107,10 @@ A single `store.TaskRecord` holds what is needed to render a task, plus the coor
 ```go
 type TaskRecord struct {
     // 1. Identity
-    TaskID       string          // = the parent's step ID (a UUID); how external callers address this task
-    TaskType     string          // user-facing category from the TaskTemplate (e.g. "APPLICATION")
-    State        string          // current lifecycle state (drives rendering)
-    RenderConfig json.RawMessage // snapshotted render config for this task
+    TaskID         string // = the parent's step ID (a UUID); how external callers address this task
+    TaskType       string // user-facing category from the TaskTemplate (e.g. "APPLICATION")
+    State          string // current lifecycle state (drives rendering)
+    TaskTemplateID string // the task template it started from; its render config is resolved through it and ManifestVersion (renderconfig.Load)
 
     // 2. Parent coordinates — used to wake the parent workflow on completion. No ParentRunID: the
     // parent workflow never has more than one run, so "" always addresses the current one.
@@ -126,6 +126,10 @@ type TaskRecord struct {
     // 4. Render data — the active step's inputs plus what it and the caller added
     Data map[string]any
 
+    // 5. Claim — who is working the task; "" / nil when unclaimed
+    ClaimedBy string
+    ClaimedAt *time.Time
+
     CreatedAt, UpdatedAt time.Time
 }
 ```
@@ -134,14 +138,16 @@ type TaskRecord struct {
 
 ### Guarded writes
 
-`ActiveStepID` and `Seq` are written only by four conditional statements on `TaskStore`. Each is one atomic write whose guard is part of the statement, and each returns the rows it changed; **0 rows means the write was stale and was dropped, which is not an error.**
+`ActiveStepID` and `Seq` are written only by five conditional statements on `TaskStore`; a sixth, `WriteDraft`, writes only the data of the active step and moves neither. Each is one atomic write whose guard is part of the statement, and each returns the rows it changed; **0 rows means the write was stale and was dropped, which is not an error.**
 
 | Method               | Called by             | Guard                                   | Sets                                               |
 |----------------------|-----------------------|-----------------------------------------|----------------------------------------------------|
 | `ClaimStep`          | `StartTaskStep`        | stored `seq <= n`                       | active step, `seq = n`, template, `STARTING_STEP`, data from inputs |
 | `WriteRenderState`   | `StartTaskStep`        | active step is `A` and `seq = n`        | state and data the plugin produced                 |
 | `PersistSubmission`  | `CompleteTaskStep`    | active step is `A` and `seq = n`        | data, `ADVANCING`, `seq = n+1`                     |
+| `WriteDraft`         | `SaveDraft`           | active step is `A`, `seq = n`, and the step is showing (not `STARTING_STEP`, `ADVANCING`, `COMPLETED` or `CANCELLED`) | data only |
 | `CompleteTask`       | `HandleTaskCompletion`| stored `seq <= m`                       | `COMPLETED`, `seq = m`                             |
+| `CancelTask`         | `CancelTask`          | state is not `COMPLETED`                | `CANCELLED`, `seq = seq+1`                         |
 
 `InitTask` still exists for creating the row and for coarse fields, but it never writes `ActiveStepID` or `Seq`, so a stale full-record save cannot move them.
 
@@ -152,6 +158,21 @@ Two sets of coordinates, never both active at once:
 - **Parent coordinates** are written once at `StartTask` and consumed once at `HandleTaskCompletion`.
 - **The active step** is overwritten every time a new step claims the row, and is what `CompleteTaskStep` checks against.
 
+### Claims
+
+A claim records who is working a task. `ClaimedBy` and `ClaimedAt` are written only by two more conditional statements, `ClaimTask` and `ReleaseTask`, called by the `TaskManager` methods of the same name:
+
+| Method        | Guard                                                   | Sets                                          |
+|---------------|---------------------------------------------------------|-----------------------------------------------|
+| `ClaimTask`   | unclaimed or claimed by the holder, and not `COMPLETED` | holder; claim time unless the holder already had it |
+| `ReleaseTask` | claimed by the holder                                   | clears both                                   |
+
+The claim columns and the step columns are independent: a claim never changes `Seq`, so it does not make an open view stale, and no step write touches the claim. The claim therefore lasts for the whole task, across every step and every loop inside the task workflow, and is kept after the task completes. A loop in the parent workflow starts a new task, which starts unclaimed.
+
+taskflow only stores claims. The holder is an opaque value chosen by the host. `CompleteTaskStep` does not read `ClaimedBy`: anyone who can call it can submit the active step. For this MVP a claim is UI guidance so two people can see who is working the task and avoid working it at once (see the [integration guide](integration-guide.md#7-task-claims)).
+
+These are not the same as a step's claim (`ClaimStep`, above, which makes a step active), or the claims passed to the renderer (`renderer.Facts.Claims`, authorization facts such as `role:officer`).
+
 ## Lifecycle and states
 
 `TaskRecord.State` is plain string for flexibility — it's set by plugins and read by the renderer. The orchestrator itself writes these values:
@@ -160,6 +181,7 @@ Two sets of coordinates, never both active at once:
 - `STARTING_STEP` — set by the claim, while a step's plugin has not yet reported the state to render.
 - `ADVANCING` — set when a submission was accepted by the workflow and it is moving to the next node. It offers no actions, since a second submission could only be rejected as stale.
 - `COMPLETED` — set by `HandleTaskCompletion` when the task workflow ends.
+- `CANCELLED` — set by `TaskManager.CancelTask`, which closes a task from outside its workflow and terminates that workflow. Advancing `seq` drops any step write still in flight, and a submission is rejected as stale. The parent's TASK node is left waiting; the caller decides what happens to it, typically parking it with `ForceParkActivation` so an admin can resolve it.
 
 Everything else is a plugin's responsibility:
 
@@ -182,6 +204,8 @@ stateDiagram-v2
     ADVANCING --> STARTING_STEP : next step claims the row
     ADVANCING --> COMPLETED : task workflow ends
     DISPATCHED --> COMPLETED : task workflow ends
+    PENDING_USER --> CANCELLED : CancelTask
+    QUEUED_EXTERNALLY --> CANCELLED : CancelTask
 ```
 
 The state diagram above is illustrative — your plugins decide the transitions. The renderer keys its output on this value, so use stable, well-known strings. A render config that has no entry for `ADVANCING` or `STARTING_STEP` simply shows nothing interactive in those states.

@@ -5,82 +5,63 @@ package remote
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/OpenNSW/core/remote/auth"
 )
 
-// writeServices writes a services.json with a single bearer-auth service whose
-// token is the given (possibly scheme-prefixed) reference, and returns its path.
-func writeServices(t *testing.T, url, tokenRef string) string {
-	t.Helper()
-	body := fmt.Sprintf(
-		`{"version":"1.0","services":[{"id":"svc","url":%q,"auth":{"type":"bearer","options":{"token":%q}}}]}`,
-		url, tokenRef,
-	)
-	path := filepath.Join(t.TempDir(), "services.json")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	return path
+// bearerService returns a single bearer-auth service with the given token.
+func bearerService(url, token string) ServiceConfig {
+	return ServiceConfig{
+		ID:   "svc",
+		URL:  url,
+		Auth: &auth.Config{Type: auth.TypeBearer, Bearer: &auth.BearerConfig{Token: token}},
+	}
 }
 
-func TestManager_LoadServices_ResolvesEnvSecretAtStartup(t *testing.T) {
-	var gotAuth string
+func TestManager_SetServices_SendsTokenUnchanged(t *testing.T) {
+	// A token shaped like an env reference reaches the server unchanged, even
+	// when that env var is set.
+	// Buffered so the handler never blocks; receiving from it orders the
+	// handler's write before the test's read.
+	gotAuth := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		gotAuth <- r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer server.Close()
 
 	t.Setenv("SVC_TOKEN", "resolved-token")
-	path := writeServices(t, server.URL, "env:SVC_TOKEN")
-
 	manager := NewManager()
-	require.NoError(t, manager.LoadServices(path))
+	require.NoError(t, manager.SetServices(bearerService(server.URL, "env:SVC_TOKEN")))
 
 	err := manager.Call(context.Background(), "svc", Request{Method: "GET", Path: "/"}, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer resolved-token", gotAuth)
+	assert.Equal(t, "Bearer env:SVC_TOKEN", <-gotAuth)
 }
 
-func TestManager_LoadServices_FailsLoudOnUnsetEnv(t *testing.T) {
-	path := writeServices(t, "http://local", "env:DEFINITELY_UNSET_TOKEN")
-
+func TestManager_SetServices_FailedReloadKeepsPreviousState(t *testing.T) {
+	// A first set succeeds.
 	manager := NewManager()
-	err := manager.LoadServices(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to configure auth for service")
-}
-
-func TestManager_LoadServices_LiteralTokenStillWorks(t *testing.T) {
-	// Backward compatibility: a plain literal token resolves to itself.
-	path := writeServices(t, "http://local", "plain-token")
-
-	manager := NewManager()
-	require.NoError(t, manager.LoadServices(path))
-}
-
-func TestManager_LoadServices_FailedReloadKeepsPreviousState(t *testing.T) {
-	// A first load succeeds.
-	good := writeServices(t, "http://local", "plain-token")
-	manager := NewManager()
-	require.NoError(t, manager.LoadServices(good))
+	require.NoError(t, manager.SetServices(bearerService("http://local", "plain-token")))
 	require.Contains(t, manager.ListServices(), "svc")
 
-	// A second load that fails (unresolvable reference) must leave the manager's
-	// existing state untouched, not corrupted/half-applied.
-	bad := writeServices(t, "http://other", "env:DEFINITELY_UNSET_TOKEN")
-	err := manager.LoadServices(bad)
+	// A second set that fails (auth type with no settings) must leave the
+	// manager's existing state untouched, not corrupted/half-applied.
+	err := manager.SetServices(
+		ServiceConfig{ID: "other", URL: "http://other"},
+		ServiceConfig{ID: "bad", URL: "http://bad", Auth: &auth.Config{Type: auth.TypeBearer}},
+	)
 	require.Error(t, err)
 
-	// The previously loaded service is still usable.
-	assert.Contains(t, manager.ListServices(), "svc")
+	// The previously set service is still the only one, and still usable.
+	assert.Equal(t, []string{"svc"}, manager.ListServices())
 	client, err := manager.GetClient("svc")
 	require.NoError(t, err)
 	assert.NotNil(t, client.authenticator)

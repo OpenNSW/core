@@ -272,7 +272,8 @@ func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nod
 	payload := AdminParkPayload{
 		WorkflowID:       workflow.GetInfo(ctx).WorkflowExecution.ID,
 		RunID:            workflow.GetInfo(ctx).WorkflowExecution.RunID,
-		RootWorkflowID:   g.rootWorkflowID(),
+		CaseID:           g.caseID(),
+		ManifestVersion:  g.manifestVersion(),
 		NodeID:           node.ID,
 		ActivationID:     nodeInfo.ActivationID,
 		NodeType:         string(node.Type),

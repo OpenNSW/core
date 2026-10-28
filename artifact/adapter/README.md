@@ -43,13 +43,9 @@ To make a type `T` (from package `dom`) loadable via the artifact registry, crea
    ```
 5. **Expose Fetch Helpers**:
    ```go
+   // reg is one manifest version's registry: set.Registry(ctx, version).
    func Load(ctx context.Context, reg *artifact.Registry, id string) (dom.T, error) {
        w, err := artifact.Latest[loadable](ctx, reg, id)
-       return w.T, err
-   }
-
-   func LoadVersion(ctx context.Context, reg *artifact.Registry, id, version string) (dom.T, error) {
-       w, err := artifact.Get[loadable](ctx, reg, id, version)
        return w.T, err
    }
    ```

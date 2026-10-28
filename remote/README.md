@@ -1,6 +1,6 @@
 # remote
 
-Registry-based outbound HTTP client manager. Services (external agencies, backend APIs) are declared in a JSON config file; the manager resolves endpoints, applies authentication, and executes requests — no per-service boilerplate in your application code.
+Registry-based outbound HTTP client manager. Services (external agencies, backend APIs) are declared as `ServiceConfig` values; the manager resolves endpoints, applies authentication, and executes requests — no per-service boilerplate in your application code.
 
 ## Usage
 
@@ -8,7 +8,7 @@ Registry-based outbound HTTP client manager. Services (external agencies, backen
 import "github.com/OpenNSW/core/remote"
 
 manager := remote.NewManager()
-if err := manager.LoadServices("configs/services.json"); err != nil {
+if err := manager.SetServices(cfg.Services...); err != nil {
     log.Fatal(err)
 }
 
@@ -21,37 +21,61 @@ err := manager.Call(ctx, "npqs-api", remote.Request{
 }, &result)
 ```
 
+`SetServices` replaces the whole registry and is all-or-nothing: if any service is invalid (unsupported auth type, missing auth settings, incomplete `tls` block) it returns an error and the previous registry stays in place.
+
 ## Services config
 
-`services.json` declares available services with their endpoint, timeout, and authentication:
+The package does not read configuration files. `ServiceConfig` is plain data with `json` and `yaml` tags, so the application decodes it from wherever it keeps its configuration — typically embedded in its own config struct — and passes the result to `SetServices`:
+
+```go
+type Config struct {
+    Services []remote.ServiceConfig `json:"services" yaml:"services"`
+}
+```
+
+YAML, e.g. via [`configyaml`](../configyaml/README.md):
+
+```yaml
+services:
+  - id: npqs-api
+    url: https://npqs.example.gov/api
+    timeout: 30s
+    auth:
+      type: oauth2
+      oauth2:
+        tokenURL: https://idp.example.gov/token
+        clientID: my-client
+        clientSecret: "{{env:NPQS_CLIENT_SECRET}}"
+        scopes: [npqs:submit]
+  - id: legacy-api
+    url: https://legacy.example.gov
+    timeout: 10s
+    auth:
+      type: apiKey
+      apiKey:
+        key: X-API-Key
+        value: "{{env:LEGACY_API_KEY}}"
+    tls:
+      clientCertFile: /etc/certs/client.crt
+      clientKeyFile: /etc/certs/client.key
+```
+
+JSON uses the same keys:
 
 ```json
 {
-  "version": "1",
   "services": [
     {
       "id": "npqs-api",
       "url": "https://npqs.example.gov/api",
-      "timeout_seconds": 30,
+      "timeout": "30s",
       "auth": {
         "type": "oauth2",
-        "options": {
-          "token_url": "https://idp.example.gov/token",
-          "client_id": "my-client",
-          "client_secret": "secret",
+        "oauth2": {
+          "tokenURL": "https://idp.example.gov/token",
+          "clientID": "my-client",
+          "clientSecret": "<client secret>",
           "scopes": ["npqs:submit"]
-        }
-      }
-    },
-    {
-      "id": "legacy-api",
-      "url": "https://legacy.example.gov",
-      "timeout_seconds": 10,
-      "auth": {
-        "type": "api_key",
-        "options": {
-          "key": "X-API-Key",
-          "value": "my-api-key"
         }
       }
     }
@@ -59,15 +83,37 @@ err := manager.Call(ctx, "npqs-api", remote.Request{
 }
 ```
 
+Or build it in code:
+
+```go
+manager.SetServices(remote.ServiceConfig{
+    ID:   "legacy-api",
+    URL:  "https://legacy.example.gov",
+    Auth: &auth.Config{Type: auth.TypeAPIKey, APIKey: &auth.APIKeyConfig{Key: "X-API-Key", Value: os.Getenv("LEGACY_API_KEY")}},
+})
+```
+
+### Secrets
+
+Secret fields (`apiKey.value`, `bearer.token`, `oauth2.clientSecret`) are plain strings. With [`configyaml`](../configyaml/README.md), write them as `{{env:NAME}}` / `{{file:/path}}` placeholders, which are expanded while the file is loaded (as in the YAML example above).
+
+| Field     | Description                                                                                                                       |
+|-----------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `id`      | Service identifier passed to `Call` / `CallRaw` / `GetClient`.                                                                    |
+| `url`     | Base URL; request paths are resolved against it.                                                                                  |
+| `timeout` | Optional per-request timeout as a Go duration (`30s`, `1m`).                                                                      |
+| `auth`    | Optional. `type` names the strategy, and the block of the same name carries its settings — see [`remote/auth`](auth/README.md).    |
+| `tls`     | Optional mTLS client certificate: PEM file paths, read on each handshake so rotated material is picked up without a restart.       |
+
 ## Authentication strategies
 
 See [`remote/auth`](auth/README.md) for the full reference. Supported types:
 
-| `type` | Description |
-|---|---|
-| `api_key` | Static header (e.g. `X-API-Key: value`) |
-| `bearer` | `Authorization: Bearer <token>` |
-| `oauth2` | Client credentials flow with automatic token caching |
+| `type` / settings block | Description                                          |
+|-------------------------|------------------------------------------------------|
+| `apiKey`                | Static header (e.g. `X-API-Key: value`)              |
+| `bearer`                | `Authorization: Bearer <token>`                      |
+| `oauth2`                | Client credentials flow with automatic token caching |
 
 ## Request bodies
 

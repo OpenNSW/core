@@ -78,9 +78,20 @@ meta, err := svc.Save(ctx, "certificate.pdf", "application/pdf", bytes.NewReader
 content, mimeType, err := svc.Download(ctx, fileKey)
 
 // Or get a presigned download URL for the client
-url, err := svc.GetDownloadURL(ctx, fileKey)
-// url — presigned GET URL, valid for PresignTTLSeconds
+download, err := svc.DownloadURL(ctx, fileKey)
+// download.URL         — presigned GET URL
+// download.ExpiresAt   — when it stops working, in Unix seconds (PresignTTLSeconds from now)
+// download.ContentType — the type the file was stored with
+// download.Disposition — "inline" if a browser opens the file, "attachment" if it saves it
 ```
+
+`Service` decides how a file is served, from the type it was stored with. A browser interprets many types as documents (HTML, XML including XHTML and XSLT, SVG), and those run script from the origin they are served on. So a file is served inline only when its type is on the inline list, and every other file is saved. The `Service` asks the driver to serve the file with the disposition it chose: the S3 driver signs `response-content-disposition=attachment` into the URL of a file that is saved, and the local route signs the disposition into its token and sends it as `Content-Disposition`. The download response of `storage.NewHTTPHandler(svc)` carries `mime_type` and `disposition`, so a client does not guess from the file's name.
+
+The inline list is `DefaultInlineTypes()`: `application/pdf`, `image/png`, `image/jpeg`, `image/gif`, `image/webp` and `text/plain`. `WithInlineTypes(types...)` replaces it. Each type is a bare, lower-case `type/subtype` (`ValidMediaType` checks one), and a file's own parameters, such as `; charset=utf-8`, are ignored when matching. Called with no types, it saves every file.
+
+List a type a browser interprets as a document, such as `text/html`, only when the service stores that type itself, for example documents it generates with `Save`, and clients cannot upload it. `NewService` panics when a type that `WithAllowedUploadTypes` lets clients upload, or any type when that option is absent, also opens inline and is not on the default list. A host reports the same mistake without a panic by calling `CheckUploadTypes(allowed, inline)` with its two lists when it validates its configuration.
+
+`DownloadURL` looks the file up with the driver's `Stat`, so it returns an error wrapping `storage.ErrNotFound` for a file the backend does not hold, and `storage.NewHTTPHandler(svc)` answers that with 404. On S3 the lookup is a `HeadObject`, which needs the same permission as a `GetObject`.
 
 ### Delete
 
@@ -90,21 +101,28 @@ err := svc.Delete(ctx, fileKey)
 
 ### Upload limits
 
-By default, `Upload` accepts any MIME type and caps files at 32MB. Pass options to `NewService` to restrict the types or change the cap:
+By default, `Upload` accepts any MIME type and any file name, and caps files at 32MB. Pass options to `NewService` to restrict the types, match file names to them, or change the cap:
 
 ```go
 svc := storage.NewService(driver,
     storage.WithAllowedUploadTypes("application/pdf", "image/png"), // others: ErrContentTypeNotAllowed
     storage.WithMaxUploadSize(10<<20),                              // bytes; default 32MB
+    storage.WithUploadTypeExtensions(map[string][]string{           // others: *ExtensionMismatchError
+        "application/pdf": {".pdf"},
+        "image/png":       {".png"},
+    }),
 )
 ```
 
-| Option                             | Default           | Effect                                                                                                        |
-|------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|
-| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload |
-| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                        |
+| Option                             | Default           | Effect                                                                                                                                                                                              |
+|------------------------------------|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `WithAllowedUploadTypes(types...)` | any type accepted | `Upload` returns `ErrContentTypeNotAllowed` for any other type. Called with no types, it rejects every upload                                                                                       |
+| `WithMaxUploadSize(n)`             | 32MB              | `Upload` returns `*FileTooLargeError` for a larger size. Panics if `n` is not positive                                                                                                              |
+| `WithUploadTypeExtensions(byType)` | any name accepted | `Upload` returns `*ExtensionMismatchError` for a name whose extension isn't listed for its type, and gives a name without one the type's first. Panics on a map `CheckUploadTypeExtensions` refuses |
 
 `Upload` also returns `ErrInvalidSize` for a size that isn't positive. The limits are checked when the upload URL is issued, and the URL is signed for that size and type, so a client can't upload something else with it. `storage.NewHTTPHandler(svc)` maps these errors to 415 and 400. The limits apply to `Upload` only, not to `Save`.
+
+The key keeps the file name's extension, and a download is named by it, so a name and a type that disagree, such as `setup.exe` sent as `application/pdf`, would be saved by whoever downloads it as a program. `WithUploadTypeExtensions` takes, per media type, the extensions a name may end in, in order of preference: the first is the one a name without an extension gets, and returned as `Name`. Types are compared without parameters or case, extensions without case. A type with no entry isn't checked, and core lists none itself: which types and extensions a service accepts is the host's policy. A host that wants every uploadable type covered checks its own lists, and reports a malformed map without a panic with `CheckUploadTypeExtensions(byType)`.
 
 ## Implementing a custom driver
 
@@ -113,12 +131,15 @@ type StorageDriver interface {
     Save(ctx context.Context, key string, body io.Reader, contentType string) error
     Get(ctx context.Context, key string) (io.ReadCloser, string, error)
     Delete(ctx context.Context, key string) error
-    GetDownloadURL(ctx context.Context, key string) (string, error)
+    Stat(ctx context.Context, key string) (drivers.ObjectInfo, error)
+    GetDownloadURL(ctx context.Context, key string, disposition string) (string, error)
     GetUploadURL(ctx context.Context, key string, contentType string, maxSizeBytes int64) (string, error)
 }
 ```
 
 Register your driver by passing it directly to `storage.NewService(driver)`.
+
+`Stat` returns the type and size the file was stored with, or an error wrapping `drivers.ErrNotFound`. `GetDownloadURL` is told the disposition, `drivers.DispositionInline` or `drivers.DispositionAttachment`, and serves the file that way: for an attachment, a browser must save the file instead of opening it. The driver decides nothing about it.
 
 ## Config reference
 

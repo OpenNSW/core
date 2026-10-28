@@ -102,17 +102,20 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 	}
 
 	// 4. Mock Definition Hydration Activity Provider
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_phyto_workflow").Return(phytoDef, nil)
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
+	// The definitions come from the manifest version the master workflow was started with.
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_phyto_workflow", 7).Return(phytoDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow", 7).Return(healthDef, nil)
 
-	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	// Mock Task Activity Processing Handlers. Each branch carries the master's manifest version
+	// on its task activations.
+	pinned := mock.MatchedBy(func(ref ActivationRef) bool { return ref.ManifestVersion == 7 })
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, pinned).Return(TaskResult{Output: map[string]any{
 		"inspection_status": "APPROVED_PHYTO",
-	}, nil)
+	}}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_health_inspection", mock.Anything, mock.Anything, pinned).Return(TaskResult{Output: map[string]any{
 		"inspection_status": "APPROVED_HEALTH",
-	}, nil)
+	}}, nil)
 
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -121,6 +124,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithDifferentTemplates() {
 
 	// 5. Establish initial runtime variables simulating dynamic lookup results
 	initialVars := map[string]any{
+		VarManifestVersion: 7,
 		"active_oga_requirements": []map[string]any{
 			{
 				"template_id": "oga_phyto_workflow",
@@ -230,12 +234,12 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithSameTemplateMode() {
 	}
 
 	// 3. Mock Definition Hydration Activity Provider
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "simple_child_workflow").Return(childDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "simple_child_workflow", mock.Anything).Return(childDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "process_item", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{Output: map[string]any{
 		"processed_status": "DONE_SUCCESS",
-	}, nil)
+	}}, nil)
 
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -330,10 +334,10 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	}
 
 	// Mock Definition Hydration Activity Provider
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "failing_child_workflow").Return(childDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "failing_child_workflow", mock.Anything).Return(childDef, nil)
 
 	// Mock Task Activity to fail
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("task failed intentionally"))
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "fail_task", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{}, errors.New("task failed intentionally"))
 
 	// Register nested sub-workflow runtime interpreter engine
 	env.RegisterWorkflowWithOptions(GraphInterpreterWorkflow, workflow.RegisterOptions{Name: "GraphInterpreterWorkflow"})
@@ -357,9 +361,9 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 	const parentWorkflowID = "master-collect-all-test"
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: parentWorkflowID})
 
-	// The default Activity retry policy retries "fail_task" ~10 times (~10s of simulated
-	// time, per Temporal's test environment defaults) before giving up and returning the
-	// error to the child workflow, so the abort signals must be scheduled well past that.
+	// taskRetryPolicy retries "fail_task" for about 24h of (skipped) workflow time before
+	// giving up and returning the error to the child workflow, so the abort signals must be
+	// scheduled well past that.
 	for _, branchID := range []string{"branch-1-0", "branch-2-1"} {
 		childWorkflowID := FormatChildWorkflowID(parentWorkflowID, parentWorkflowID, "m_fanout", branchID)
 		env.RegisterDelayedCallback(func() {
@@ -373,7 +377,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 				Action:       AdminActionAbort,
 			})
 			s.NoError(err)
-		}, 15*time.Second)
+		}, 48*time.Hour)
 	}
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AdminResolutionSignalName, AdminResolutionSignal{
@@ -381,7 +385,7 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCollectAllFailures() {
 			ActivationID: parkedActivationID(s.T(), env, "m_fanout"),
 			Action:       AdminActionAbort,
 		})
-	}, 16*time.Second)
+	}, 48*time.Hour+time.Second)
 
 	// Execute Test Execution
 	env.ExecuteWorkflow(GraphInterpreterWorkflow, masterDef, initialVars)
@@ -515,17 +519,17 @@ func (s *NSWEngineTestSuite) TestDynamicFanOutWithCrossBranchBroadcast() {
 	}
 
 	// 4. Mock Definition Hydration Activity Provider
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_phyto_workflow").Return(phytoDef, nil)
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow").Return(healthDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_phyto_workflow", mock.Anything).Return(phytoDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "oga_health_workflow", mock.Anything).Return(healthDef, nil)
 
 	// Mock Task Activity Processing Handlers
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "run_phyto_inspection", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{Output: map[string]any{
 		"inspection_status": "APPROVED_CLEAN",
-	}, nil)
+	}}, nil)
 
-	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything, mock.Anything).Return(map[string]any{
+	env.OnActivity("ExecuteTaskActivity", mock.Anything, "verify_cross_border_docs", mock.Anything, mock.Anything, mock.Anything).Return(TaskResult{Output: map[string]any{
 		"health_clearance": "PASSED_SECURE",
-	}, nil)
+	}}, nil)
 
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -635,8 +639,8 @@ func (s *NSWEngineTestSuite) TestConcurrentSplitTasksDoNotCrossTalkBroadcast() {
 		},
 	}
 
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "signal_emitter").Return(emitDef, nil)
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "signal_waiter").Return(waitDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "signal_emitter", mock.Anything).Return(emitDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "signal_waiter", mock.Anything).Return(waitDef, nil)
 
 	// Master: PARALLEL_SPLIT fans out into two independent SPLIT_TASK groups (A and B), each
 	// running its own emit/wait pair concurrently, then PARALLEL_JOIN converges before END.
@@ -788,7 +792,7 @@ func (s *NSWEngineTestSuite) TestChildBranchEndNodeDoesNotFireCompletionHook() {
 		},
 		Edges: []Edge{{ID: "ce1", SourceID: "c_start", TargetID: "c_end"}},
 	}
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf").Return(childDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf", mock.Anything).Return(childDef, nil)
 
 	// Guard against concurrent appends under -race if multiple branches fire the hook concurrently.
 	var mu sync.Mutex
@@ -835,7 +839,7 @@ func (s *NSWEngineTestSuite) TestChildBranchCompletionHandlerErrorDoesNotHang() 
 		},
 		Edges: []Edge{{ID: "ce1", SourceID: "c_start", TargetID: "c_end"}},
 	}
-	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf").Return(childDef, nil)
+	env.OnActivity("FetchWorkflowDefinitionActivity", mock.Anything, "child_wf", mock.Anything).Return(childDef, nil)
 
 	// The host recognizes only the top-level workflow; synthetic child IDs (which contain "--")
 	// return an error, as a real DB-backed completion handler keyed by workflow ID would.

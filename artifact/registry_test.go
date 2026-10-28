@@ -268,19 +268,48 @@ func TestManifest(t *testing.T) {
 			t.Errorf("expected required-fields error, got %v", err)
 		}
 	})
+
+	t.Run("RegisterFromConfig rejects two rows for one id, kind and version", func(t *testing.T) {
+		reg := artifact.NewRegistry(testutil.MemLoader{"a.json": []byte(`{"subject":"A"}`)})
+		cfg := artifact.ManifestConfig{Artifacts: []artifact.ManifestRow{
+			{ID: "form", Kind: "email", Path: "a.json"},
+			{ID: "form", Kind: "email", Path: "b.json"},
+		}}
+		err := artifact.RegisterFromConfig(reg, cfg)
+		if err == nil || !strings.Contains(err.Error(), "rows 0 and 1") {
+			t.Fatalf("expected a duplicate-row error naming both rows, got %v", err)
+		}
+		// Nothing is registered from a rejected manifest.
+		if _, err := artifact.Latest[fakeEmail](context.Background(), reg, "form"); !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("expected ErrNotFound after a rejected manifest, got %v", err)
+		}
+	})
+
+	t.Run("RegisterFromConfig accepts one id under two kinds or two versions", func(t *testing.T) {
+		reg := artifact.NewRegistry(testutil.MemLoader{})
+		cfg := artifact.ManifestConfig{Artifacts: []artifact.ManifestRow{
+			{ID: "form", Kind: "email", Path: "a.json"},
+			{ID: "form", Kind: "custom_ruleset", Path: "b.json"},
+			{ID: "list", Kind: "email", Version: "1", Path: "c.json"},
+			{ID: "list", Kind: "email", Version: "2", Path: "d.json"},
+		}}
+		if err := artifact.RegisterFromConfig(reg, cfg); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
 }
 
 func TestLoadManifest(t *testing.T) {
 	t.Run("Load manifest from the source root", func(t *testing.T) {
 		m := testutil.MemLoader{
-			artifact.ManifestFilename: []byte(`{
+			artifact.ManifestPath(1): []byte(`{
 				"artifacts": [
 					{ "id": "test_id", "kind": "email", "version": "v1", "path": "path/to/email.json" }
 				]
 			}`),
 		}
 
-		cfg, err := artifact.LoadManifest(context.Background(), m)
+		cfg, err := artifact.LoadManifest(context.Background(), m, 1)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -290,7 +319,7 @@ func TestLoadManifest(t *testing.T) {
 	})
 
 	t.Run("Missing manifest surfaces the loader error", func(t *testing.T) {
-		cfg, err := artifact.LoadManifest(context.Background(), testutil.MemLoader{})
+		cfg, err := artifact.LoadManifest(context.Background(), testutil.MemLoader{}, 1)
 		if !errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}

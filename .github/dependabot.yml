@@ -21,6 +21,9 @@ updates:
       - "/json"
       - "/xmlgen"
       - "/htmlgen"
+      - "/cors"
+      - "/temporal"
+      - "/telemetry"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -36,6 +39,9 @@ updates:
       golang-x:
         patterns:
           - "golang.org/x/*"
+      opentelemetry:
+        patterns:
+          - "go.opentelemetry.io/*"
       minor-and-patch:
         update-types:
           - "minor"

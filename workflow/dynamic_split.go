@@ -191,7 +191,10 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		for idx, templateID := range batch {
 			futures[idx] = workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 				StartToCloseTimeout: 15 * time.Second,
-			}), "FetchWorkflowDefinitionActivity", templateID)
+				// Without a policy a template that can't be fetched is retried forever; with it the
+				// split parks once the attempts run out.
+				RetryPolicy: taskRetryPolicy,
+			}), "FetchWorkflowDefinitionActivity", templateID, g.manifestVersion())
 		}
 
 		for idx, templateID := range batch {
@@ -209,7 +212,8 @@ func (g *graphInterpreter) spawnChildWorkflows(
 
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
-			VarRootWorkflowID:   g.rootWorkflowID(),
+			VarCaseID:           g.caseID(),
+			VarManifestVersion:  g.manifestVersion(),
 			VarSplitNodeID:      node.ID,
 			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{
@@ -219,7 +223,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 			},
 		}
 
-		deterministicChildID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		deterministicChildID := FormatChildWorkflowID(g.caseID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			WorkflowID: deterministicChildID,
 		})
@@ -240,7 +244,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 	// can still record every branch that was actually spawned.
 	var startErrors []error
 	for _, p := range prepared {
-		childID := FormatChildWorkflowID(g.rootWorkflowID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
+		childID := FormatChildWorkflowID(g.caseID(), parentInfo.WorkflowExecution.ID, node.ID, p.BranchID)
 		var childExec workflow.Execution
 		if err := activeBranches[childID].Future.GetChildWorkflowExecution().Get(ctx, &childExec); err != nil {
 			startErrors = append(startErrors, fmt.Errorf("failed to start child workflow %s: %w", childID, err))

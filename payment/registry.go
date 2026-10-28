@@ -7,51 +7,76 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 )
 
-// GatewayRegistry manages the discovery and lookup of payment gateways.
-type GatewayRegistry interface {
+// Registry manages the discovery and lookup of payment gateways.
+type Registry interface {
 	// Get retrieves a gateway implementation by its ID.
-	Get(id string) (PaymentGateway, error)
+	Get(id string) (Gateway, error)
 
-	// ListInfo returns the aggregated metadata for all supported gateways.
-	ListInfo() []GatewayInfo
+	// ListInfo returns the aggregated metadata for the active gateways that
+	// can collect payments for payee.
+	ListInfo(payee Payee) []GatewayInfo
+
+	// ResolvePayee returns the gateway's mapping for payee: the service's
+	// entry merged over its org's defaults. A gateway with no entry for payee
+	// returns an error wrapping ErrPayeeNotMapped.
+	ResolvePayee(gatewayID string, payee Payee) (json.RawMessage, error)
 }
 
 type paymentRegistry struct {
 	mu       sync.RWMutex
-	gateways map[string]PaymentGateway
+	gateways map[string]Gateway
 	infos    map[string]GatewayInfo
+	payees   map[string]map[Payee]json.RawMessage
 }
 
-// NewRegistry initializes a new registry by loading configuration from a file.
-// For each configured gateway it invokes the matching factory to construct a
-// fully configured implementation, so gateways are immutable after init.
-func NewRegistry(configPath string, factories map[string]Factory) (GatewayRegistry, error) {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read payment methods config: %w", err)
-	}
+// Config lists the payment methods a registry serves. It is plain data: the
+// host loads it however it likes — typically as part of its own config file,
+// via github.com/OpenNSW/core/configyaml, which also resolves "{{env:NAME}}" /
+// "{{file:/path}}" placeholders — and passes it to NewRegistry.
+type Config struct {
+	Methods []MethodConfig `yaml:"methods"`
+}
 
-	var config struct {
-		Version string        `json:"version"`
-		Methods []GatewayInfo `json:"methods"`
-	}
+// MethodConfig is one payment method: its discovery info, its gateway's
+// config, and the payees it can collect for.
+type MethodConfig struct {
+	GatewayInfo `yaml:",inline"`
 
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payment methods config: %w", err)
-	}
+	// Config is the method's gateway config, left undecoded: its shape is the
+	// gateway's own, so the gateway's Factory decodes it into its own type.
+	Config yaml.Node `yaml:"config"`
 
+	// Payees maps each org id to the payees this method collects for under it.
+	Payees map[string]OrgPayees `yaml:"payees"`
+}
+
+// NewRegistry initializes a new registry from cfg. For each configured gateway
+// it invokes the matching factory to construct a fully configured
+// implementation, so gateways are immutable after init. Each of a gateway's
+// payee mappings is checked with its ValidatePayeeMapping here, so a bad
+// mapping fails startup rather than a payer's checkout.
+func NewRegistry(cfg Config, factories map[string]Factory) (Registry, error) {
 	registry := &paymentRegistry{
-		gateways: make(map[string]PaymentGateway),
+		gateways: make(map[string]Gateway),
 		infos:    make(map[string]GatewayInfo),
+		payees:   make(map[string]map[Payee]json.RawMessage),
 	}
 
-	for _, info := range config.Methods {
+	for _, method := range cfg.Methods {
+		info := method.GatewayInfo
 		registry.infos[info.ID] = info
+
+		payees, err := resolvePayees(method.Payees)
+		if err != nil {
+			return nil, fmt.Errorf("gateway %s: %w", info.ID, err)
+		}
+		registry.payees[info.ID] = payees
 
 		// If a factory is registered for this info, construct the gateway from
 		// its config once, here. No post-init mutation.
@@ -59,9 +84,14 @@ func NewRegistry(configPath string, factories map[string]Factory) (GatewayRegist
 			if factory == nil {
 				return nil, fmt.Errorf("factory for gateway %s is nil", info.ID)
 			}
-			gateway, err := factory(info.Config)
+			gateway, err := factory(method.Config.Decode)
 			if err != nil {
 				return nil, fmt.Errorf("failed to construct gateway %s: %w", info.ID, err)
+			}
+			for payee, mapping := range payees {
+				if err := gateway.ValidatePayeeMapping(mapping); err != nil {
+					return nil, fmt.Errorf("gateway %s: payee %s: %w", info.ID, payee, err)
+				}
 			}
 			registry.gateways[info.ID] = gateway
 		}
@@ -75,7 +105,7 @@ func NewRegistry(configPath string, factories map[string]Factory) (GatewayRegist
 	return registry, nil
 }
 
-func (r *paymentRegistry) Get(id string) (PaymentGateway, error) {
+func (r *paymentRegistry) Get(id string) (Gateway, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -87,20 +117,25 @@ func (r *paymentRegistry) Get(id string) (PaymentGateway, error) {
 	return gateway, nil
 }
 
-func (r *paymentRegistry) ListInfo() []GatewayInfo {
+func (r *paymentRegistry) ResolvePayee(gatewayID string, payee Payee) (json.RawMessage, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	mapping, ok := r.payees[gatewayID][payee]
+	if !ok {
+		return nil, fmt.Errorf("gateway %s, payee %s: %w", gatewayID, payee, ErrPayeeNotMapped)
+	}
+	return mapping, nil
+}
+
+func (r *paymentRegistry) ListInfo(payee Payee) []GatewayInfo {
 	r.mu.RLock()
 
 	// Pre-allocate capacity to avoid repeated slice re-allocations.
 	activeMethods := make([]GatewayInfo, 0, len(r.infos))
 	for _, info := range r.infos {
-		if info.IsActive {
-			// Sanitize: Return only UI-safe fields
-			activeMethods = append(activeMethods, GatewayInfo{
-				ID:         info.ID,
-				IsActive:   info.IsActive,
-				RenderInfo: info.RenderInfo,
-				// Config is omitted intentionally
-			})
+		if _, mapped := r.payees[info.ID][payee]; info.IsActive && mapped {
+			activeMethods = append(activeMethods, info)
 		}
 	}
 	// Release the lock before the CPU-bound sort so other readers aren't blocked.

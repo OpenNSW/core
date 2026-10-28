@@ -452,19 +452,19 @@ func TestNewTokenExtractor_RejectsFixedSchemaClaimNames(t *testing.T) {
 	}
 	for _, name := range names {
 		t.Run(name+"/optional", func(t *testing.T) {
-			if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID}, WithUserClaims(ClaimSpec{Optional: []string{name}})); err == nil {
+			if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, WithUserClaims(ClaimSpec{Optional: []string{name}})); err == nil {
 				t.Fatalf("expected error declaring fixed-schema claim %q", name)
 			}
 		})
 		t.Run(name+"/required", func(t *testing.T) {
-			if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID}, WithUserClaims(ClaimSpec{Required: []string{name}})); err == nil {
+			if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, WithUserClaims(ClaimSpec{Required: []string{name}})); err == nil {
 				t.Fatalf("expected error declaring fixed-schema claim %q", name)
 			}
 		})
 	}
 
 	t.Run("client variant is also rejected", func(t *testing.T) {
-		if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID}, WithClientClaims(ClaimSpec{Required: []string{"scope"}})); err == nil {
+		if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, WithClientClaims(ClaimSpec{Required: []string{"scope"}})); err == nil {
 			t.Fatalf("expected error declaring fixed-schema claim via client option")
 		}
 	})
@@ -473,7 +473,7 @@ func TestNewTokenExtractor_RejectsFixedSchemaClaimNames(t *testing.T) {
 		// The natural result of strings.Split on an env var with a trailing
 		// comma. Dropping it silently means an enforcement rule the caller
 		// asked for never applies.
-		if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID}, WithUserClaims(ClaimSpec{Required: []string{"email", ""}})); err == nil {
+		if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, WithUserClaims(ClaimSpec{Required: []string{"email", ""}})); err == nil {
 			t.Fatalf("expected error for a blank claim name")
 		}
 	})
@@ -481,7 +481,7 @@ func TestNewTokenExtractor_RejectsFixedSchemaClaimNames(t *testing.T) {
 	t.Run("collision error names every offender deterministically", func(t *testing.T) {
 		var first string
 		for i := range 8 {
-			_, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID},
+			_, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID,
 				WithUserClaims(ClaimSpec{Optional: []string{"scope", "roles", "sub"}}))
 			if err == nil {
 				t.Fatalf("expected error")
@@ -508,7 +508,7 @@ func TestNewTokenExtractor_RejectsFixedSchemaClaimNames(t *testing.T) {
 func TestNewTokenExtractor_AllowsFormerlyFixedClaimNames(t *testing.T) {
 	for _, name := range []string{"email", "phone_number", "ouId", "ouHandle", "given_name"} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, []string{testClientID}, WithUserClaims(ClaimSpec{Optional: []string{name}})); err != nil {
+			if _, err := NewTokenExtractor("https://localhost/jwks", testIssuer, testClientID, WithUserClaims(ClaimSpec{Optional: []string{name}})); err != nil {
 				t.Fatalf("expected %q to be a legitimate extra claim, got error: %v", name, err)
 			}
 		})

@@ -18,7 +18,8 @@ func completionFixture(t *testing.T, onCompleted TaskCompletedCallback) (*TaskMa
 	t.Helper()
 	db := newSafeMockTaskStore()
 	db.InitTask(context.Background(), store.TaskRecord{
-		TaskID: wakeTaskID, TaskWorkflowID: "task-wf", State: "STARTING", Data: map[string]any{},
+		ManifestVersion: 1,
+		TaskID:          wakeTaskID, TaskWorkflowID: "task-wf", State: "STARTING", Data: map[string]any{},
 		ParentWorkflowID: "parent-wf", ParentStepID: "parent-step",
 	})
 	if _, err := db.ClaimStep(context.Background(), wakeTaskID, store.StepClaim{StepID: stepB, Seq: 6, State: store.StateStartingStep}); err != nil {
