@@ -105,6 +105,10 @@ type AdminParkPayload struct {
 	// to be matched to this parking rather than some other one, including an earlier parking of the
 	// same NodeID (a retry or loop revisit mints a new ActivationID each time it parks).
 	ActivationID string
+	// Seq is the workflow-wide step counter value for this run of the parked node (NodeInfo.Seq).
+	// Hosts use it to order a park notification against later step claims so a late notification
+	// cannot overwrite a step that started after the park was resolved.
+	Seq int64
 	// NodeType is the type of the node that parked (TASK, GATEWAY, etc.).
 	NodeType string
 	// TaskTemplateID identifies the task template the parked node was running. Empty for

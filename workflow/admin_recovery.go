@@ -276,6 +276,7 @@ func (g *graphInterpreter) notifyAdminPark(ctx workflow.Context, node *Node, nod
 		ManifestVersion:  g.manifestVersion(),
 		NodeID:           node.ID,
 		ActivationID:     nodeInfo.ActivationID,
+		Seq:              nodeInfo.Seq,
 		NodeType:         string(node.Type),
 		TaskTemplateID:   node.TaskTemplateID,
 		Cause:            nodeInfo.LastError,

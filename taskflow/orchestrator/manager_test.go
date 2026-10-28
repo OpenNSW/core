@@ -201,7 +201,7 @@ func (s *safeMockTaskStore) WriteDraft(_ context.Context, taskID, stepID string,
 		return 0, nil
 	}
 	switch t.State {
-	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled:
+	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled, store.StateOnHold:
 		return 0, nil
 	}
 	t.Data = data
@@ -229,6 +229,19 @@ func (s *safeMockTaskStore) CancelTask(_ context.Context, taskID string) (int64,
 		return 0, nil
 	}
 	t.State, t.Seq = store.StateCancelled, t.Seq+1
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) HoldTask(_ context.Context, taskID string, seq int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	advanced := t.State == store.StateAdvancing && t.Seq == seq+1
+	if !ok || (t.Seq > seq && !advanced) || t.State == store.StateCompleted || t.State == store.StateCancelled {
+		return 0, nil
+	}
+	t.State, t.Seq = store.StateOnHold, max(t.Seq, seq)
 	s.tasks[taskID] = t
 	return 1, nil
 }

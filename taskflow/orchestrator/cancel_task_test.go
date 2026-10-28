@@ -151,3 +151,53 @@ func TestHandleTaskCompletion_CancelledTaskDoesNotWakeParent(t *testing.T) {
 		t.Fatalf("row = %s, want %s", got.State, store.StateCancelled)
 	}
 }
+
+func TestHoldTask_MarksTaskOnHoldAndDropsLateNotifications(t *testing.T) {
+	tm, db, _ := cancelFixture(t, nil)
+	ctx := context.Background()
+
+	if err := tm.HoldTask(ctx, engine.AdminParkPayload{WorkflowID: cancelWorkflowID, NodeID: "step-1", Seq: 3}); err != nil {
+		t.Fatalf("HoldTask: %v", err)
+	}
+	got, _ := db.GetTask(ctx, cancelTaskID)
+	if got.State != store.StateOnHold || got.Seq != 3 {
+		t.Fatalf("row = (%s, %d), want (%s, 3)", got.State, got.Seq, store.StateOnHold)
+	}
+
+	// Resolving the park (RETRY or COMPLETE) claims the next step at seq 4, clearing ON_HOLD.
+	_, _ = db.ClaimStep(ctx, cancelTaskID, store.StepClaim{StepID: stepB, Seq: 4, State: store.StateStartingStep})
+	_, _ = db.WriteRenderState(ctx, cancelTaskID, stepB, 4, "PENDING_USER", nil)
+
+	// A late park notification from seq 3 is dropped and leaves the active step untouched.
+	if err := tm.HoldTask(ctx, engine.AdminParkPayload{WorkflowID: cancelWorkflowID, NodeID: "step-1", Seq: 3}); err != nil {
+		t.Fatalf("late HoldTask: %v", err)
+	}
+	got, _ = db.GetTask(ctx, cancelTaskID)
+	if got.State != "PENDING_USER" || got.Seq != 4 {
+		t.Fatalf("row = (%s, %d), want (PENDING_USER, 4)", got.State, got.Seq)
+	}
+
+	// An unknown workflow is ignored.
+	if err := tm.HoldTask(ctx, engine.AdminParkPayload{WorkflowID: "unknown-wf", Seq: 10}); err != nil {
+		t.Fatalf("HoldTask unknown workflow: %v", err)
+	}
+}
+
+func TestHoldTask_HoldsAStepThatParkedAfterItsSubmission(t *testing.T) {
+	tm, db, _ := cancelFixture(t, nil)
+	ctx := context.Background()
+
+	// The step's submission moved the row to ADVANCING at seq 4; the step then parks at seq 3.
+	_, _ = db.PersistSubmission(ctx, cancelTaskID, cancelStepID, 3, map[string]any{"a": 1})
+	if got, _ := db.GetTask(ctx, cancelTaskID); got.State != store.StateAdvancing || got.Seq != 4 {
+		t.Fatalf("fixture row = (%s, %d), want (%s, 4)", got.State, got.Seq, store.StateAdvancing)
+	}
+
+	if err := tm.HoldTask(ctx, engine.AdminParkPayload{WorkflowID: cancelWorkflowID, NodeID: "step-1", Seq: 3}); err != nil {
+		t.Fatalf("HoldTask: %v", err)
+	}
+	got, _ := db.GetTask(ctx, cancelTaskID)
+	if got.State != store.StateOnHold || got.Seq != 4 {
+		t.Fatalf("row = (%s, %d), want (%s, 4)", got.State, got.Seq, store.StateOnHold)
+	}
+}

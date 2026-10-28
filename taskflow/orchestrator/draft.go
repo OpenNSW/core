@@ -30,7 +30,7 @@ var ErrDraftNotEnabled = errors.New("step does not accept drafts")
 // template declares a draft accepts one.
 //
 //  1. Pre-check, from the task row: stepID is the active step, and the step is showing (its state
-//     is none of STARTING_STEP, ADVANCING, COMPLETED, CANCELLED).
+//     is none of STARTING_STEP, ADVANCING, COMPLETED, CANCELLED, ON_HOLD).
 //  2. Pre-resume extensions (authz) run on deep copies, with the step's draft command as
 //     CommandVar, whatever the payload carried. Post-resume extensions never run for a draft. A
 //     TaskManager built WithRequiredPreResumeExtensions first refuses, with ErrStepNotGuarded, a
@@ -59,7 +59,7 @@ func (tm *TaskManager) SaveDraft(ctx context.Context, taskID, stepID string, pay
 		return fmt.Errorf("%w: call was for step %q, active step is %q", ErrStaleStep, stepID, record.ActiveStepID)
 	}
 	switch record.State {
-	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled:
+	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled, store.StateOnHold:
 		return fmt.Errorf("%w: step %q is %s", ErrStaleStep, stepID, record.State)
 	}
 	seq := record.Seq
