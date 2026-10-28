@@ -83,9 +83,10 @@ download, err := svc.DownloadURL(ctx, fileKey)
 // download.ExpiresAt   — when it stops working, in Unix seconds (PresignTTLSeconds from now)
 // download.ContentType — the type the file was stored with
 // download.Disposition — "inline" if a browser opens the file, "attachment" if it saves it
+// download.Size        — the file's size in bytes, as the backend holds it
 ```
 
-`Service` decides how a file is served, from the type it was stored with. A browser interprets many types as documents (HTML, XML including XHTML and XSLT, SVG), and those run script from the origin they are served on. So a file is served inline only when its type is on the inline list, and every other file is saved. The `Service` asks the driver to serve the file with the disposition it chose: the S3 driver signs `response-content-disposition=attachment` into the URL of a file that is saved, and the local route signs the disposition into its token and sends it as `Content-Disposition`. The download response of `storage.NewHTTPHandler(svc)` carries `mime_type` and `disposition`, so a client does not guess from the file's name.
+`Service` decides how a file is served, from the type it was stored with. A browser interprets many types as documents (HTML, XML including XHTML and XSLT, SVG), and those run script from the origin they are served on. So a file is served inline only when its type is on the inline list, and every other file is saved. The `Service` asks the driver to serve the file with the disposition it chose: the S3 driver signs `response-content-disposition=attachment` into the URL of a file that is saved, and the local route signs the disposition into its token and sends it as `Content-Disposition`. The download response of `storage.NewHTTPHandler(svc)` carries `mime_type` and `disposition`, so a client does not guess from the file's name. It also carries `size`, the file's size in bytes.
 
 The inline list is `DefaultInlineTypes()`: `application/pdf`, `image/png`, `image/jpeg`, `image/gif`, `image/webp` and `text/plain`. `WithInlineTypes(types...)` replaces it. Each type is a bare, lower-case `type/subtype` (`ValidMediaType` checks one), and a file's own parameters, such as `; charset=utf-8`, are ignored when matching. Called with no types, it saves every file.
 
