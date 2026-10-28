@@ -259,7 +259,7 @@ These are not magic — they're strings written by plugins. Your application can
 By design, these are hidden from the frontend:
 
 - **Temporal coordinates** — `TaskWorkflowID`, parent coordinates, etc. They're internal to the orchestrator and never serialised in `TaskView`. The only step-related fields a client sees are `step_id` (to send back) and `version` (read-only).
-- **Render config** — the JSON snapshot in `TaskRecord.RenderConfig` is server-side only; the FE sees the rendered output, not the template.
+- **Render config** — the config a task's task template names is server-side only; the FE sees the rendered output, not the template.
 - **Which plugin handled a step** — irrelevant to the UI.
 - **Workflow / task definitions** — also internal.
 

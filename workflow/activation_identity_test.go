@@ -44,12 +44,12 @@ func runRecordingSteps(t *testing.T, defJSON string, result func(template string
 		seen []stepSeen
 	)
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(ctx context.Context, template string, _ map[string]any, _ string, step ActivationRef) (map[string]any, error) {
+		Return(taskOutput(func(ctx context.Context, template string, _ map[string]any, _ string, step ActivationRef) (map[string]any, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			seen = append(seen, stepSeen{activityID: activity.GetInfo(ctx).ActivityID, template: template, step: step})
 			return result(template, len(seen)), nil
-		})
+		}))
 	var completion WorkflowCompletion
 	env.OnActivity("WorkflowCompletedActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, workflowID string, vars map[string]any, seq int64) error {

@@ -24,6 +24,8 @@ const (
 	ParkCategoryChildFailure ParkCategory = "CHILD_FAILURE"
 	// ParkCategoryDefinitionError: the workflow definition itself is invalid, so no variable fixes it.
 	ParkCategoryDefinitionError ParkCategory = "DEFINITION_ERROR"
+	// ParkCategoryAdminForced: an admin forced a waiting step to park via ForceParkActivation.
+	ParkCategoryAdminForced ParkCategory = "ADMIN_FORCED"
 	// ParkCategoryUnknown: the error was never categorized.
 	ParkCategoryUnknown ParkCategory = "UNKNOWN"
 )

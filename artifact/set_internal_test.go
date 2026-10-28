@@ -4,6 +4,7 @@
 package artifact
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,7 +22,7 @@ type countingLoader struct {
 func (c *countingLoader) Load(_ context.Context, path string) ([]byte, error) {
 	c.loads.Add(1)
 	if b, ok := c.files[path]; ok {
-		return b, nil
+		return bytes.Clone(b), nil
 	}
 	return nil, ErrNotFound
 }
@@ -147,7 +148,7 @@ func (b blockingLoader) Load(_ context.Context, path string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 	if f, ok := b.files[path]; ok {
-		return f, nil
+		return bytes.Clone(f), nil
 	}
 	return nil, ErrNotFound
 }
@@ -235,7 +236,7 @@ func (l *ctxLoader) Load(ctx context.Context, path string) ([]byte, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if b, ok := l.files[path]; ok {
-		return b, nil
+		return bytes.Clone(b), nil
 	}
 	return nil, ErrNotFound
 }

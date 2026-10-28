@@ -73,11 +73,11 @@ workflowRunner := workflow.NewTemporalManager(
     temporalClient,
     "default", // must match the namespace temporalClient was dialed with
     "MICRO_WORKFLOW_QUEUE",
-    func(payload workflow.TaskPayload) (map[string]any, error) {
-        return tm.StartTaskStep(context.Background(), payload)
+    func(ctx context.Context, payload workflow.TaskPayload) (map[string]any, error) {
+        return tm.StartTaskStep(ctx, payload)
     },
-    func(c workflow.WorkflowCompletion) error {
-        return tm.HandleTaskCompletion(context.Background(), c)
+    func(ctx context.Context, c workflow.WorkflowCompletion) error {
+        return tm.HandleTaskCompletion(ctx, c)
     },
 )
 
@@ -135,10 +135,10 @@ Register it: `pluginRegistry.Register("MY_PLUGIN", &MyPlugin{remoteManager: rm})
 ## Key invariants
 
 - **`TaskID` is the parent's step ID.** A step is one run of a TASK node, so a node revisited by a loop starts a new task. A step is addressed by its step ID (`CompleteTaskStep(ctx, taskID, stepID, payload)`), and a call for a step that is no longer active is rejected with `ErrStaleStep`.
-- **The task row is written through guarded statements.** `ActiveStepID` and `Seq` change only via `ClaimStep`, `WriteRenderState`, `PersistSubmission` and `CompleteTask`, each one atomic conditional write whose 0-rows result means "stale, dropped". `WriteDraft` (from `SaveDraft`) is guarded the same way and writes only the active step's data.
+- **The task row is written through guarded statements.** `ActiveStepID` and `Seq` change only via `ClaimStep`, `WriteRenderState`, `PersistSubmission`, `CompleteTask` and `CancelTask`, each one atomic conditional write whose 0-rows result means "stale, dropped". `WriteDraft` (from `SaveDraft`) is guarded the same way and writes only the active step's data.
 - **taskflow stores claims; `CompleteTaskStep` does not check them.** `ClaimedBy` and `ClaimedAt` change only via `ClaimTask` and `ReleaseTask`, never via the step writes, so a claim lasts for the whole task. For this MVP a claim is UI guidance so two people can avoid working the same task (see [`docs/integration-guide.md`](docs/integration-guide.md#7-task-claims)).
 - **Plugins suspend with `plugins.ErrSuspended`.** Synchronous plugins return `nil`; the workflow advances without waiting.
-- **`StartTask` returns `activity.ErrResultPending`** on the happy path. The parent activity suspends until `onTaskCompleted` fires.
+- **`StartTask` returns `activity.ErrResultPending`** on the happy path. The parent's activity ends, and its node waits in the workflow until `onTaskCompleted` completes it.
 - **Submission payloads are scoped** to the active step's `OutputNamespace` in `TaskRecord.Data`. Callers send a raw object; the server stamps the correct key.
 
 ## Task-level workflow constraint: no parallel paths

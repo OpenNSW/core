@@ -44,7 +44,7 @@ func TestDownload_MissingKey(t *testing.T) {
 }
 
 func TestDownload_Success(t *testing.T) {
-	mock := &MockDriver{StoredType: "application/pdf"}
+	mock := &MockDriver{StoredType: "application/pdf", SavedBody: []byte("%PDF-1.4")}
 	handler := NewHTTPHandler(NewService(mock))
 
 	// Build request with auth context and path value.
@@ -85,6 +85,10 @@ func TestDownload_Success(t *testing.T) {
 	}
 	if got := resp["disposition"]; got != drivers.DispositionInline {
 		t.Errorf("disposition = %v, want %s", got, drivers.DispositionInline)
+	}
+	// JSON numbers decode as float64.
+	if got := resp["size"]; got != float64(len("%PDF-1.4")) {
+		t.Errorf("size = %v, want %d", got, len("%PDF-1.4"))
 	}
 }
 

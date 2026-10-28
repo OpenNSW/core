@@ -41,7 +41,7 @@ func (s *BatchGatewayTestSuite) newBatchMappingTestEnv() *testsuite.TestWorkflow
 
 func (s *BatchGatewayTestSuite) onTask(env *testsuite.TestWorkflowEnvironment, templateID string, output map[string]any) {
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, templateID, mock.Anything, mock.Anything, mock.Anything).
-		Return(output, nil)
+		Return(TaskResult{Output: output}, nil)
 }
 
 func (s *BatchGatewayTestSuite) runBatchMappingWorkflow(env *testsuite.TestWorkflowEnvironment, def WorkflowDefinition, vars map[string]any) map[string]any {
@@ -209,13 +209,13 @@ func (s *BatchGatewayTestSuite) recordTaskInputs(env *testsuite.TestWorkflowEnvi
 	var mu sync.Mutex
 	var seen []map[string]any
 	for _, tmpl := range []string{"FOOD_TASK", "GOODS_TASK"} {
-		env.OnActivity("ExecuteTaskActivity", mock.Anything, tmpl, mock.Anything, mock.Anything, mock.Anything).Return(
+		env.OnActivity("ExecuteTaskActivity", mock.Anything, tmpl, mock.Anything, mock.Anything, mock.Anything).Return(taskOutput(
 			func(_ context.Context, _ string, inputs map[string]any, _ string, _ ActivationRef) (map[string]any, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				seen = append(seen, inputs)
 				return map[string]any{}, nil
-			})
+			}))
 	}
 	return func() []map[string]any { mu.Lock(); defer mu.Unlock(); return seen }
 }

@@ -44,6 +44,14 @@ type mockTemporalManager struct {
 	taskDoneFunc      func(ctx context.Context, workflowID string, runID string, activityID string, result map[string]any) error
 	startWorkerFunc   func() error
 	stopWorkerFunc    func()
+	terminateFunc     func(ctx context.Context, workflowID, runID, reason string) error
+}
+
+func (m *mockTemporalManager) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string) error {
+	if m.terminateFunc != nil {
+		return m.terminateFunc(ctx, workflowID, runID, reason)
+	}
+	return nil
 }
 
 func (m *mockTemporalManager) StartWorkflow(ctx context.Context, workflowID string, def engine.WorkflowDefinition, initialVars map[string]any) error {
@@ -153,7 +161,7 @@ func (s *safeMockTaskStore) ClaimStep(_ context.Context, taskID string, c store.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tasks[taskID]
-	if !ok || t.Seq > c.Seq {
+	if !ok || t.Seq > c.Seq || t.State == store.StateCancelled {
 		return 0, nil
 	}
 	t.ActiveStepID, t.Seq, t.ActiveTaskTemplateID, t.State, t.Data = c.StepID, c.Seq, c.ActiveTaskTemplateID, c.State, c.Data
@@ -193,7 +201,7 @@ func (s *safeMockTaskStore) WriteDraft(_ context.Context, taskID, stepID string,
 		return 0, nil
 	}
 	switch t.State {
-	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted:
+	case store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled, store.StateOnHold:
 		return 0, nil
 	}
 	t.Data = data
@@ -205,10 +213,35 @@ func (s *safeMockTaskStore) CompleteTask(_ context.Context, taskID string, seq i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tasks[taskID]
-	if !ok || t.Seq > seq {
+	if !ok || t.Seq > seq || t.State == store.StateCancelled {
 		return 0, nil
 	}
 	t.State, t.Seq = store.StateCompleted, seq
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) CancelTask(_ context.Context, taskID string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok || t.State == store.StateCompleted {
+		return 0, nil
+	}
+	t.State, t.Seq = store.StateCancelled, t.Seq+1
+	s.tasks[taskID] = t
+	return 1, nil
+}
+
+func (s *safeMockTaskStore) HoldTask(_ context.Context, taskID string, seq int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	advanced := t.State == store.StateAdvancing && t.Seq == seq+1
+	if !ok || (t.Seq > seq && !advanced) || t.State == store.StateCompleted || t.State == store.StateCancelled {
+		return 0, nil
+	}
+	t.State, t.Seq = store.StateOnHold, max(t.Seq, seq)
 	s.tasks[taskID] = t
 	return 1, nil
 }
@@ -217,7 +250,7 @@ func (s *safeMockTaskStore) ClaimTask(_ context.Context, taskID, holder string, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tasks[taskID]
-	if !ok || (t.ClaimedBy != "" && t.ClaimedBy != holder) || t.State == store.StateCompleted {
+	if !ok || (t.ClaimedBy != "" && t.ClaimedBy != holder) || t.State == store.StateCompleted || t.State == store.StateCancelled {
 		return 0, nil
 	}
 	if t.ClaimedBy != holder {
@@ -928,7 +961,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 // The task view and the list carry the step to act on and the version.
 func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
+	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", TaskTemplateID: "test_template", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(context.Background(), "task-v")
@@ -949,7 +982,7 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 func TestTaskViews_CarryTheClaim(t *testing.T) {
 	db := newSafeMockTaskStore()
 	ctx := context.Background()
-	db.InitTask(ctx, store.TaskRecord{TaskID: "task-c", TaskType: "TEST", State: "PENDING_USER", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: "task-c", TaskType: "TEST", TaskTemplateID: "test_template", State: "PENDING_USER", Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(ctx, "task-c")

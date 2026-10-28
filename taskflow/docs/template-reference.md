@@ -13,7 +13,7 @@ JSON shapes for everything you register with the orchestrator: task templates, s
 | Task template       | `orchestrator.TaskTemplate`                               | `payload.TaskTemplateID` (from parent workflow node) | `StartTask`                                 |
 | Step template    | `orchestrator.StepTemplate`                            | `payload.TaskTemplateID` (from task workflow node)   | `StartTaskStep`                              |
 | Workflow definition | `engine.WorkflowDefinition` (from `go-temporal-workflow`) | `TaskTemplate.WorkflowID`                            | `StartTask`                                 |
-| Render config       | raw JSON                                                  | `TaskTemplate.RenderConfigID`                        | `StartTask` (snapshotted onto `TaskRecord`) |
+| Render config       | raw JSON                                                  | `TaskTemplate.RenderConfigID`                        | `StartTask`, and each render (`renderconfig.Load`) |
 
 All four live in your `TaskTemplateRegistry` implementation. How you load them — JSON on disk (the demo does this), a config service, a database — is your call.
 
@@ -37,7 +37,7 @@ type TaskTemplate struct {
 | `id`               | yes      | Unique within the registry. Matches `payload.TaskTemplateID` from the parent workflow.                                         |
 | `type`             | yes      | User-facing category, surfaced as `TaskView.TaskType`. Convention: uppercase domain noun (`APPLICATION`, `REVIEW`, `RENEWAL`). |
 | `workflow_id`      | yes      | Resolves to an `engine.WorkflowDefinition` — the child workflow this task runs.                                                |
-| `render_config_id` | yes      | Resolves to a render config (raw JSON, snapshotted at `StartTask`).                                                            |
+| `render_config_id` | yes      | Resolves to a render config (raw JSON, read on each render).                                                                       |
 
 **Example** (`demo/templates/task_phyto_application_task.json`):
 
@@ -54,7 +54,7 @@ The parent workflow refers to this task by `id`. When the parent hits a TASK nod
 
 1. Looks up this template.
 2. Looks up the workflow definition `Phyto_Application_Flow_v1`.
-3. Looks up render config `phyto_render_config` and snapshots its bytes into `TaskRecord.RenderConfig`.
+3. Checks that render config `phyto_render_config` exists, and keeps the template's id as `TaskRecord.TaskTemplateID`. Each render loads the render config through that template and the task's manifest version.
 
 ---
 
@@ -163,7 +163,7 @@ If you're authoring these by hand, you'll typically:
 
 ## Render config
 
-Render configs are **raw JSON** from the orchestrator's perspective — it never parses them. They live in `TaskRecord.RenderConfig` as `json.RawMessage` and are passed straight to your `Renderer.Render(ctx, config, facts)` implementation.
+Render configs are **raw JSON** from the orchestrator's perspective — it never parses them. A task names its task template by `TaskRecord.TaskTemplateID`; `renderconfig.Load` resolves the template's render config through the task's manifest version, and the bytes are passed straight to your `Renderer.Render(ctx, config, facts)` implementation.
 
 This means the schema is **whatever your renderer expects**. The demo's `SimpleRenderer` uses a state-keyed shape:
 
@@ -275,7 +275,7 @@ If you need to push a new config to existing tasks, you'd have to update `TaskRe
         ▼
 [TaskTemplate]
         ├── workflow_id: "Phyto_Application_Flow_v1"      ─► [WorkflowDefinition]   (child workflow runs)
-        └── render_config_id: "phyto_render_config"       ─► [Render config JSON]   (snapshotted into TaskRecord)
+        └── render_config_id: "phyto_render_config"       ─► [Render config JSON]   (read on each render)
 
 
 [Task Workflow node]
@@ -307,7 +307,7 @@ if err := loadTemplates(registry, "demo/templates"); err != nil {
 
 - **Static JSON** — copy the demo's loader.
 - **Database-backed** — implement `TaskTemplateRegistry` to read from your tables on demand, or load on boot.
-- **Hot reload** — keep the registry thread-safe; swap entries at runtime. Existing tasks are unaffected (render configs are snapshotted), but newly-started tasks pick up the new versions.
+- **Hot reload** — keep the registry thread-safe; swap entries at runtime. Existing tasks are unaffected (each resolves its templates, render config included, through the manifest version it started on), but newly-started tasks pick up the new versions.
 
 ---
 

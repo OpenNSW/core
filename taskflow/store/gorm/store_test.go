@@ -43,7 +43,7 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 	// types SQLite's driver understands: it only parses times for TIMESTAMP columns, so the model's
 	// timestamptz cannot be used here. The guards under test are portable SQL.
 	if err := db.Exec(`CREATE TABLE task_records_v2 (
-		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, render_config TEXT,
+		task_id TEXT PRIMARY KEY, task_type TEXT, state TEXT, task_template_id TEXT NOT NULL DEFAULT '',
 		parent_workflow_id TEXT, parent_step_id TEXT,
 		task_workflow_id TEXT,
 		active_task_template_id TEXT, case_id TEXT NOT NULL DEFAULT '',
@@ -215,7 +215,7 @@ func TestWriteDraft(t *testing.T) {
 
 // The state guard alone turns a draft away: same step and seq, but the step is not showing.
 func TestWriteDraft_StateGuard(t *testing.T) {
-	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted} {
+	for _, state := range []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled, store.StateOnHold} {
 		t.Run(state, func(t *testing.T) {
 			s, ctx := newTestStore(t)
 			_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
@@ -243,6 +243,113 @@ func TestCompleteTask(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
 }
 
+func TestCancelTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+
+	n, err := s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 1)
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateCancelled)
+
+	// A's render write, still in flight when the task was cancelled, is dropped.
+	n, err = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", map[string]any{})
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateCancelled)
+
+	// A next-step claim or completion with a higher seq cannot resurrect a cancelled task.
+	n, err = s.ClaimStep(ctx, task1, claim(stepB, 9, nil))
+	wantRows(t, n, err, 0)
+	n, err = s.CompleteTask(ctx, task1, 10)
+	wantRows(t, n, err, 0)
+	n, err = s.ClaimTask(ctx, task1, userA, t1)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateCancelled)
+
+	// Cancelling again matches.
+	n, err = s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 1)
+}
+
+func TestCancelTask_CompletedTaskIsNotCancelled(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	_, _ = s.CompleteTask(ctx, task1, 6)
+
+	n, err := s.CancelTask(ctx, task1)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
+}
+
+func TestHoldTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+	_, _ = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", map[string]any{"a": 1.0})
+
+	// Step A parks at seq 4 (or a gateway parks at seq 5): the row becomes ON_HOLD.
+	n, err := s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 1)
+	wantRow(t, mustGet(t, s, ctx), stepA, 4, store.StateOnHold)
+
+	// Repeating the same hold matches again.
+	n, err = s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 1)
+
+	// Resolving the park (RETRY or COMPLETE) claims the next step at a higher seq, clearing ON_HOLD.
+	n, err = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	wantRows(t, n, err, 1)
+	_, _ = s.WriteRenderState(ctx, task1, stepB, 5, "PENDING_USER", nil)
+	wantRow(t, mustGet(t, s, ctx), stepB, 5, "PENDING_USER")
+
+	// A late park notification for seq 4 arrives after B claimed seq 5: dropped.
+	n, err = s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 5, "PENDING_USER")
+}
+
+// A step that parks after its submission (say a required output is missing) parks at its own seq,
+// while PersistSubmission has already moved the row to ADVANCING at seq+1.
+func TestHoldTask_StepParkedAfterItsSubmission(t *testing.T) {
+	s, ctx := newTestStore(t)
+	_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+	_, _ = s.WriteRenderState(ctx, task1, stepA, 4, "PENDING_USER", nil)
+	_, _ = s.PersistSubmission(ctx, task1, stepA, 4, map[string]any{"a": 1.0})
+
+	n, err := s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 1)
+	// seq stays 5, so a repeated submission of step A is still stale.
+	wantRow(t, mustGet(t, s, ctx), stepA, 5, store.StateOnHold)
+	n, err = s.PersistSubmission(ctx, task1, stepA, 4, map[string]any{"a": 2.0})
+	wantRows(t, n, err, 0)
+
+	// The next step claims seq 5 and submits: the row is ADVANCING at 6, and a late park
+	// notification for seq 4 is dropped.
+	_, _ = s.ClaimStep(ctx, task1, claim(stepB, 5, nil))
+	_, _ = s.PersistSubmission(ctx, task1, stepB, 5, nil)
+	n, err = s.HoldTask(ctx, task1, 4)
+	wantRows(t, n, err, 0)
+	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateAdvancing)
+}
+
+func TestHoldTask_TerminalTasksAreNotHeld(t *testing.T) {
+	for _, state := range []string{store.StateCompleted, store.StateCancelled} {
+		t.Run(state, func(t *testing.T) {
+			s, ctx := newTestStore(t)
+			_, _ = s.ClaimStep(ctx, task1, claim(stepA, 4, nil))
+			if state == store.StateCompleted {
+				_, _ = s.CompleteTask(ctx, task1, 5)
+			} else {
+				_, _ = s.CancelTask(ctx, task1)
+			}
+
+			n, err := s.HoldTask(ctx, task1, 99)
+			wantRows(t, n, err, 0)
+			if got := mustGet(t, s, ctx).State; got != state {
+				t.Fatalf("state = %q, want %q", got, state)
+			}
+		})
+	}
+}
+
 func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	s, ctx := newTestStore(t)
 
@@ -255,6 +362,10 @@ func TestGuardedWrites_UnknownTaskChangesNothing(t *testing.T) {
 	n, err = s.WriteDraft(ctx, "nope", stepA, 1, nil)
 	wantRows(t, n, err, 0)
 	n, err = s.CompleteTask(ctx, "nope", 1)
+	wantRows(t, n, err, 0)
+	n, err = s.CancelTask(ctx, "nope")
+	wantRows(t, n, err, 0)
+	n, err = s.HoldTask(ctx, "nope", 1)
 	wantRows(t, n, err, 0)
 	n, err = s.ClaimTask(ctx, "nope", userA, t1)
 	wantRows(t, n, err, 0)

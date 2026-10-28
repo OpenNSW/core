@@ -269,6 +269,16 @@ func TestUploadService_DownloadURL_ExpiresAt(t *testing.T) {
 	}
 }
 
+func TestUploadService_DownloadURL_Size(t *testing.T) {
+	download, err := NewService(&MockDriver{SavedBody: []byte("test content")}).DownloadURL(context.Background(), testKey)
+	if err != nil {
+		t.Fatalf("DownloadURL failed: %v", err)
+	}
+	if download.Size != int64(len("test content")) {
+		t.Errorf("Size = %d, want %d", download.Size, len("test content"))
+	}
+}
+
 func TestUploadService_DownloadURL_InvalidKey(t *testing.T) {
 	if _, err := NewService(&MockDriver{}).DownloadURL(context.Background(), "test-key"); !errors.Is(err, ErrInvalidKey) {
 		t.Errorf("expected ErrInvalidKey, got %v", err)

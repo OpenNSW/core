@@ -158,6 +158,8 @@ func TestSaveDraft_Rejections(t *testing.T) {
 		{name: "not yet showing", taskID: wakeTaskID, stepID: stepA, setup: withState(store.StateStartingStep), want: ErrStaleStep},
 		{name: "submitted", taskID: wakeTaskID, stepID: stepA, setup: withState(store.StateAdvancing), want: ErrStaleStep},
 		{name: "completed", taskID: wakeTaskID, stepID: stepA, setup: withState(store.StateCompleted), want: ErrStaleStep},
+		{name: "cancelled", taskID: wakeTaskID, stepID: stepA, setup: withState(store.StateCancelled), want: ErrStaleStep},
+		{name: "on hold", taskID: wakeTaskID, stepID: stepA, setup: withState(store.StateOnHold), want: ErrStaleStep},
 		{name: "drafts not enabled", taskID: wakeTaskID, stepID: stepA, setup: withTemplate("generic_user_input"), want: ErrDraftNotEnabled},
 	}
 	for _, c := range cases {
