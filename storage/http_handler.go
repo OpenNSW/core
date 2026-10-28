@@ -121,6 +121,7 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		"expires_at":   download.ExpiresAt,
 		"mime_type":    download.ContentType,
 		"disposition":  download.Disposition,
+		"size":         download.Size,
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
 	}

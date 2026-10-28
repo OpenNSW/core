@@ -333,6 +333,8 @@ type Download struct {
 	// Disposition is drivers.DispositionInline when a browser opens the file,
 	// and drivers.DispositionAttachment when it saves it.
 	Disposition string
+	// Size is the file's size in bytes, as the backend holds it.
+	Size int64
 }
 
 // DownloadURL generates a time-limited or presigned URL for the given key.
@@ -357,7 +359,7 @@ func (s *Service) DownloadURL(ctx context.Context, key string) (Download, error)
 	if err != nil {
 		return Download{}, err
 	}
-	return Download{URL: url, ExpiresAt: expiresAt, ContentType: info.ContentType, Disposition: disposition}, nil
+	return Download{URL: url, ExpiresAt: expiresAt, ContentType: info.ContentType, Disposition: disposition, Size: info.Size}, nil
 }
 
 // GetDownloadURL is DownloadURL without the rest of the Download.
