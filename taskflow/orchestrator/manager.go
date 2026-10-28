@@ -84,6 +84,9 @@ type TaskCompletedCallback func(parentWorkflowID string, parentStepID string, fi
 // Callers serving HTTP should answer 409 and have the client refetch.
 var ErrStaleStep = errors.New("step is no longer the active step of the task")
 
+// ErrTaskNotOpen is returned by CancelTask for a task that has completed or does not exist.
+var ErrTaskNotOpen = errors.New("task is not open: it has completed or does not exist")
+
 // ErrStepIDRequired is returned by CompleteTaskStep when the caller did not say which step it is
 // completing. A caller serving HTTP should answer it with 400.
 var ErrStepIDRequired = errors.New("step ID is required")
@@ -376,6 +379,10 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engi
 		// Not a workflow we own — safe to ignore.
 		return nil
 	}
+	if record.State == store.StateCancelled {
+		tm.logger.InfoContext(ctx, "dropping completion of a cancelled task", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID)
+		return nil
+	}
 
 	tm.logger.InfoContext(ctx, "task workflow completed", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID, "seq", completion.Seq)
 
@@ -384,6 +391,10 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engi
 		return fmt.Errorf("mark task %s completed: %w", record.TaskID, err)
 	}
 	if rows == 0 {
+		if cur, ok := tm.db.GetTask(ctx, record.TaskID); ok && cur.State == store.StateCancelled {
+			tm.logger.InfoContext(ctx, "dropping completion of a task cancelled while completing", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID)
+			return nil
+		}
 		// Nothing later than the end of the workflow should be on the row. Still wake the parent: the
 		// workflow has ended, and holding it back would hang the parent.
 		tm.logger.WarnContext(ctx, "task row was already past the completion; not marked completed", "task_id", record.TaskID, "seq", completion.Seq)
@@ -446,8 +457,8 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	if !exists {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
-	if record.State == store.StateCompleted {
-		return fmt.Errorf("%w: task %s already completed", ErrStaleStep, taskID)
+	if record.State == store.StateCompleted || record.State == store.StateCancelled {
+		return fmt.Errorf("%w: task %s is %s", ErrStaleStep, taskID, record.State)
 	}
 	if record.ActiveStepID != stepID {
 		// Also covers a task whose first step has not been claimed: no step ID names it yet.
@@ -531,6 +542,53 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 		}()
 	}
 
+	return nil
+}
+
+// CancelTask closes a task from outside its workflow, for an admin who must take it away from
+// whoever is working on it. The task workflow manager must implement engine.WorkflowTerminator.
+//
+// It only closes the task. The parent's TASK node that started it keeps waiting on it, and what
+// happens to that node is the caller's decision: typically engine.ActivationParker's
+// ForceParkActivation on the record's ParentWorkflowID and ParentStepID, so an admin can resolve it.
+//
+// Two steps, each safe to repeat, so a call that failed part way can be made again:
+//
+//  1. The task workflow is terminated first, so it cannot start another step or complete the
+//     parent's step. One that has already closed is accepted.
+//  2. The row is set to StateCancelled, unless the task has completed (ErrTaskNotOpen). This also
+//     advances seq, and ClaimStep/CompleteTask refuse StateCancelled, so any step write still in
+//     flight is dropped as stale.
+func (tm *TaskManager) CancelTask(ctx context.Context, taskID, reason string) error {
+	terminator, ok := tm.taskWorkflowManager.(engine.WorkflowTerminator)
+	if !ok {
+		return fmt.Errorf("cancel task %s: the task workflow manager cannot terminate workflows", taskID)
+	}
+	record, exists := tm.db.GetTask(ctx, taskID)
+	if !exists {
+		return fmt.Errorf("%w: task %s not found", ErrTaskNotOpen, taskID)
+	}
+	if record.State == store.StateCompleted {
+		return fmt.Errorf("%w: task %s has completed", ErrTaskNotOpen, taskID)
+	}
+
+	err := terminator.TerminateWorkflow(ctx, record.TaskWorkflowID, "", reason)
+	if errors.Is(err, engine.ErrWorkflowNotFound) {
+		tm.logger.InfoContext(ctx, "task workflow already closed", "task_id", taskID, "task_workflow_id", record.TaskWorkflowID)
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("terminate task workflow %s: %w", record.TaskWorkflowID, err)
+	}
+
+	rows, err := tm.db.CancelTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("mark task %s cancelled: %w", taskID, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: task %s has completed", ErrTaskNotOpen, taskID)
+	}
+	tm.logger.InfoContext(ctx, "task cancelled", "task_id", taskID, "task_workflow_id", record.TaskWorkflowID, "reason", reason)
 	return nil
 }
 

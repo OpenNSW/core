@@ -14,8 +14,14 @@ import (
 // node waiting on it. Manager.CompleteActivation sends it.
 const completeActivationUpdate = "CompleteActivation"
 
+// forceParkActivationUpdate is the Workflow Update that fails a suspended step with an error of
+// type ForcedParkErrorType so the node waiting on it parks for an admin with
+// ParkCategoryAdminForced. ActivationParker.ForceParkActivation sends it.
+const forceParkActivationUpdate = "ForceParkActivation"
+
 // activationNotPendingErrorType is the type of the error the workflow rejects a completion with when
-// the step it names isn't waiting. Manager.CompleteActivation turns it into ErrActivationNotPending.
+// the step it names isn't waiting. Manager.CompleteActivation and ForceParkActivation turn it into
+// ErrActivationNotPending.
 const activationNotPendingErrorType = "ActivationNotPending"
 
 // A step whose handler returns ErrResultPending ends its Activity at once, reporting Suspended, and
@@ -27,12 +33,12 @@ const activationNotPendingErrorType = "ActivationNotPending"
 // ActivationID. A node registers its step before it starts the Activity, so a completion that
 // arrives while the Activity is still finishing is accepted, and waits for the node to read it.
 
-// registerCompletionHandler installs the CompleteActivation Update handler. Its validator rejects a
-// completion for a step that isn't waiting, and its handler takes the step out of pendingCompletions
-// before anything else runs, so of several completions for one step exactly one is accepted and the
-// rest are rejected: the same guarantee Temporal gave when completing an Activity.
+// registerCompletionHandler installs the CompleteActivation and ForceParkActivation Update handlers.
+// Their validators reject a call for a step that isn't waiting, and their handlers take the step out
+// of pendingCompletions before anything else runs, so of several calls for one step (completions or
+// force-parks) exactly one is accepted and the rest are rejected.
 func (g *graphInterpreter) registerCompletionHandler(ctx workflow.Context) error {
-	return workflow.SetUpdateHandlerWithOptions(ctx, completeActivationUpdate,
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, completeActivationUpdate,
 		func(_ workflow.Context, activationID string, output map[string]any) error {
 			settable, ok := g.pendingCompletions[activationID]
 			if !ok {
@@ -45,13 +51,36 @@ func (g *graphInterpreter) registerCompletionHandler(ctx workflow.Context) error
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(_ workflow.Context, activationID string, _ map[string]any) error {
-				if _, ok := g.pendingCompletions[activationID]; !ok {
-					return activationNotPending(activationID)
-				}
-				return nil
+				return g.validatePendingCompletion(activationID)
+			},
+		},
+	); err != nil {
+		return err
+	}
+	return workflow.SetUpdateHandlerWithOptions(ctx, forceParkActivationUpdate,
+		func(_ workflow.Context, activationID, reason string) error {
+			settable, ok := g.pendingCompletions[activationID]
+			if !ok {
+				return activationNotPending(activationID)
+			}
+			delete(g.pendingCompletions, activationID)
+			settable.Set(nil, withCategory(ParkCategoryAdminForced,
+				fmt.Errorf("%s: forced park by admin: %s", ForcedParkErrorType, reason)))
+			return nil
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(_ workflow.Context, activationID, _ string) error {
+				return g.validatePendingCompletion(activationID)
 			},
 		},
 	)
+}
+
+func (g *graphInterpreter) validatePendingCompletion(activationID string) error {
+	if _, ok := g.pendingCompletions[activationID]; !ok {
+		return activationNotPending(activationID)
+	}
+	return nil
 }
 
 func activationNotPending(activationID string) error {

@@ -75,6 +75,60 @@ func TestTemporalManagerImpl_CompleteActivation_OtherErrorPassesThrough(t *testi
 	require.False(t, errors.Is(err, ErrActivationNotPending))
 }
 
+func TestTemporalManagerImpl_ForceParkActivation_SendsTheUpdate(t *testing.T) {
+	mockClient := &mocks.Client{}
+	handle := &mocks.WorkflowUpdateHandle{}
+	mockClient.On("UpdateWorkflow", mock.Anything, client.UpdateWorkflowOptions{
+		WorkflowID:   "wf-1",
+		RunID:        "run-1",
+		UpdateName:   forceParkActivationUpdate,
+		Args:         []any{"step-1", "warranted offline"},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	}).Return(handle, nil)
+	handle.On("Get", mock.Anything, nil).Return(nil)
+
+	m := &temporalManagerImpl{temporalClient: mockClient}
+	require.NoError(t, m.ForceParkActivation(context.Background(), "wf-1", "run-1", "step-1", "warranted offline"))
+	mockClient.AssertExpectations(t)
+	handle.AssertExpectations(t)
+}
+
+func TestTemporalManagerImpl_ForceParkActivation_NotPending(t *testing.T) {
+	rejected := temporal.NewApplicationError("step step-1 is not waiting to be completed", activationNotPendingErrorType)
+
+	for name, tc := range map[string]struct {
+		updateErr, getErr error
+	}{
+		"the workflow rejects it":           {getErr: rejected},
+		"the workflow has ended or is gone": {updateErr: serviceerror.NewNotFound("workflow execution already completed")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mockClient := &mocks.Client{}
+			handle := &mocks.WorkflowUpdateHandle{}
+			if tc.updateErr != nil {
+				mockClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(nil, tc.updateErr)
+			} else {
+				mockClient.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(handle, nil)
+				handle.On("Get", mock.Anything, nil).Return(tc.getErr)
+			}
+
+			m := &temporalManagerImpl{temporalClient: mockClient}
+			err := m.ForceParkActivation(context.Background(), "wf-1", "", "step-1", "reason")
+			require.ErrorIs(t, err, ErrActivationNotPending)
+		})
+	}
+}
+
+func TestTemporalManagerImpl_TerminateWorkflow_NotFound(t *testing.T) {
+	mockClient := &mocks.Client{}
+	mockClient.On("TerminateWorkflow", mock.Anything, "wf-1", "", "cancelled", mock.Anything).
+		Return(serviceerror.NewNotFound("workflow execution already completed"))
+
+	m := &temporalManagerImpl{temporalClient: mockClient}
+	err := m.TerminateWorkflow(context.Background(), "wf-1", "", "cancelled")
+	require.ErrorIs(t, err, ErrWorkflowNotFound)
+}
+
 func TestTemporalManagerImpl_GetStatus_NotFound(t *testing.T) {
 	mockClient := &mocks.Client{}
 	mockClient.On("QueryWorkflow", mock.Anything, "missing-workflow", "", "GetStatus").

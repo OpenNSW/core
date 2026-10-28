@@ -114,9 +114,10 @@ func (s *TaskStore) ClaimStep(ctx context.Context, taskID string, claim store.St
 	}
 	// No active_step_id check: a claim's job is to replace whatever step is currently active with
 	// claim.StepID, so the row's current active_step_id is expected to differ and isn't relevant.
-	// seq <= claim.Seq alone detects staleness, since seq is workflow-wide and monotonic — "<=" (not
-	// "<") also lets a retry of this exact claim (same seq) match again.
-	return s.stepUpdate(ctx, taskID, "seq <= ?", []any{claim.Seq}, map[string]any{
+	// seq <= claim.Seq detects staleness across steps ("<=" lets a retry of this exact claim match
+	// again), and state <> StateCancelled keeps an in-flight step claim from resurrecting a
+	// cancelled task when claim.Seq is higher than the cancelled row's seq.
+	return s.stepUpdate(ctx, taskID, "seq <= ? AND state <> ?", []any{claim.Seq, store.StateCancelled}, map[string]any{
 		"active_step_id":          claim.StepID,
 		"seq":                     claim.Seq,
 		"active_task_template_id": claim.ActiveTaskTemplateID,
@@ -156,14 +157,25 @@ func (s *TaskStore) WriteDraft(ctx context.Context, taskID, stepID string, seq i
 	// Neither state nor seq moves: a draft does not advance the step, so it must not make the
 	// step's ID or the view's version stale.
 	return s.stepUpdate(ctx, taskID, "active_step_id = ? AND seq = ? AND state NOT IN ?",
-		[]any{stepID, seq, []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted}},
+		[]any{stepID, seq, []string{store.StateStartingStep, store.StateAdvancing, store.StateCompleted, store.StateCancelled}},
 		map[string]any{"data": encoded})
+}
+
+func (s *TaskStore) CancelTask(ctx context.Context, taskID string) (int64, error) {
+	// No active_step_id or seq check: cancelling isn't about any one step. Advancing seq is what
+	// drops a step write still in flight: WriteRenderState and PersistSubmission need seq to equal
+	// their step's, and a retried ClaimStep needs it to be no higher.
+	return s.stepUpdate(ctx, taskID, "state <> ?", []any{store.StateCompleted}, map[string]any{
+		"state": store.StateCancelled,
+		"seq":   gorm.Expr("seq + 1"),
+	})
 }
 
 func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error) {
 	// No active_step_id check, for the same reason as ClaimStep: completion isn't about which step
-	// is active, only about whether a later step has already superseded this seq.
-	return s.stepUpdate(ctx, taskID, "seq <= ?", []any{seq}, map[string]any{
+	// is active, only about whether a later step has already superseded this seq or the task was
+	// cancelled.
+	return s.stepUpdate(ctx, taskID, "seq <= ? AND state <> ?", []any{seq, store.StateCancelled}, map[string]any{
 		"state": store.StateCompleted,
 		"seq":   seq,
 	})
@@ -172,8 +184,8 @@ func (s *TaskStore) CompleteTask(ctx context.Context, taskID string, seq int64) 
 func (s *TaskStore) ClaimTask(ctx context.Context, taskID, holder string, at time.Time) (int64, error) {
 	// The holder matches the guard again on a repeat claim, which then succeeds without moving
 	// claimed_at: the CASE reads the row's value before this update, as SQL assignments do.
-	return s.stepUpdate(ctx, taskID, "(claimed_by IS NULL OR claimed_by = ?) AND state <> ?",
-		[]any{holder, store.StateCompleted}, map[string]any{
+	return s.stepUpdate(ctx, taskID, "(claimed_by IS NULL OR claimed_by = ?) AND state NOT IN ?",
+		[]any{holder, []string{store.StateCompleted, store.StateCancelled}}, map[string]any{
 			"claimed_by": holder,
 			"claimed_at": gorm.Expr("CASE WHEN claimed_by = ? THEN claimed_at ELSE ? END", holder, at),
 		})
