@@ -1,4 +1,4 @@
-module github.com/OpenNSW/core/notifications
+module github.com/OpenNSW/core/notification
 
 go 1.26
 
