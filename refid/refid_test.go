@@ -6,11 +6,12 @@ package refid_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/OpenNSW/core/refid"
 )
@@ -99,7 +100,8 @@ func rtaConfig() refid.Config {
 				Issuer: "RTA",
 				Formats: []refid.FormatConfig{
 					{
-						IDType: "application_id",
+						IDType:   "application_id",
+						Timezone: "UTC",
 						Segments: []refid.SegmentConfig{
 							{Type: refid.SegmentTypeLiteral, Value: "RTA-APP-"},
 							{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
@@ -498,7 +500,8 @@ func TestSegment_DatePlaceholderVariants(t *testing.T) {
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
-				IDType: "date_variants",
+				IDType:   "date_variants",
+				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
 					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyy}:{yyyyMM}:{yyyyMMdd}", Padding: 4}},
 				},
@@ -614,7 +617,8 @@ func TestScopeKey_DailyReset(t *testing.T) {
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "FCAU",
 			Formats: []refid.FormatConfig{{
-				IDType: "case_id",
+				IDType:   "case_id",
+				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
 					{Type: refid.SegmentTypeLiteral, Value: "FCAU-"},
 					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
@@ -728,36 +732,6 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 // Segment-level unit tests (via the registry; segments are unexported)
 // -----------------------------------------------------------------------
 
-func TestSegment_Date_UsesUTC(t *testing.T) {
-	// Ensure the date segment always uses UTC regardless of local time zone.
-	// We can't inject time.Now directly from outside, but we can verify that
-	// the generated date component is a valid date string.
-	cfg := refid.Config{
-		Issuers: []refid.IssuerConfig{{
-			Issuer: "TEST",
-			Formats: []refid.FormatConfig{{
-				IDType: "dated",
-				Segments: []refid.SegmentConfig{
-					{Type: refid.SegmentTypeDate, Layout: "20060102"},
-				},
-			}},
-		}},
-	}
-	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := reg.Generate(context.Background(), "TEST", "dated", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Must parse as YYYYMMDD
-	_, parseErr := time.Parse("20060102", id)
-	if parseErr != nil {
-		t.Errorf("date segment output %q did not parse as YYYYMMDD: %v", id, parseErr)
-	}
-}
-
 func TestSegment_Literal_EmptyValueRejected(t *testing.T) {
 	cfg := refid.Config{
 		Issuers: []refid.IssuerConfig{{
@@ -796,7 +770,8 @@ func TestNewRegistry_NoStoresNeededWithoutSequenceOrRandomSegments(t *testing.T)
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
-				IDType: "simple",
+				IDType:   "simple",
+				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
 					{Type: refid.SegmentTypeLiteral, Value: "PREFIX-"},
 					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
@@ -855,6 +830,7 @@ func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "bad",
+				Timezone: "UTC", // so the empty layout, not the missing zone, is what's rejected
 				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: ""}},
 			}},
 		}},
@@ -1230,4 +1206,218 @@ func TestExampleConfig_Compiles(t *testing.T) {
 	if _, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore())); err != nil {
 		t.Fatalf("example_config.yaml does not compile: %v", err)
 	}
+}
+
+// -----------------------------------------------------------------------
+// timezone
+//
+// Config validation lives here. Tests that pin the clock to see which date a
+// zone renders are in registry_internal_test.go.
+// -----------------------------------------------------------------------
+
+func tzLiteral() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeLiteral, Value: "X-"}
+}
+
+func tzList() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"}
+}
+
+func tzParam() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeParam, Param: "payerNo", Pattern: "[0-9]{4}"}
+}
+
+func tzDate() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeDate, Layout: "20060102"}
+}
+
+func tzSequence(scopeKey string) refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: scopeKey, Padding: 4}}
+}
+
+func tzRandom(scopeKey string) refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeRandom, Random: &refid.RandomSegmentConfig{ScopeKey: scopeKey, Charset: refid.CharsetNumeric, Length: 4}}
+}
+
+// tzConfig is a config with one format, (TZ, tz_format), holding segments and
+// the given timezone.
+func tzConfig(timezone string, segments ...refid.SegmentConfig) refid.Config {
+	return refid.Config{
+		Lists: map[string][]string{"office_location": {"COL", "GAL"}},
+		Issuers: []refid.IssuerConfig{{
+			Issuer:  "TZ",
+			Formats: []refid.FormatConfig{{IDType: "tz_format", Timezone: timezone, Segments: segments}},
+		}},
+	}
+}
+
+func newTZRegistry(cfg refid.Config) (refid.Registry, error) {
+	return refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
+}
+
+// A format that reads the date needs a usable timezone, and a timezone that is
+// set must be usable even when no date is read.
+func TestNewRegistry_Timezone_Rejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     refid.Config
+		wantMsg string
+	}{
+		{"date segment, no timezone", tzConfig("", tzDate()), "timezone is required"},
+		{"date segment and date scope key, no timezone", tzConfig("", tzDate(), tzSequence("{issuer}:{idType}:{yyyyMMdd}")), "timezone is required"},
+		{"sequence {yyyy}, no timezone", tzConfig("", tzSequence("{issuer}:{idType}:{yyyy}")), "timezone is required"},
+		{"sequence {yyyyMM}, no timezone", tzConfig("", tzSequence("{issuer}:{idType}:{yyyyMM}")), "timezone is required"},
+		{"sequence {yyyyMMdd}, no timezone", tzConfig("", tzSequence("{issuer}:{idType}:{yyyyMMdd}")), "timezone is required"},
+		{"random {yyyy}, no timezone", tzConfig("", tzRandom("{issuer}:{idType}:{yyyy}")), "timezone is required"},
+		{"random {yyyyMM}, no timezone", tzConfig("", tzRandom("{issuer}:{idType}:{yyyyMM}")), "timezone is required"},
+		{"random {yyyyMMdd}, no timezone", tzConfig("", tzRandom("{issuer}:{idType}:{yyyyMMdd}")), "timezone is required"},
+		{"date placeholder beside a param placeholder, no timezone", tzConfig("", tzList(), tzSequence("{issuer}:{idType}:{officeCode}:{yyyyMMdd}")), "timezone is required"},
+		{"date segment, blank timezone", tzConfig("  ", tzDate()), `timezone "  "`},
+		{"unknown zone", tzConfig("Mars/Olympus", tzDate()), "not a known IANA zone name"},
+		{"Local", tzConfig("Local", tzDate()), "depends on the host"},
+		{"relative path", tzConfig("../etc/localtime", tzDate()), `timezone "../etc/localtime"`},
+		{"absolute path", tzConfig("/etc/localtime", tzDate()), `timezone "/etc/localtime"`},
+		{"unknown zone on a format with no date", tzConfig("Mars/Olympus", tzLiteral()), "not a known IANA zone name"},
+		{"Local on a format with no date", tzConfig("Local", tzLiteral()), "depends on the host"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := newTZRegistry(tt.cfg)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Errorf("error %q does not contain %q", err, tt.wantMsg)
+			}
+			// The wrapped error says which format to fix.
+			if !strings.Contains(err.Error(), `("TZ", "tz_format")`) {
+				t.Errorf("error %q does not name the format", err)
+			}
+		})
+	}
+}
+
+func TestNewRegistry_Timezone_Accepted(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  refid.Config
+	}{
+		// A usable zone, on each way a format can read the date.
+		{"UTC", tzConfig("UTC", tzDate())},
+		{"Asia/Colombo", tzConfig("Asia/Colombo", tzDate())},
+		{"zone with daylight saving", tzConfig("America/New_York", tzDate())},
+		{"zone ahead of UTC by 14 hours", tzConfig("Pacific/Kiritimati", tzDate())},
+		{"zone with only a date scope key", tzConfig("Asia/Colombo", tzSequence("{issuer}:{idType}:{yyyyMMdd}"))},
+		{"zone with a random date scope key", tzConfig("Asia/Colombo", tzRandom("{issuer}:{idType}:{yyyy}"))},
+
+		// No date is read, so no timezone is needed.
+		{"literal only", tzConfig("", tzLiteral())},
+		{"list and param-scoped sequence", tzConfig("", tzList(), tzSequence("{issuer}:{idType}:{officeCode}"))},
+		{"param and literal", tzConfig("", tzParam(), tzLiteral())},
+		{"random scoped by issuer and idType", tzConfig("", tzRandom("{issuer}:{idType}"))},
+		// Only the exact placeholders count as dates.
+		{"look-alike placeholder", tzConfig("", tzSequence("{issuer}:{idType}:{yyyyy}"))},
+		{"year text without braces", tzConfig("", tzSequence("{issuer}:{idType}:yyyy"))},
+
+		// A zone nobody reads is harmless.
+		{"zone on a format with no date", tzConfig("UTC", tzLiteral())},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := newTZRegistry(tt.cfg); err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+		})
+	}
+}
+
+// The zone is a per-idType setting: one format missing it fails even when its
+// siblings are fine, and the error points at that format alone.
+func TestNewRegistry_Timezone_ErrorNamesOffendingFormat(t *testing.T) {
+	cfg := rtaConfig() // application_id reads the date, permit_id does not
+	cfg.Issuers[0].Formats[0].Timezone = ""
+
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), `("RTA", "application_id")`) {
+		t.Errorf("error %q does not name application_id", err)
+	}
+	if strings.Contains(err.Error(), "permit_id") {
+		t.Errorf("error %q blames permit_id, which reads no date", err)
+	}
+}
+
+func TestNewRegistry_Timezone_DifferentZonePerFormat(t *testing.T) {
+	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{
+			{IDType: "colombo_day", Timezone: "Asia/Colombo", Segments: []refid.SegmentConfig{tzDate()}},
+			{IDType: "utc_day", Timezone: "UTC", Segments: []refid.SegmentConfig{tzDate()}},
+			{IDType: "fixed", Segments: []refid.SegmentConfig{tzLiteral()}},
+		},
+	}}}
+	if _, err := refid.NewRegistry(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_Timezone(t *testing.T) {
+	const withZone = `
+issuers:
+  - issuer: RTA
+    formats:
+      - idType: application_id
+        timezone: Asia/Colombo
+        segments:
+          - type: date
+            layout: "20060102"
+          - type: sequence
+            sequence:
+              scopeKey: "{issuer}:{idType}:{yyyyMMdd}"
+              padding: 6
+      - idType: permit_id
+        segments:
+          - type: literal
+            value: "RTA-PMT-"
+          - type: sequence
+            sequence:
+              scopeKey: "{issuer}:{idType}"
+              padding: 8
+`
+	load := func(t *testing.T, body string) refid.Config {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "refid_config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := refid.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	t.Run("timezone is read per format", func(t *testing.T) {
+		cfg := load(t, withZone)
+		formats := cfg.Issuers[0].Formats
+		if got := formats[0].Timezone; got != "Asia/Colombo" {
+			t.Errorf("application_id timezone = %q, want Asia/Colombo", got)
+		}
+		if got := formats[1].Timezone; got != "" {
+			t.Errorf("permit_id timezone = %q, want empty", got)
+		}
+		if _, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore())); err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	})
+
+	t.Run("date format without timezone is rejected", func(t *testing.T) {
+		cfg := load(t, strings.Replace(withZone, "        timezone: Asia/Colombo\n", "", 1))
+		_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
+		if err == nil || !strings.Contains(err.Error(), "timezone is required") {
+			t.Fatalf("expected a timezone is required error, got: %v", err)
+		}
+	})
 }
