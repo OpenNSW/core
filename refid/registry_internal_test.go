@@ -85,8 +85,8 @@ func generate(t *testing.T, reg Registry, issuer, idType string) string {
 	return id
 }
 
-func dateSeg(layout string) SegmentConfig {
-	return SegmentConfig{Type: SegmentTypeDate, Layout: layout}
+func dateSeg(format string) SegmentConfig {
+	return SegmentConfig{Type: SegmentTypeDate, Format: format}
 }
 
 func literalSeg(value string) SegmentConfig {
@@ -108,7 +108,7 @@ func sampleReference(timezone string) FormatConfig {
 	return FormatConfig{
 		IDType:   "sample_reference_no",
 		Timezone: timezone,
-		Segments: []SegmentConfig{dateSeg("2006/01/"), seqSeg("{issuer}:{idType}:{yyyy}")},
+		Segments: []SegmentConfig{dateSeg("yyyy/MM/"), seqSeg("{issuer}:{idType}:{yyyy}")},
 	}
 }
 
@@ -266,7 +266,7 @@ func TestGenerate_Timezone_IDDateAndScopeKeyAgree(t *testing.T) {
 				reg := newPinned(t, oneFormat(FormatConfig{
 					IDType:   "ref",
 					Timezone: zone,
-					Segments: []SegmentConfig{dateSeg("20060102"), literalSeg("-"), seqSeg("{issuer}:{idType}:{yyyyMMdd}")},
+					Segments: []SegmentConfig{dateSeg("yyyyMMdd"), literalSeg("-"), seqSeg("{issuer}:{idType}:{yyyyMMdd}")},
 				}), &now, WithSequenceStore(store))
 
 				base := now
@@ -287,28 +287,30 @@ func TestGenerate_Timezone_IDDateAndScopeKeyAgree(t *testing.T) {
 }
 
 // A date-only format has no stateful segment, so it needs no store, and its
-// layout can show the time of day and the offset as well as the date.
-func TestGenerate_Timezone_DateSegmentLayouts(t *testing.T) {
+// format can show the time of day as well as the date, padded or not.
+func TestGenerate_Timezone_DateSegmentFormats(t *testing.T) {
 	const at = "2026-12-31T20:00:00Z"
 	tests := []struct {
-		layout   string
+		format   string
 		timezone string
 		want     string
 	}{
-		{"20060102", "UTC", "20261231"},
-		{"20060102", "Asia/Colombo", "20270101"},
-		{"20060102T1504", "UTC", "20261231T2000"},
-		{"20060102T1504", "Asia/Colombo", "20270101T0130"},
-		{"2006-01-02T15:04-0700", "Asia/Colombo", "2027-01-01T01:30+0530"},
-		{"2006-01-02T15:04-0700", "America/New_York", "2026-12-31T15:00-0500"},
+		{"yyyyMMdd", "UTC", "20261231"},
+		{"yyyyMMdd", "Asia/Colombo", "20270101"},
+		{"yyyyMMdd'T'HHmm", "UTC", "20261231T2000"},
+		{"yyyyMMdd'T'HHmm", "Asia/Colombo", "20270101T0130"},
+		{"yyyy-MM-dd'T'HH:mm", "Asia/Colombo", "2027-01-01T01:30"},
+		{"yyyy-MM-dd'T'HH:mm", "America/New_York", "2026-12-31T15:00"},
+		{"d/M/yyyy H:m", "Asia/Colombo", "1/1/2027 1:30"},
+		{"d/M/yyyy H:m", "America/New_York", "31/12/2026 15:0"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.timezone+" "+tt.layout, func(t *testing.T) {
+		t.Run(tt.timezone+" "+tt.format, func(t *testing.T) {
 			now := instant(t, at)
 			reg := newPinned(t, oneFormat(FormatConfig{
 				IDType:   "stamp",
 				Timezone: tt.timezone,
-				Segments: []SegmentConfig{dateSeg(tt.layout)},
+				Segments: []SegmentConfig{dateSeg(tt.format)},
 			}), &now)
 
 			if got := generate(t, reg, "ACME", "stamp"); got != tt.want {
@@ -325,8 +327,8 @@ func TestGenerate_Timezone_PerIDType(t *testing.T) {
 	cfg := Config{Issuers: []IssuerConfig{{
 		Issuer: "ACME",
 		Formats: []FormatConfig{
-			{IDType: "colombo_day", Timezone: "Asia/Colombo", Segments: []SegmentConfig{dateSeg("20060102")}},
-			{IDType: "utc_day", Timezone: "UTC", Segments: []SegmentConfig{dateSeg("20060102")}},
+			{IDType: "colombo_day", Timezone: "Asia/Colombo", Segments: []SegmentConfig{dateSeg("yyyyMMdd")}},
+			{IDType: "utc_day", Timezone: "UTC", Segments: []SegmentConfig{dateSeg("yyyyMMdd")}},
 			{IDType: "fixed", Segments: []SegmentConfig{literalSeg("FIXED")}},
 			{IDType: "permit", Segments: []SegmentConfig{seqSeg("{issuer}:{idType}")}},
 		},
@@ -386,29 +388,30 @@ func TestGenerate_Timezone_RandomScopeKey(t *testing.T) {
 	}
 }
 
-// Without a test override the registry reads the real clock. The layout shows
-// the UTC offset, so the zone is visible at any time of day.
+// Without a test override the registry reads the real clock. The format shows
+// the time of day, and Colombo is always 5 hours 30 minutes off UTC, so the zone
+// is visible at any time of day.
 func TestGenerate_Timezone_DefaultClockIsWallClock(t *testing.T) {
-	const layout = "2006-01-02T15:04-0700"
+	const goLayout = "2006-01-02T15:04" // the same fields as the format below
 	loc := mustLocation(t, "Asia/Colombo")
 	reg, err := NewRegistry(oneFormat(FormatConfig{
 		IDType:   "stamp",
 		Timezone: "Asia/Colombo",
-		Segments: []SegmentConfig{dateSeg(layout)},
+		Segments: []SegmentConfig{dateSeg("yyyy-MM-dd'T'HH:mm")},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	before := time.Now().In(loc).Format(layout)
+	before := time.Now().In(loc).Format(goLayout)
 	id := generate(t, reg, "ACME", "stamp")
-	after := time.Now().In(loc).Format(layout)
+	after := time.Now().In(loc).Format(goLayout)
 
 	if id != before && id != after {
 		t.Errorf("ID = %q, want the Colombo time between %q and %q", id, before, after)
 	}
-	if !strings.HasSuffix(id, "+0530") {
-		t.Errorf("ID = %q, want an offset of +0530", id)
+	if utc := time.Now().UTC().Format(goLayout); id == utc {
+		t.Errorf("ID = %q is the UTC time, want the Colombo time", id)
 	}
 }
 

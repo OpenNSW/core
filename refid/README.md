@@ -86,7 +86,7 @@ func main() {
 | `literal` | Fixed text string | `value: "FCAU-"` | `FCAU-` |
 | `list` | Parameter value validated against a controlled list | `list: office_location`, `param: officeCode` | `COL` |
 | `param` | Parameter value from an open set, checked against a pattern | `param: exporterId`, `pattern: "[0-9]{4}"` | `0001` |
-| `date` | Current date/time, in the format's [`timezone`](#timezone), using Go reference layout | `layout: "20060102"` | `20260818` |
+| `date` | Current date/time, in the format's [`timezone`](#timezone), as a [`format`](#date-formats) pattern | `format: "yyyyMMdd"` | `20260818` |
 | `sequence` | Zero-padded durable counter | `sequence: {scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", padding: 6}` | `000042` |
 | `random` | Fixed-length random value, collision-checked via `RandomStore` | `random: {scopeKey: "{issuer}:{idType}", charset: alphanumeric, length: 8}` | `7K2QQXAB` |
 
@@ -109,6 +109,52 @@ Use `param` for a caller-supplied value that a controlled `list` cannot enumerat
 |---|---|
 | `param` | The key the caller must supply in `params`. A missing or empty value returns `ErrInvalidParam`. |
 | `pattern` | Required. An [RE2](https://github.com/google/re2/wiki/Syntax) expression the value must match in full (it is anchored at both ends). A value that doesn't match returns `ErrInvalidParam`. The value lands in the ID unchanged, so the pattern is what keeps out characters, lengths and formats the ID's consumers can't handle; `.+` accepts any non-empty value. |
+
+---
+
+## Date Formats
+
+A `date` segment's `format` is a pattern of letters in which **a repeated letter means zero padding**: `yyyyMMdd` renders `20260305` and `yyyyMd` renders `202635`. The time is read in the format's [`timezone`](#timezone).
+
+| Token | Meaning | 2026-03-05 04:07:09 | 2026-12-25 14:37:19 |
+|---|---|---|---|
+| `yyyy` | 4-digit year | `2026` | `2026` |
+| `yy` | 2-digit year | `26` | `26` |
+| `MM` / `M` | month, padded / unpadded | `03` / `3` | `12` / `12` |
+| `dd` / `d` | day of the month, padded / unpadded | `05` / `5` | `25` / `25` |
+| `HH` / `H` | hour 0–23, padded / unpadded | `04` / `4` | `14` / `14` |
+| `mm` / `m` | minute, padded / unpadded | `07` / `7` | `37` / `37` |
+| `ss` / `s` | second, padded / unpadded | `09` / `9` | `19` / `19` |
+
+- A run of the same letter is one token, and a different letter starts the next one: `yyyyMd` is `yyyy`, `M`, `d`.
+- Literal text goes in **single quotes**: `yyyyMMdd'T'HHmm` renders `20260305T0407`. A doubled single quote is an apostrophe (`yyyy''MM` renders `2026'03`), and digits are allowed inside quotes (`yyyy'-Q1-'MM` renders `2026-Q1-03`).
+- Characters that are not ASCII letters or digits are literal without quotes: `-`, `/`, `:`, `.`, spaces and non-ASCII text (`d/M/yyyy`, `HH:mm`).
+- The `{yyyy}`, `{yyyyMM}` and `{yyyyMMdd}` [scope key placeholders](#scope-key-placeholders--reset-cadence) render through the same code, so they print exactly what the same format would.
+
+`NewRegistry` rejects anything it does not understand, so a typo fails at startup instead of producing wrong IDs:
+
+| Mistake | Example | Why |
+|---|---|---|
+| Unknown letter, including an unquoted literal letter | `yyyyMMddTHHmm` | quote it: `yyyyMMdd'T'HHmm` |
+| A run of letters that is not a form above | `yyy`, `MMM`, `ddd` | each letter has the forms in the table only |
+| A field this pattern language does not have | `hh`, `a`, `E`, `SSS`, `z` | no 12-hour time, AM/PM, names, fractions of a second or zone tokens |
+| Uppercase `Y` or `D` | `YYYYMMDD` | in Java and CLDR they are the week-based year and the day of the year, which differ from the calendar year around 1 January, so they are rejected instead of guessed |
+| Unquoted digits | `20060102` | looks like a Go reference layout; the error suggests the letters |
+| An unterminated quote | `yyyy'` | |
+| No field at all | `'T'`, `-` | use a `literal` segment for fixed text |
+
+Unpadded tokens make IDs variable-width: `yyyyMd` gives `2026111` for both 11 January and 1 November. Use the padded forms (`MM`, `dd`) wherever IDs are sorted, compared as text or parsed back, in the same way that a counter's `padding` must be wide enough for the largest value.
+
+> [!WARNING]
+> **Breaking change:** the `layout` field, which took a Go reference layout, is replaced by `format`. A config that still sets `layout` fails in `NewRegistry` with `date segment requires a non-empty format`, so no ID is generated with the wrong date. Replace each one:
+>
+> | Before (`layout`) | After (`format`) |
+> |---|---|
+> | `20060102` | `yyyyMMdd` |
+> | `2006/01/` | `yyyy/MM/` |
+> | `2006` | `yyyy` |
+> | `06` | `yy` |
+> | `20060102T1504` | `yyyyMMdd'T'HHmm` |
 
 ---
 
@@ -138,7 +184,7 @@ Each format (idType) reads the clock in its own timezone, set by the format's `t
   timezone: Asia/Colombo
   segments:
     - type: date
-      layout: "2006/01/"
+      format: "yyyy/MM/"
     - type: sequence
       sequence:
         scopeKey: "{issuer}:{idType}:{yyyy}"

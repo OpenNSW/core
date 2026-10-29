@@ -91,9 +91,14 @@ type SegmentConfig struct {
 	// Required by param segments; ".+" accepts any non-empty value.
 	Pattern string `yaml:"pattern,omitempty"`
 
-	// Layout is a Go reference-date format string (e.g. "20060102"), used by
-	// date segments. The current time is formatted in the format's Timezone.
-	Layout string `yaml:"layout,omitempty"`
+	// Format is the pattern a date segment renders the current time with, in
+	// the format's Timezone. A repeated letter means zero padding: "yyyyMMdd"
+	// gives 20260305 and "yyyyMd" gives 202635. The fields are yyyy and yy
+	// (year), MM and M (month), dd and d (day), HH and H (hour, 0-23), mm and m
+	// (minute) and ss and s (second). Text in single quotes is literal, as in
+	// "yyyyMMdd'T'HHmm", and a doubled single quote is an apostrophe. NewRegistry rejects anything
+	// else, including a Go reference layout such as "20060102".
+	Format string `yaml:"format,omitempty"`
 
 	// Sequence holds the settings for a sequence segment. Required (non-nil)
 	// when Type is "sequence".
