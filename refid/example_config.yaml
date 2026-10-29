@@ -13,7 +13,8 @@
 #   list      — emits a caller-supplied value after validating it is in the named list.
 #   param     — emits a caller-supplied value as is, for values from an open set. Its
 #               required `pattern` (RE2, matched against the whole value) constrains it.
-#   date      — formats the current UTC time using a Go reference-date layout string.
+#   date      — formats the current time, in the format's timezone, using a Go reference-date
+#               layout string.
 #   sequence  — increments a durable counter scoped by a key template and zero-pads the result.
 #               Settings go under a nested `sequence:` block (scopeKey, padding).
 #   random    — generates a fixed-length random string from a charset, reserved via a
@@ -26,12 +27,21 @@
 # effect (a counter increment, a random value reservation) that is then orphaned if a
 # later stateful segment fails during the same call.
 #
+# Timezone (a field of each format, beside idType):
+#   timezone: <IANA zone name>, e.g. Asia/Colombo or UTC.
+#   It is the zone for both the date segments and the {yyyy}/{yyyyMM}/{yyyyMMdd} scope key
+#   placeholders of that format, so the date in an ID and the point where its counter resets
+#   always agree (a daily counter in Asia/Colombo resets at local midnight, not at 05:30).
+#   Required only on a format that has a date segment or one of those placeholders in a scope
+#   key; a format with neither (permit_id, voucher_id, receipt_id below) leaves it out.
+#   NewRegistry rejects a missing, unknown or "Local" zone.
+#
 # Scope key placeholders (for sequence and random segments):
 #   {issuer}    — the issuer identifier for this format
 #   {idType}    — the ID type identifier for this format
-#   {yyyy}      — 4-digit UTC year
-#   {yyyyMM}    — UTC year + month
-#   {yyyyMMdd}  — UTC year + month + day
+#   {yyyy}      — 4-digit year, in the format's timezone
+#   {yyyyMM}    — year + month, in the format's timezone
+#   {yyyyMMdd}  — year + month + day, in the format's timezone
 #   {<param>}   — any caller-supplied param key (lower precedence than the above)
 #
 # Including {yyyyMMdd} in a scope key gives a daily-resetting counter (or daily-reset
@@ -41,9 +51,10 @@
 issuers:
   - issuer: RTA
     formats:
-      # application_id — resets daily per office
+      # application_id — resets daily per office, at midnight in Sri Lanka
       # Produces: RTA-APP-COL-20260817-000042
       - idType: application_id
+        timezone: Asia/Colombo      # required: the format has a date segment and {yyyyMMdd}
         segments:
           - type: literal
             value: "RTA-APP-"
@@ -62,6 +73,7 @@ issuers:
               padding: 6              # 000001 … 999999; returns ErrCounterOverflow beyond that
 
       # permit_id — never resets, counted independently per office
+      # No date segment or date placeholder, so no timezone is needed.
       # Produces: RTA-PMT-COL-00000001
       - idType: permit_id
         segments:
@@ -104,7 +116,9 @@ issuers:
   # {issuer} and {idType} in the scope key, so no collision is possible.
   - issuer: FCAU
     formats:
+      # Each format picks its own zone: this one resets daily at midnight UTC.
       - idType: case_id
+        timezone: UTC
         segments:
           - type: literal
             value: "FCAU-"

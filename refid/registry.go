@@ -44,14 +44,40 @@
 //
 //	{issuer}    — the issuer identifier for this format
 //	{idType}    — the ID type identifier for this format
-//	{yyyy}      — four-digit year (UTC)
-//	{yyyyMM}    — year and month (UTC)
-//	{yyyyMMdd}  — year, month, and day (UTC)
+//	{yyyy}      — four-digit year (in the format's timezone)
+//	{yyyyMM}    — year and month (in the format's timezone)
+//	{yyyyMMdd}  — year, month, and day (in the format's timezone)
 //	{<param>}   — any caller-supplied param not already claimed above
 //
 // Including {yyyyMMdd} in a scope key gives a daily-resetting counter (or
 // daily-reset uniqueness set, for random segments); omitting all date
 // components gives a scope that never resets.
+//
+// # Timezone
+//
+// Each format reads the clock in its own timezone, an IANA time zone name set
+// by FormatConfig.Timezone. The same zone drives the date segments and the
+// date placeholders above, so the date in an ID and the point where its
+// counter resets always agree: for "Asia/Colombo" (UTC+5:30) a daily counter
+// resets at local midnight, not at 05:30.
+//
+//	formats:
+//	  - idType: sample_reference_no
+//	    timezone: Asia/Colombo
+//	    segments:
+//	      - type: date
+//	        layout: "2006/01/"
+//	      - type: sequence
+//	        sequence:
+//	          scopeKey: "{issuer}:{idType}:{yyyy}"
+//	          padding: 4
+//
+// Timezone is required for a format with a date segment or a sequence or
+// random scope key containing {yyyy}, {yyyyMM} or {yyyyMMdd}, and optional
+// otherwise. NewRegistry rejects a missing, unknown or "Local" zone (the
+// latter would tie IDs to the host's time zone). Zone names are resolved with
+// time.LoadLocation, so the host needs a time zone database; a binary can
+// embed one by importing time/tzdata or building with -tags timetzdata.
 //
 // # Counter overflow
 //
@@ -148,6 +174,10 @@ type formatKey struct {
 // compiledFormat is a pre-validated, ready-to-render list of segments.
 type compiledFormat struct {
 	segments []segment
+
+	// location is the timezone the format reads the clock in. It is time.UTC
+	// for a format that has no date use and so no configured timezone.
+	location *time.Location
 }
 
 // registry is the package-private implementation of Registry.
@@ -155,6 +185,10 @@ type compiledFormat struct {
 // Concurrent safety for sequence counters is the responsibility of SequenceStore.
 type registry struct {
 	formats map[formatKey]*compiledFormat
+
+	// now returns the current time. It is time.Now except in tests, which
+	// replace it to pin the instant.
+	now func() time.Time
 }
 
 // NewRegistry validates cfg and compiles all formats into an internal lookup
@@ -164,6 +198,8 @@ type registry struct {
 //   - a segment with missing required fields (e.g. empty scopeKey, empty layout)
 //   - an unrecognised segment type
 //   - more than one stateful (sequence or random) segment in a single format
+//   - a format with a date segment or a date placeholder in a scope key but no
+//     timezone, or any timezone that is unknown or "Local"
 //
 // Fail-fast at startup: every error that would surface at generation time is
 // caught here instead.
@@ -199,7 +235,7 @@ func NewRegistry(cfg Config, opts ...RegistryOption) (Registry, error) {
 		}
 	}
 
-	return &registry{formats: formats}, nil
+	return &registry{formats: formats, now: time.Now}, nil
 }
 
 // Generate implements Registry.
@@ -216,7 +252,10 @@ func (r *registry) Generate(ctx context.Context, issuer, idType string, params m
 		return "", fmt.Errorf("%w: %q", ErrUnknownIssuer, issuer)
 	}
 
-	now := time.Now().UTC()
+	// Every segment and scope key in this call reads this one instant, in the
+	// format's own timezone, so the date in the ID and the counter's scope
+	// cannot disagree.
+	now := r.now().In(compiled.location)
 
 	// 1. Validation pass: validate all segments before executing any side-effects (e.g. sequence counter increments)
 	for _, seg := range compiled.segments {
@@ -270,7 +309,58 @@ func compileFormat(cfg FormatConfig, issuer string, lists map[string][]string, s
 		return nil, fmt.Errorf("format has %d stateful (sequence/random) segments; at most 1 is allowed per format", statefulCount)
 	}
 
-	return &compiledFormat{segments: segs}, nil
+	location, err := resolveTimezone(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &compiledFormat{segments: segs, location: location}, nil
+}
+
+// resolveTimezone returns the location a format reads the clock in. A timezone
+// is required only when the format uses a date (see formatUsesDate); a format
+// without one reads the clock in UTC, which no segment or scope key can observe.
+// A timezone that is set is validated either way, so a typo can't pass silently.
+func resolveTimezone(cfg FormatConfig) (*time.Location, error) {
+	if cfg.Timezone == "" {
+		if formatUsesDate(cfg) {
+			return nil, fmt.Errorf("timezone is required because the format has a date segment or a date placeholder ({yyyy}, {yyyyMM}, {yyyyMMdd}) in a scope key; set an IANA zone name such as \"Asia/Colombo\" or \"UTC\"")
+		}
+		return time.UTC, nil
+	}
+
+	// time.LoadLocation resolves "Local" to the host's zone, which would make
+	// the same config render different IDs on differently configured hosts.
+	if cfg.Timezone == "Local" {
+		return nil, fmt.Errorf("timezone %q is not allowed because it depends on the host; use an IANA zone name such as \"Asia/Colombo\" or \"UTC\"", cfg.Timezone)
+	}
+
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("timezone %q is not a known IANA zone name: %w", cfg.Timezone, err)
+	}
+	return loc, nil
+}
+
+// formatUsesDate reports whether rendering the format reads the date: it has a
+// date segment, or a sequence or random segment whose scope key contains a date
+// placeholder.
+func formatUsesDate(cfg FormatConfig) bool {
+	for _, sc := range cfg.Segments {
+		switch sc.Type {
+		case SegmentTypeDate:
+			return true
+		case SegmentTypeSequence:
+			if sc.Sequence != nil && scopeKeyUsesDate(sc.Sequence.ScopeKey) {
+				return true
+			}
+		case SegmentTypeRandom:
+			if sc.Random != nil && scopeKeyUsesDate(sc.Random.ScopeKey) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // compileSegment dispatches to the appropriate constructor based on sc.Type.
