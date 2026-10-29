@@ -42,6 +42,17 @@ type FormatConfig struct {
 	// placeholder in scope key templates.
 	IDType string `yaml:"idType"`
 
+	// Timezone is the IANA time zone name (e.g. "Asia/Colombo", "UTC") this
+	// format reads the clock in. It drives both the date segments and the
+	// {yyyy}, {yyyyMM} and {yyyyMMdd} scope key placeholders, so the date in an
+	// ID and the point where its counter resets always agree.
+	//
+	// Required when the format has a date segment or a sequence or random scope
+	// key using one of those placeholders; NewRegistry rejects a missing,
+	// unknown or "Local" zone. A format with no date use needs none, and one
+	// that is set is still validated.
+	Timezone string `yaml:"timezone,omitempty"`
+
 	// Segments is the ordered list of typed segments whose rendered outputs are
 	// concatenated to form the final ID string.
 	Segments []SegmentConfig `yaml:"segments"`
@@ -81,7 +92,7 @@ type SegmentConfig struct {
 	Pattern string `yaml:"pattern,omitempty"`
 
 	// Layout is a Go reference-date format string (e.g. "20060102"), used by
-	// date segments.
+	// date segments. The current time is formatted in the format's Timezone.
 	Layout string `yaml:"layout,omitempty"`
 
 	// Sequence holds the settings for a sequence segment. Required (non-nil)

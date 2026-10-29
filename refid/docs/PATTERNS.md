@@ -16,7 +16,7 @@ Six segment types, each with its own config fields ([../config.go](../config.go)
 | `literal` | `value` | the fixed string, unchanged |
 | `list` | `list`, `param` | a caller-supplied param, after validating it against a named list |
 | `param` | `param`, `pattern` | a caller-supplied param as is, after checking it against a required, anchored RE2 `pattern` |
-| `date` | `layout` | the current UTC time in a Go reference-date layout |
+| `date` | `layout` | the current time, in the format's `timezone`, in a Go reference-date layout |
 | `sequence` | nested `sequence:` → `scopeKey`, `padding` | a durable counter, zero-padded |
 | `random` | nested `random:` → `scopeKey`, `charset`, `length`, `maxAttempts` | a fixed-length random value, checked for collisions |
 
@@ -48,6 +48,12 @@ What the engine actually enforces:
   stateful (they commit to a store); `literal`, `list`, `param`, and `date` are pure functions of
   the caller's params and the current time. See
   [Stateful Segment Limit](../README.md#stateful-segment-limit) for why.
+- A format that reads the date needs a **`timezone`** — an IANA zone name such as
+  `Asia/Colombo` or `UTC`, set on the format itself (beside `idType`), not on a segment. "Reads
+  the date" means it has a `date` segment, or a `sequence`/`random` `scopeKey` containing
+  `{yyyy}`, `{yyyyMM}` or `{yyyyMMdd}`. One zone drives both, so the date in the ID and the
+  counter reset agree. A format that reads no date leaves `timezone` out. See
+  [Timezone](../README.md#timezone).
 - Everything else is free: `literal`, `list`, `param`, and `date` may appear any number of times,
   in any order, before or after the stateful segment.
 
@@ -70,11 +76,14 @@ Reserved placeholders: `{issuer}`, `{idType}`, `{yyyy}`, `{yyyyMM}`, `{yyyyMMdd}
 |---|---|---|
 | Never | `{issuer}:{idType}` | Never — one space forever |
 | Never, per param | `{issuer}:{idType}:{officeCode}` | Never, but each param value gets its own space |
-| Yearly | `{issuer}:{idType}:{yyyy}` | Jan 1 UTC |
-| Monthly | `{issuer}:{idType}:{yyyyMM}` | 1st of month UTC |
-| Daily | `{issuer}:{idType}:{yyyyMMdd}` | Midnight UTC |
-| Daily, per param | `{issuer}:{idType}:{officeCode}:{yyyyMMdd}` | Midnight UTC, independently per param value |
+| Yearly | `{issuer}:{idType}:{yyyy}` | Jan 1, at midnight in the format's `timezone` |
+| Monthly | `{issuer}:{idType}:{yyyyMM}` | 1st of month, at midnight in the format's `timezone` |
+| Daily | `{issuer}:{idType}:{yyyyMMdd}` | Midnight in the format's `timezone` |
+| Daily, per param | `{issuer}:{idType}:{officeCode}:{yyyyMMdd}` | Midnight in the format's `timezone`, independently per param value |
 | Multi-param | `{issuer}:{idType}:{officeCode}:{deptCode}` | Never, independently per (office, dept) pair |
+
+Any row using a date token needs `timezone` on its format. For `Asia/Colombo` (UTC+5:30) the
+"Daily" row resets at 18:30 UTC, local midnight, rather than at 05:30 local time.
 
 There is no quarterly or weekly placeholder. A cadence outside the three date tokens needs
 a caller-supplied param (e.g. pass `quarter: "2026Q3"` and reference `{quarter}`), since Go's
@@ -229,6 +238,7 @@ issuers:
   - issuer: RTA
     formats:
       - idType: application_id
+        timezone: Asia/Colombo
         segments:
           - type: literal
             value: "RTA-APP-"
@@ -259,6 +269,7 @@ issuers:
   - issuer: FCAU
     formats:
       - idType: case_id
+        timezone: Asia/Colombo
         segments:
           - type: literal
             value: "CASE-"
@@ -315,6 +326,7 @@ issuers:
   - issuer: RTA
     formats:
       - idType: daily_log_id
+        timezone: Asia/Colombo
         segments:
           - type: date
             layout: "20060102"
@@ -402,6 +414,7 @@ issuers:
   - issuer: RTA
     formats:
       - idType: token_id
+        timezone: Asia/Colombo
         segments:
           - type: literal
             value: "TKT-"
@@ -445,6 +458,7 @@ issuers:
   - issuer: RTA
     formats:
       - idType: batch_key
+        timezone: Asia/Colombo
         segments:
           - type: literal
             value: "RTA-"
@@ -493,6 +507,7 @@ issuers:
   - issuer: ACME
     formats:
       - idType: cert_serial
+        timezone: Asia/Colombo
         segments:
           - type: sequence
             sequence:

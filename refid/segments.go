@@ -22,7 +22,8 @@ import (
 //   - params holds the caller-supplied key/value pairs (e.g. officeCode: "COL").
 //   - now is provided by the caller rather than read from time.Now() inside each
 //     segment, so every segment in one Generate call shares the same clock value
-//     and tests can inject a fixed time without global state.
+//     and tests can inject a fixed time without global state. It is already in
+//     the format's timezone, so segments format it as given.
 type segment interface {
 	validate(params map[string]string, now time.Time) error
 	render(ctx context.Context, params map[string]string, now time.Time) (string, error)
@@ -165,7 +166,8 @@ func newParamSegment(cfg SegmentConfig) (*paramSegment, error) {
 // dateSegment
 // -----------------------------------------------------------------------
 
-// dateSegment formats the current time using a Go reference-date layout string.
+// dateSegment formats the current time, in the format's timezone, using a Go
+// reference-date layout string.
 type dateSegment struct {
 	layout string
 }
@@ -198,9 +200,9 @@ func newDateSegment(cfg SegmentConfig) (*dateSegment, error) {
 //
 //	{issuer}    — the issuer string for this format
 //	{idType}    — the idType string for this format
-//	{yyyy}      — four-digit year derived from now
-//	{yyyyMM}    — year + month derived from now
-//	{yyyyMMdd}  — year + month + day derived from now
+//	{yyyy}      — four-digit year derived from now, in the format's timezone
+//	{yyyyMM}    — year + month derived from now, in the format's timezone
+//	{yyyyMMdd}  — year + month + day derived from now, in the format's timezone
 //	{<param>}   — any caller-supplied param key not already claimed above
 //
 // Reserved placeholders always take precedence over a caller param of the
@@ -393,21 +395,39 @@ func newRandomSegment(cfg SegmentConfig, issuer, idType string, store RandomStor
 // scopeKey template resolution
 // -----------------------------------------------------------------------
 
+// dateScopeTokens maps each date placeholder a scope key may use to the layout
+// it renders with. resolveScopeKey substitutes them and scopeKeyUsesDate looks
+// for them, so the two cannot drift apart.
+var dateScopeTokens = []struct{ token, layout string }{
+	{"{yyyy}", "2006"},
+	{"{yyyyMM}", "200601"},
+	{"{yyyyMMdd}", "20060102"},
+}
+
+// scopeKeyUsesDate reports whether tmpl contains a date placeholder, which makes
+// the scope key depend on the format's timezone.
+func scopeKeyUsesDate(tmpl string) bool {
+	for _, d := range dateScopeTokens {
+		if strings.Contains(tmpl, d.token) {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveScopeKey substitutes all {placeholder} tokens in tmpl and returns
-// ErrInvalidParam if any un-substituted placeholder remains in the key.
+// ErrInvalidParam if any un-substituted placeholder remains in the key. The date
+// tokens render now as given, which is in the format's timezone.
 // Precedence: reserved tokens ({issuer}, {idType}, date tokens) > caller params.
 func resolveScopeKey(tmpl, issuer, idType string, params map[string]string, now time.Time) (string, error) {
 	var replacements []string
 
 	// Reserved placeholders (highest precedence; added first so strings.NewReplacer
 	// picks these before any identically-named param).
-	replacements = append(replacements,
-		"{issuer}", issuer,
-		"{idType}", idType,
-		"{yyyy}", now.Format("2006"),
-		"{yyyyMM}", now.Format("200601"),
-		"{yyyyMMdd}", now.Format("20060102"),
-	)
+	replacements = append(replacements, "{issuer}", issuer, "{idType}", idType)
+	for _, d := range dateScopeTokens {
+		replacements = append(replacements, d.token, now.Format(d.layout))
+	}
 
 	// Caller-supplied params (lower precedence).
 	for k, v := range params {
