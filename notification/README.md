@@ -28,6 +28,18 @@ err = manager.Send(ctx, notification.Request{
 
 `NewManager` returns an error when it gets no providers, a nil one, or two for the same channel.
 
+## Providers
+
+| Constructor                     | Channel | Sends through                                   |
+|---------------------------------|---------|-------------------------------------------------|
+| `providers.NewSMSProvider`      | `sms`   | GovSMS V1 API                                   |
+| `providers.NewEmailProvider`    | `email` | PingMailer's API, which relays to SMTP (XOAUTH2) |
+| `providers.NewSMTPProvider`     | `email` | Any SMTP server, directly                       |
+
+`NewEmailProvider` and `NewSMTPProvider` both handle the `email` channel, so register one or the other.
+
+The SMTP provider opens a connection per email. It secures the connection with STARTTLS (the default), implicit TLS (`tlsMode: tls`), or not at all (`tlsMode: none`, for a local relay or a development mail catcher, and never with credentials). It authenticates with AUTH PLAIN when `username` is set. A send is bounded by its context, or by 30 seconds when the context has no deadline, and a nil error means the server accepted the message.
+
 ## Channels
 
 | Constant                    | Value     |
@@ -98,6 +110,20 @@ notification:
           resource: https://mail.example.com
     smtpHost: mail.example.com
     smtpPort: 587
+    sender: no-reply@example.com
+    # senderName: Trade National Single Window
+```
+
+Or, to send through an SMTP server directly, configure `providers.SMTPConfig` in place of the email provider:
+
+```yaml
+notification:
+  smtp:
+    host: smtp.example.com
+    # port: 587 # optional: 587 for starttls, 465 for tls, 25 for none
+    # tlsMode: starttls # starttls (default), tls or none
+    username: no-reply@example.com
+    password: "{{env:NOTIFICATION_SMTP_PASSWORD}}"
     sender: no-reply@example.com
     # senderName: Trade National Single Window
 ```
