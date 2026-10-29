@@ -59,6 +59,7 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	metadata, err := h.Service.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	var tooLarge *FileTooLargeError
+	var mismatch *ExtensionMismatchError
 	switch {
 	case errors.Is(err, ErrInvalidSize):
 		writeJSONError(w, http.StatusBadRequest, "size must be greater than 0")
@@ -68,6 +69,9 @@ func (h *HTTPHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrContentTypeNotAllowed):
 		writeJSONError(w, http.StatusUnsupportedMediaType, "invalid or prohibited file type")
+		return
+	case errors.As(err, &mismatch):
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("the file name's extension (%q) does not match its type (%s)", mismatch.Extension, mismatch.MediaType))
 		return
 	}
 	if err != nil {
@@ -96,9 +100,13 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, expiresAt, err := h.Service.DownloadURL(r.Context(), key)
+	download, err := h.Service.DownloadURL(r.Context(), key)
 	if errors.Is(err, ErrInvalidKey) {
 		writeJSONError(w, http.StatusBadRequest, "invalid key format")
+		return
+	}
+	if errors.Is(err, ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "file not found")
 		return
 	}
 	if err != nil {
@@ -109,8 +117,11 @@ func (h *HTTPHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
-		"download_url": url,
-		"expires_at":   expiresAt,
+		"download_url": download.URL,
+		"expires_at":   download.ExpiresAt,
+		"mime_type":    download.ContentType,
+		"disposition":  download.Disposition,
+		"size":         download.Size,
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "Failed to encode response", "error", err)
 	}

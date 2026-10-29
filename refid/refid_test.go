@@ -6,6 +6,8 @@ package refid_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -99,7 +101,8 @@ func rtaConfig() refid.Config {
 				Issuer: "RTA",
 				Formats: []refid.FormatConfig{
 					{
-						IDType: "application_id",
+						IDType:   "application_id",
+						Timezone: "UTC",
 						Segments: []refid.SegmentConfig{
 							{Type: refid.SegmentTypeLiteral, Value: "RTA-APP-"},
 							{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
@@ -498,7 +501,8 @@ func TestSegment_DatePlaceholderVariants(t *testing.T) {
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
-				IDType: "date_variants",
+				IDType:   "date_variants",
+				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
 					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyy}:{yyyyMM}:{yyyyMMdd}", Padding: 4}},
 				},
@@ -612,87 +616,78 @@ func utc(year int, month time.Month, day, hour, min, sec int) time.Time {
 // crosses that period's boundary and continues within it. A sequence without a
 // date placeholder keeps counting across every boundary.
 func TestScopeKey_PeriodReset(t *testing.T) {
-	now := utc(2026, time.December, 31, 23, 59, 58)
-	for _, tc := range []struct {
+	type step struct {
+		at   time.Time
+		want string
+	}
+	tests := []struct {
 		name     string
 		scopeKey string
-		// steps are the clock readings and the sequence value each ID gets.
-		steps []struct {
-			at   time.Time
-			want string
-		}
+		steps    []step
 	}{
 		{
 			name: "yearly", scopeKey: "{issuer}:{idType}:{yyyy}",
-			steps: []struct {
-				at   time.Time
-				want string
-			}{
-				{utc(2026, time.December, 31, 23, 59, 59), "0001"},
-				{utc(2026, time.December, 31, 23, 59, 59), "0002"},
-				{utc(2027, time.January, 1, 0, 0, 0), "0001"},
-				{utc(2027, time.June, 15, 12, 0, 0), "0002"},
+			steps: []step{
+				{utc(2026, 12, 31, 23, 59, 58), "0001"},
+				{utc(2026, 12, 31, 23, 59, 59), "0002"},
+				{utc(2027, 1, 1, 0, 0, 0), "0001"}, // new year
+				{utc(2027, 1, 1, 0, 0, 1), "0002"},
+				{utc(2027, 6, 15, 12, 0, 0), "0003"}, // same year, months later
 			},
 		},
 		{
 			name: "monthly", scopeKey: "{issuer}:{idType}:{yyyyMM}",
-			steps: []struct {
-				at   time.Time
-				want string
-			}{
-				{utc(2026, time.January, 31, 23, 59, 59), "0001"},
-				{utc(2026, time.January, 31, 23, 59, 59), "0002"},
-				{utc(2026, time.February, 1, 0, 0, 0), "0001"},
-				{utc(2026, time.February, 28, 12, 0, 0), "0002"},
-				{utc(2027, time.February, 1, 0, 0, 0), "0001"},
+			steps: []step{
+				{utc(2026, 1, 31, 23, 59, 59), "0001"},
+				{utc(2026, 2, 1, 0, 0, 0), "0001"}, // new month
+				{utc(2026, 2, 28, 23, 59, 59), "0002"},
+				{utc(2027, 2, 1, 0, 0, 0), "0001"}, // same month, a year later
 			},
 		},
 		{
 			name: "daily", scopeKey: "{issuer}:{idType}:{yyyyMMdd}",
-			steps: []struct {
-				at   time.Time
-				want string
-			}{
-				{utc(2026, time.March, 1, 23, 59, 59), "0001"},
-				{utc(2026, time.March, 1, 23, 59, 59), "0002"},
-				{utc(2026, time.March, 2, 0, 0, 0), "0001"},
-				{utc(2026, time.March, 2, 12, 0, 0), "0002"},
+			steps: []step{
+				{utc(2026, 6, 14, 23, 59, 59), "0001"},
+				{utc(2026, 6, 15, 0, 0, 0), "0001"}, // new day
+				{utc(2026, 6, 15, 12, 0, 0), "0002"},
+				{utc(2026, 6, 16, 0, 0, 0), "0001"},
 			},
 		},
 		{
 			name: "no date placeholder", scopeKey: "{issuer}:{idType}",
-			steps: []struct {
-				at   time.Time
-				want string
-			}{
-				{utc(2026, time.December, 31, 23, 59, 59), "0001"},
-				{utc(2027, time.January, 1, 0, 0, 0), "0002"},
-				{utc(2028, time.January, 1, 0, 0, 0), "0003"},
+			steps: []step{
+				{utc(2026, 12, 31, 23, 59, 59), "0001"},
+				{utc(2027, 1, 1, 0, 0, 0), "0002"}, // year boundary
+				{utc(2027, 2, 1, 0, 0, 0), "0003"}, // month boundary
+				{utc(2027, 2, 2, 0, 0, 0), "0004"}, // day boundary
 			},
 		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := refid.Config{Issuers: []refid.IssuerConfig{{
-				Issuer: "TEST",
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := tt.steps[0].at
+			reg, err := refid.NewRegistry(refid.Config{Issuers: []refid.IssuerConfig{{
+				Issuer: "ACME",
 				Formats: []refid.FormatConfig{{
-					IDType: "seq",
+					IDType:   "ref",
+					Timezone: "UTC",
 					Segments: []refid.SegmentConfig{
-						{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: tc.scopeKey, Padding: 4}},
+						{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: tt.scopeKey, Padding: 4}},
 					},
 				}},
-			}}}
-			reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithClock(clockAt(&now)))
+			}}}, refid.WithSequenceStore(newMemStore()), refid.WithClock(clockAt(&now)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			for i, step := range tc.steps {
-				now = step.at
-				got, err := reg.Generate(context.Background(), "TEST", "seq", nil)
+
+			for _, s := range tt.steps {
+				now = s.at
+				got, err := reg.Generate(context.Background(), "ACME", "ref", nil)
 				if err != nil {
-					t.Fatalf("step %d (%s): %v", i, step.at.Format(time.RFC3339), err)
+					t.Fatalf("at %s: %v", s.at.Format(time.RFC3339), err)
 				}
-				if got != step.want {
-					t.Errorf("step %d (%s): got %q, want %q", i, step.at.Format(time.RFC3339), got, step.want)
+				if got != s.want {
+					t.Errorf("at %s: ID = %q, want %q", s.at.Format(time.RFC3339), got, s.want)
 				}
 			}
 		})
@@ -702,132 +697,162 @@ func TestScopeKey_PeriodReset(t *testing.T) {
 // A daily scope that also carries a param restarts each param value's count at
 // midnight, independently of the others.
 func TestScopeKey_DailyResetPerParam(t *testing.T) {
-	now := utc(2026, time.March, 1, 23, 59, 59)
-	cfg := refid.Config{
-		Lists: map[string][]string{"office": {"COL", "KAN"}},
+	store := newMemStore()
+	now := utc(2026, 6, 14, 10, 0, 0)
+	reg, err := refid.NewRegistry(refid.Config{
+		Lists: map[string][]string{"office_location": {"COL", "KAN"}},
 		Issuers: []refid.IssuerConfig{{
-			Issuer: "TEST",
+			Issuer: "FCAU",
 			Formats: []refid.FormatConfig{{
-				IDType: "case_id",
+				IDType:   "case_id",
+				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
-					{Type: refid.SegmentTypeList, List: "office", Param: "officeCode"},
-					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 3}},
+					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
+					{Type: refid.SegmentTypeLiteral, Value: "-"},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 4}},
 				},
 			}},
 		}},
-	}
-	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithClock(clockAt(&now)))
+	}, refid.WithSequenceStore(store), refid.WithClock(clockAt(&now)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	generate := func(office string) string {
-		t.Helper()
-		id, err := reg.Generate(context.Background(), "TEST", "case_id", map[string]string{"officeCode": office})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return id
-	}
-	for _, step := range []struct {
+
+	steps := []struct {
 		at     time.Time
 		office string
 		want   string
 	}{
-		{now, "COL", "COL001"},
-		{now, "COL", "COL002"},
-		{now, "KAN", "KAN001"},
-		{utc(2026, time.March, 2, 0, 0, 0), "COL", "COL001"},
-		{utc(2026, time.March, 2, 0, 0, 0), "KAN", "KAN001"},
-		{utc(2026, time.March, 2, 0, 0, 1), "COL", "COL002"},
-	} {
-		now = step.at
-		if got := generate(step.office); got != step.want {
-			t.Errorf("%s at %s: got %q, want %q", step.office, step.at.Format(time.RFC3339), got, step.want)
+		{utc(2026, 6, 14, 10, 0, 0), "COL", "COL-0001"},
+		{utc(2026, 6, 14, 10, 0, 0), "KAN", "KAN-0001"},
+		{utc(2026, 6, 14, 23, 59, 59), "COL", "COL-0002"},
+		{utc(2026, 6, 15, 0, 0, 0), "COL", "COL-0001"}, // midnight: COL restarts
+		{utc(2026, 6, 15, 0, 0, 1), "COL", "COL-0002"},
+		{utc(2026, 6, 15, 0, 0, 2), "KAN", "KAN-0001"}, // KAN restarts on its own first call of the day
+	}
+	for _, s := range steps {
+		now = s.at
+		got, err := reg.Generate(context.Background(), "FCAU", "case_id", map[string]string{"officeCode": s.office})
+		if err != nil {
+			t.Fatalf("at %s: %v", s.at.Format(time.RFC3339), err)
 		}
+		if got != s.want {
+			t.Errorf("at %s: ID = %q, want %q", s.at.Format(time.RFC3339), got, s.want)
+		}
+	}
+
+	// Two offices over two days: the first day's counters are left as they were.
+	if len(store.counters) != 4 {
+		t.Errorf("expected 4 scope keys in store, got %d: %v", len(store.counters), store.counters)
+	}
+	if got := store.counters["FCAU:case_id:COL:20260614"]; got != 2 {
+		t.Errorf("COL counter for 14 June = %d, want 2", got)
 	}
 }
 
-// Every date segment of one ID, whatever its layout, renders from the one clock
-// value Generate reads, and a sequence scoped by year counts that year.
-func TestSegment_MultipleDateSegmentsShareOneClockValue(t *testing.T) {
-	now := utc(2026, time.September, 7, 10, 0, 0)
-	calls := 0
+// -----------------------------------------------------------------------
+// WithClock
+// -----------------------------------------------------------------------
+
+// Generate reads the clock once per ID, so the date segments and the scope key
+// of one ID can't come from different instants. The clock here moves a month on
+// every read: a second read inside one Generate would show as a month that
+// disagrees between the ID's segments, or as a skipped month between IDs.
+func TestWithClock_ReadOncePerID(t *testing.T) {
+	reads := 0
+	base := utc(2026, 11, 15, 12, 0, 0)
 	clock := func() time.Time {
-		calls++
-		return now
+		at := base.AddDate(0, reads, 0)
+		reads++
+		return at
 	}
-	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
-		Issuer: "TEST",
+	reg, err := refid.NewRegistry(refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
 		Formats: []refid.FormatConfig{{
-			IDType: "dated",
+			IDType:   "ref",
+			Timezone: "UTC",
 			Segments: []refid.SegmentConfig{
 				{Type: refid.SegmentTypeDate, Layout: "2006"},
 				{Type: refid.SegmentTypeLiteral, Value: "/"},
 				{Type: refid.SegmentTypeDate, Layout: "01"},
 				{Type: refid.SegmentTypeLiteral, Value: "/"},
-				{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyy}", Padding: 4}},
+				{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyyMM}", Padding: 4}},
 			},
 		}},
-	}}}
-	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithClock(clock))
+	}}}, refid.WithSequenceStore(newMemStore()), refid.WithClock(clock))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	for i, want := range []string{"2026/09/0001", "2026/09/0002"} {
-		got, err := reg.Generate(ctx, "TEST", "dated", nil)
+
+	// Each month is new, so each ID is the first of its month's scope.
+	for i, want := range []string{"2026/11/0001", "2026/12/0001", "2027/01/0001"} {
+		got, err := reg.Generate(context.Background(), "ACME", "ref", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
-			t.Errorf("ID %d: got %q, want %q", i, got, want)
-		}
-		if calls != i+1 {
-			t.Errorf("after ID %d the clock was read %d times, want one read per ID", i, calls)
+			t.Errorf("ID %d = %q, want %q", i+1, got, want)
 		}
 	}
-
-	// The month changes within the year: the date text follows it, the count continues.
-	now = utc(2026, time.October, 1, 0, 0, 0)
-	if got, _ := reg.Generate(ctx, "TEST", "dated", nil); got != "2026/10/0003" {
-		t.Errorf("next month: got %q, want 2026/10/0003", got)
-	}
-	// A new year restarts the count and changes the year text.
-	now = utc(2027, time.January, 1, 0, 0, 0)
-	if got, _ := reg.Generate(ctx, "TEST", "dated", nil); got != "2027/01/0001" {
-		t.Errorf("next year: got %q, want 2027/01/0001", got)
+	if reads != 3 {
+		t.Errorf("clock read %d times for 3 IDs, want 3", reads)
 	}
 }
 
-// A clock in another zone renders in UTC: 23:30 on 31 December at UTC-5 is
-// already 1 January in UTC.
-func TestWithClock_ConvertsToUTC(t *testing.T) {
-	zone := time.FixedZone("UTC-5", -5*60*60)
-	now := time.Date(2026, time.December, 31, 23, 30, 0, 0, zone)
+// The clock supplies an instant. The zone its time carries is ignored: each
+// format renders the instant in its own timezone.
+func TestWithClock_ClockZoneIsIgnored(t *testing.T) {
 	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
-		Issuer: "TEST",
-		Formats: []refid.FormatConfig{{
-			IDType:   "dated",
-			Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: "20060102"}},
-		}},
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{
+			{IDType: "colombo_day", Timezone: "Asia/Colombo", Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: "20060102"}}},
+			{IDType: "utc_day", Timezone: "UTC", Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: "20060102"}}},
+		},
 	}}}
-	reg, err := refid.NewRegistry(cfg, refid.WithClock(clockAt(&now)))
+
+	// 20:00 UTC on 31 December: already 1 January in Colombo, still 31 December in UTC.
+	instant := utc(2026, 12, 31, 20, 0, 0)
+	newYork, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := reg.Generate(context.Background(), "TEST", "dated", nil)
-	if err != nil {
-		t.Fatal(err)
+	zones := map[string]*time.Location{
+		"UTC":         time.UTC,
+		"New York":    newYork,
+		"fixed +1400": time.FixedZone("UTC+14", 14*60*60),
 	}
-	if got != "20270101" {
-		t.Errorf("got %q, want 20270101", got)
+	for name, loc := range zones {
+		t.Run(name, func(t *testing.T) {
+			reg, err := refid.NewRegistry(cfg, refid.WithClock(func() time.Time { return instant.In(loc) }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for idType, want := range map[string]string{"colombo_day": "20270101", "utc_day": "20261231"} {
+				got, err := reg.Generate(context.Background(), "ACME", idType, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got != want {
+					t.Errorf("%s = %q, want %q", idType, got, want)
+				}
+			}
+		})
 	}
 }
 
 func TestWithClock_NilRejected(t *testing.T) {
-	_, err := refid.NewRegistry(refid.Config{}, refid.WithClock(nil))
+	_, err := refid.NewRegistry(refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{{
+			IDType:   "fixed",
+			Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeLiteral, Value: "X"}},
+		}},
+	}}}, refid.WithClock(nil))
 	if err == nil {
 		t.Fatal("expected an error for a nil clock")
+	}
+	if !strings.Contains(err.Error(), "WithClock") {
+		t.Errorf("error = %q, want it to name WithClock", err)
 	}
 }
 
@@ -902,35 +927,6 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 // Segment-level unit tests (via the registry; segments are unexported)
 // -----------------------------------------------------------------------
 
-func TestSegment_Date_UsesUTC(t *testing.T) {
-	// Without WithClock the date segment renders the current UTC date, so the
-	// output parses as a valid date string.
-	cfg := refid.Config{
-		Issuers: []refid.IssuerConfig{{
-			Issuer: "TEST",
-			Formats: []refid.FormatConfig{{
-				IDType: "dated",
-				Segments: []refid.SegmentConfig{
-					{Type: refid.SegmentTypeDate, Layout: "20060102"},
-				},
-			}},
-		}},
-	}
-	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := reg.Generate(context.Background(), "TEST", "dated", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Must parse as YYYYMMDD
-	_, parseErr := time.Parse("20060102", id)
-	if parseErr != nil {
-		t.Errorf("date segment output %q did not parse as YYYYMMDD: %v", id, parseErr)
-	}
-}
-
 func TestSegment_Literal_EmptyValueRejected(t *testing.T) {
 	cfg := refid.Config{
 		Issuers: []refid.IssuerConfig{{
@@ -969,7 +965,8 @@ func TestNewRegistry_NoStoresNeededWithoutSequenceOrRandomSegments(t *testing.T)
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
-				IDType: "simple",
+				IDType:   "simple",
+				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
 					{Type: refid.SegmentTypeLiteral, Value: "PREFIX-"},
 					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
@@ -1028,6 +1025,7 @@ func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "bad",
+				Timezone: "UTC", // so the empty layout, not the missing zone, is what's rejected
 				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: ""}},
 			}},
 		}},
@@ -1403,4 +1401,218 @@ func TestExampleConfig_Compiles(t *testing.T) {
 	if _, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore())); err != nil {
 		t.Fatalf("example_config.yaml does not compile: %v", err)
 	}
+}
+
+// -----------------------------------------------------------------------
+// timezone
+//
+// Config validation lives here. Tests that pin the clock to see which date a
+// zone renders are in registry_internal_test.go.
+// -----------------------------------------------------------------------
+
+func tzLiteral() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeLiteral, Value: "X-"}
+}
+
+func tzList() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"}
+}
+
+func tzParam() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeParam, Param: "payerNo", Pattern: "[0-9]{4}"}
+}
+
+func tzDate() refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeDate, Layout: "20060102"}
+}
+
+func tzSequence(scopeKey string) refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: scopeKey, Padding: 4}}
+}
+
+func tzRandom(scopeKey string) refid.SegmentConfig {
+	return refid.SegmentConfig{Type: refid.SegmentTypeRandom, Random: &refid.RandomSegmentConfig{ScopeKey: scopeKey, Charset: refid.CharsetNumeric, Length: 4}}
+}
+
+// tzConfig is a config with one format, (TZ, tz_format), holding segments and
+// the given timezone.
+func tzConfig(timezone string, segments ...refid.SegmentConfig) refid.Config {
+	return refid.Config{
+		Lists: map[string][]string{"office_location": {"COL", "GAL"}},
+		Issuers: []refid.IssuerConfig{{
+			Issuer:  "TZ",
+			Formats: []refid.FormatConfig{{IDType: "tz_format", Timezone: timezone, Segments: segments}},
+		}},
+	}
+}
+
+func newTZRegistry(cfg refid.Config) (refid.Registry, error) {
+	return refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()), refid.WithRandomStore(newMemRandomStore()))
+}
+
+// A format that reads the date needs a usable timezone, and a timezone that is
+// set must be usable even when no date is read.
+func TestNewRegistry_Timezone_Rejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     refid.Config
+		wantMsg string
+	}{
+		{"date segment, no timezone", tzConfig("", tzDate()), "timezone is required"},
+		{"date segment and date scope key, no timezone", tzConfig("", tzDate(), tzSequence("{issuer}:{idType}:{yyyyMMdd}")), "timezone is required"},
+		{"sequence {yyyy}, no timezone", tzConfig("", tzSequence("{issuer}:{idType}:{yyyy}")), "timezone is required"},
+		{"sequence {yyyyMM}, no timezone", tzConfig("", tzSequence("{issuer}:{idType}:{yyyyMM}")), "timezone is required"},
+		{"sequence {yyyyMMdd}, no timezone", tzConfig("", tzSequence("{issuer}:{idType}:{yyyyMMdd}")), "timezone is required"},
+		{"random {yyyy}, no timezone", tzConfig("", tzRandom("{issuer}:{idType}:{yyyy}")), "timezone is required"},
+		{"random {yyyyMM}, no timezone", tzConfig("", tzRandom("{issuer}:{idType}:{yyyyMM}")), "timezone is required"},
+		{"random {yyyyMMdd}, no timezone", tzConfig("", tzRandom("{issuer}:{idType}:{yyyyMMdd}")), "timezone is required"},
+		{"date placeholder beside a param placeholder, no timezone", tzConfig("", tzList(), tzSequence("{issuer}:{idType}:{officeCode}:{yyyyMMdd}")), "timezone is required"},
+		{"date segment, blank timezone", tzConfig("  ", tzDate()), `timezone "  "`},
+		{"unknown zone", tzConfig("Mars/Olympus", tzDate()), "not a known IANA zone name"},
+		{"Local", tzConfig("Local", tzDate()), "depends on the host"},
+		{"relative path", tzConfig("../etc/localtime", tzDate()), `timezone "../etc/localtime"`},
+		{"absolute path", tzConfig("/etc/localtime", tzDate()), `timezone "/etc/localtime"`},
+		{"unknown zone on a format with no date", tzConfig("Mars/Olympus", tzLiteral()), "not a known IANA zone name"},
+		{"Local on a format with no date", tzConfig("Local", tzLiteral()), "depends on the host"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := newTZRegistry(tt.cfg)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Errorf("error %q does not contain %q", err, tt.wantMsg)
+			}
+			// The wrapped error says which format to fix.
+			if !strings.Contains(err.Error(), `("TZ", "tz_format")`) {
+				t.Errorf("error %q does not name the format", err)
+			}
+		})
+	}
+}
+
+func TestNewRegistry_Timezone_Accepted(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  refid.Config
+	}{
+		// A usable zone, on each way a format can read the date.
+		{"UTC", tzConfig("UTC", tzDate())},
+		{"Asia/Colombo", tzConfig("Asia/Colombo", tzDate())},
+		{"zone with daylight saving", tzConfig("America/New_York", tzDate())},
+		{"zone ahead of UTC by 14 hours", tzConfig("Pacific/Kiritimati", tzDate())},
+		{"zone with only a date scope key", tzConfig("Asia/Colombo", tzSequence("{issuer}:{idType}:{yyyyMMdd}"))},
+		{"zone with a random date scope key", tzConfig("Asia/Colombo", tzRandom("{issuer}:{idType}:{yyyy}"))},
+
+		// No date is read, so no timezone is needed.
+		{"literal only", tzConfig("", tzLiteral())},
+		{"list and param-scoped sequence", tzConfig("", tzList(), tzSequence("{issuer}:{idType}:{officeCode}"))},
+		{"param and literal", tzConfig("", tzParam(), tzLiteral())},
+		{"random scoped by issuer and idType", tzConfig("", tzRandom("{issuer}:{idType}"))},
+		// Only the exact placeholders count as dates.
+		{"look-alike placeholder", tzConfig("", tzSequence("{issuer}:{idType}:{yyyyy}"))},
+		{"year text without braces", tzConfig("", tzSequence("{issuer}:{idType}:yyyy"))},
+
+		// A zone nobody reads is harmless.
+		{"zone on a format with no date", tzConfig("UTC", tzLiteral())},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := newTZRegistry(tt.cfg); err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+		})
+	}
+}
+
+// The zone is a per-idType setting: one format missing it fails even when its
+// siblings are fine, and the error points at that format alone.
+func TestNewRegistry_Timezone_ErrorNamesOffendingFormat(t *testing.T) {
+	cfg := rtaConfig() // application_id reads the date, permit_id does not
+	cfg.Issuers[0].Formats[0].Timezone = ""
+
+	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), `("RTA", "application_id")`) {
+		t.Errorf("error %q does not name application_id", err)
+	}
+	if strings.Contains(err.Error(), "permit_id") {
+		t.Errorf("error %q blames permit_id, which reads no date", err)
+	}
+}
+
+func TestNewRegistry_Timezone_DifferentZonePerFormat(t *testing.T) {
+	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{
+			{IDType: "colombo_day", Timezone: "Asia/Colombo", Segments: []refid.SegmentConfig{tzDate()}},
+			{IDType: "utc_day", Timezone: "UTC", Segments: []refid.SegmentConfig{tzDate()}},
+			{IDType: "fixed", Segments: []refid.SegmentConfig{tzLiteral()}},
+		},
+	}}}
+	if _, err := refid.NewRegistry(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_Timezone(t *testing.T) {
+	const withZone = `
+issuers:
+  - issuer: RTA
+    formats:
+      - idType: application_id
+        timezone: Asia/Colombo
+        segments:
+          - type: date
+            layout: "20060102"
+          - type: sequence
+            sequence:
+              scopeKey: "{issuer}:{idType}:{yyyyMMdd}"
+              padding: 6
+      - idType: permit_id
+        segments:
+          - type: literal
+            value: "RTA-PMT-"
+          - type: sequence
+            sequence:
+              scopeKey: "{issuer}:{idType}"
+              padding: 8
+`
+	load := func(t *testing.T, body string) refid.Config {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "refid_config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := refid.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	t.Run("timezone is read per format", func(t *testing.T) {
+		cfg := load(t, withZone)
+		formats := cfg.Issuers[0].Formats
+		if got := formats[0].Timezone; got != "Asia/Colombo" {
+			t.Errorf("application_id timezone = %q, want Asia/Colombo", got)
+		}
+		if got := formats[1].Timezone; got != "" {
+			t.Errorf("permit_id timezone = %q, want empty", got)
+		}
+		if _, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore())); err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	})
+
+	t.Run("date format without timezone is rejected", func(t *testing.T) {
+		cfg := load(t, strings.Replace(withZone, "        timezone: Asia/Colombo\n", "", 1))
+		_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
+		if err == nil || !strings.Contains(err.Error(), "timezone is required") {
+			t.Fatalf("expected a timezone is required error, got: %v", err)
+		}
+	})
 }

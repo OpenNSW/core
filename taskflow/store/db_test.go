@@ -54,7 +54,15 @@ func (t *testStore) PersistSubmission(context.Context, string, string, int64, ma
 	return 0, nil
 }
 
+func (t *testStore) WriteDraft(context.Context, string, string, int64, map[string]any) (int64, error) {
+	return 0, nil
+}
+
 func (t *testStore) CompleteTask(context.Context, string, int64) (int64, error) { return 0, nil }
+
+func (t *testStore) CancelTask(context.Context, string) (int64, error) { return 0, nil }
+
+func (t *testStore) HoldTask(context.Context, string, int64) (int64, error) { return 0, nil }
 
 func (t *testStore) ClaimTask(context.Context, string, string, time.Time) (int64, error) {
 	return 0, nil

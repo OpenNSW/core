@@ -86,7 +86,7 @@ func main() {
 | `literal` | Fixed text string | `value: "FCAU-"` | `FCAU-` |
 | `list` | Parameter value validated against a controlled list | `list: office_location`, `param: officeCode` | `COL` |
 | `param` | Parameter value from an open set, checked against a pattern | `param: exporterId`, `pattern: "[0-9]{4}"` | `0001` |
-| `date` | Current UTC date/time using Go reference layout | `layout: "20060102"` | `20260818` |
+| `date` | Current date/time, in the format's [`timezone`](#timezone), using Go reference layout | `layout: "20060102"` | `20260818` |
 | `sequence` | Zero-padded durable counter | `sequence: {scopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", padding: 6}` | `000042` |
 | `random` | Fixed-length random value, collision-checked via `RandomStore` | `random: {scopeKey: "{issuer}:{idType}", charset: alphanumeric, length: 8}` | `7K2QQXAB` |
 
@@ -119,13 +119,61 @@ Sequence and random segments each resolve a `scopeKey` template per generation c
 Reserved placeholders:
 - `{issuer}` — Issuing authority (e.g. `"RTA"`)
 - `{idType}` — Format identifier (e.g. `"application_id"`)
-- `{yyyy}` — Current 4-digit UTC year (Yearly reset)
-- `{yyyyMM}` — Current UTC year + month (Monthly reset)
-- `{yyyyMMdd}` — Current UTC year + month + day (Daily reset)
+- `{yyyy}` — Current 4-digit year, in the format's [`timezone`](#timezone) (Yearly reset)
+- `{yyyyMM}` — Current year + month, in the format's timezone (Monthly reset)
+- `{yyyyMMdd}` — Current year + month + day, in the format's timezone (Daily reset)
 - `{<param>}` — Any caller-supplied param (e.g. `{officeCode}`)
 
 > [!NOTE]
 > Curly braces `{` and `}` are reserved syntax for placeholder delimiters in `scopeKey` templates.
+
+---
+
+## Timezone
+
+Each format (idType) reads the clock in its own timezone, set by the format's `timezone` field, which sits beside `idType` and `segments`. The same zone drives the `date` segments **and** the `{yyyy}`/`{yyyyMM}`/`{yyyyMMdd}` placeholders, so the date in an ID and the point where its counter resets always agree. For `Asia/Colombo` (UTC+5:30) a daily counter resets at local midnight, not at 05:30.
+
+```yaml
+- idType: sample_reference_no
+  timezone: Asia/Colombo
+  segments:
+    - type: date
+      layout: "2006/01/"
+    - type: sequence
+      sequence:
+        scopeKey: "{issuer}:{idType}:{yyyy}"
+        padding: 4
+# Produces: 2026/09/0001. The year, month and counter turn over at midnight in Colombo.
+```
+
+The value is an [IANA time zone name](https://www.iana.org/time-zones) such as `Asia/Colombo`, `America/New_York` or `UTC`. Whether it is required depends on the format alone:
+
+| The format... | `timezone` |
+|---|---|
+| has a `date` segment, or `{yyyy}`/`{yyyyMM}`/`{yyyyMMdd}` in a `sequence` or `random` scope key | **Required.** `NewRegistry` fails if it is missing. |
+| has neither (e.g. a literal prefix and a counter that never resets) | Leave it out. |
+
+A `timezone` that is set is always validated, even on a format that doesn't need one. `NewRegistry` rejects an unknown name, and also `Local`, which would make the same config render different IDs on differently configured hosts.
+
+Zone names are resolved with Go's `time.LoadLocation`, so the host needs a time zone database. A minimal container image may not have one; either install `tzdata` in it, or embed one in the binary by importing `time/tzdata` or building with `-tags timetzdata`. A missing database fails at startup in `NewRegistry`, not when an ID is generated.
+
+> [!WARNING]
+> **Breaking change:** before `timezone` existed, every format used UTC. Add `timezone` to each format that has a `date` segment or a date placeholder in a scope key, or `NewRegistry` returns an error. Use `UTC` to keep the old behaviour exactly.
+
+### Setting the clock
+
+`Generate` reads `time.Now`. `refid.WithClock(func() time.Time)` replaces it, so a test can cross a year, month or day boundary and check where a period-scoped counter restarts:
+
+```go
+now := time.Date(2026, 12, 31, 18, 29, 59, 0, time.UTC)
+reg, err := refid.NewRegistry(cfg,
+	refid.WithSequenceStore(store),
+	refid.WithClock(func() time.Time { return now }),
+)
+// Generate ... then move time: now = now.Add(time.Second)
+```
+
+`Generate` calls the clock once per ID, so every date segment and date placeholder of that ID shares one instant. The clock supplies only the instant: each format renders it in its own `timezone`, whatever zone the returned `time.Time` carries. `NewRegistry` returns an error for a nil clock.
 
 ---
 
@@ -134,8 +182,6 @@ Reserved placeholders:
 `sequence` and `random` are the only segment types with a side effect that persists to a store (a counter increment, a random value reservation) — `literal`/`list`/`param`/`date` are pure functions of the caller's params and the current time. `Generate` validates every segment first, then renders them in order with no rollback: if a format had two or more stateful segments and a later one failed during render (a sequence overflowing, a random segment exhausting its retries), an earlier one's already-committed side effect would be permanently orphaned — for a random segment, that permanently wastes one value from its bounded charset/length space with no ID ever returned.
 
 To rule this out, `NewRegistry` rejects any format with more than one `sequence`/`random` segment combined. A format can still mix any number of `literal`/`list`/`param`/`date` segments with at most one of `sequence` or `random`.
-
-`Generate` reads the time from `time.Now()`, once per ID, in UTC. `refid.WithClock(func() time.Time)` supplies another source, e.g. a fixed time in a test; every `date` segment and `{yyyy}`/`{yyyyMM}`/`{yyyyMMdd}` placeholder of one ID shares that value.
 
 See [docs/PATTERNS.md](docs/PATTERNS.md) for a catalog of the ID shapes these segments can produce — sequence-based, random-based, and stateless — each with a runnable example config.
 

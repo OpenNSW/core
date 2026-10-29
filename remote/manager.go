@@ -5,10 +5,8 @@ package remote
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,31 +14,24 @@ import (
 	"github.com/OpenNSW/core/remote/auth"
 )
 
-type AuthConfig struct {
-	Type    string          `json:"type"` // "api_key", "oauth2", "bearer"
-	Options json.RawMessage `json:"options"`
-}
-
 // TLSSettings configures transport-level client authentication (mTLS) for a
-// service. Both values are filesystem paths to PEM files, not secret
-// references: certificate chains routinely exceed the 4 KB cap that
-// secret.SecretRef places on file-sourced secrets.
+// service. Both values are filesystem paths to PEM files, read on each TLS
+// handshake (see WithClientCertificateFiles) so rotated material is picked up
+// without a restart.
 type TLSSettings struct {
-	ClientCertFile string `json:"client_cert_file"`
-	ClientKeyFile  string `json:"client_key_file"`
+	ClientCertFile string `json:"clientCertFile" yaml:"clientCertFile"`
+	ClientKeyFile  string `json:"clientKeyFile" yaml:"clientKeyFile"`
 }
 
+// ServiceConfig declares one remote service. It is plain data with json and yaml
+// tags: the application decodes it from wherever it keeps its configuration and
+// hands the result to Manager.SetServices.
 type ServiceConfig struct {
-	ID      string       `json:"id"`
-	URL     string       `json:"url"`
-	Timeout string       `json:"timeout"`
-	Auth    *AuthConfig  `json:"auth,omitempty"`
-	TLS     *TLSSettings `json:"tls,omitempty"`
-}
-
-type Registry struct {
-	Version  string          `json:"version"`
-	Services []ServiceConfig `json:"services"`
+	ID      string       `json:"id" yaml:"id"`
+	URL     string       `json:"url" yaml:"url"`
+	Timeout string       `json:"timeout" yaml:"timeout"`
+	Auth    *auth.Config `json:"auth,omitempty" yaml:"auth,omitempty"`
+	TLS     *TLSSettings `json:"tls,omitempty" yaml:"tls,omitempty"`
 }
 
 type Manager struct {
@@ -58,32 +49,24 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) LoadServices(filePath string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("remote: failed to read services file: %w", err)
-	}
-
-	var registry Registry
-	if err := json.Unmarshal(data, &registry); err != nil {
-		return fmt.Errorf("remote: failed to unmarshal services registry: %w", err)
-	}
-
-	// Prepare the new state outside the lock: this performs I/O (resolving secret
-	// references in auth.Build) without blocking concurrent readers, and ensures a
-	// failure leaves the manager's existing state untouched rather than corrupted.
-	configs := make(map[string]ServiceConfig, len(registry.Services))
+// SetServices validates services and replaces the manager's registry with them.
+// It is all-or-nothing: on error the existing registry is left untouched. Cached
+// clients are discarded, so subsequent calls use the new configuration.
+func (m *Manager) SetServices(services ...ServiceConfig) error {
+	// Prepare the new state before taking the lock, so a failure leaves the
+	// manager's existing state untouched rather than corrupted.
+	configs := make(map[string]ServiceConfig, len(services))
 	authenticators := make(map[string]auth.Authenticator)
-	for _, cfg := range registry.Services {
+	for _, cfg := range services {
 		// Normalize URL by removing trailing slash for consistent matching
 		cfg.URL = strings.TrimSuffix(cfg.URL, "/")
 		configs[cfg.ID] = cfg
 
-		// Build authenticators eagerly so secret references resolve once, now,
-		// and any misconfiguration (unset env var, unreadable file) fails loud
-		// at startup rather than on the first request.
+		// Build authenticators eagerly so any misconfiguration (unsupported
+		// type, missing settings, reserved endpoint params) fails loud at
+		// startup rather than on the first request.
 		if cfg.Auth != nil {
-			authenticator, err := auth.Build(cfg.Auth.Type, cfg.Auth.Options)
+			authenticator, err := auth.Build(*cfg.Auth)
 			if err != nil {
 				return fmt.Errorf("remote: failed to configure auth for service %q: %w", cfg.ID, err)
 			}
@@ -95,7 +78,7 @@ func (m *Manager) LoadServices(filePath string) error {
 		// and often absent in dev setups, and deferring lets it be provided
 		// after boot without failing startup for every other service.
 		if cfg.TLS != nil && (cfg.TLS.ClientCertFile == "" || cfg.TLS.ClientKeyFile == "") {
-			return fmt.Errorf("remote: service %q tls config requires both client_cert_file and client_key_file", cfg.ID)
+			return fmt.Errorf("remote: service %q tls config requires both clientCertFile and clientKeyFile", cfg.ID)
 		}
 	}
 
@@ -106,7 +89,7 @@ func (m *Manager) LoadServices(filePath string) error {
 	m.configs = configs
 	m.authenticators = authenticators
 
-	slog.Info("remote: services loaded", "file", filePath, "count", len(configs))
+	slog.Info("remote: services loaded", "count", len(configs))
 	return nil
 }
 
@@ -162,7 +145,7 @@ func (m *Manager) GetClient(id string) (*Client, error) {
 		opts = append(opts, WithTimeout(d))
 	}
 
-	// Authenticators are built and resolved once, at load time (see LoadServices).
+	// Authenticators are built once, when services are set (see SetServices).
 	if authenticator, ok := m.authenticators[id]; ok {
 		opts = append(opts, WithAuthenticator(authenticator))
 	}

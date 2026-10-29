@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
-	notification "github.com/OpenNSW/core/notifications"
+	"github.com/OpenNSW/core/notification"
 	"github.com/OpenNSW/core/remote"
 )
 

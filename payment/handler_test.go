@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockService implements PaymentService for handler-level tests.
+// mockService implements Service for handler-level tests.
 type mockService struct {
 	validateResp *ValidationResponse
 	validateErr  error
@@ -26,7 +26,9 @@ type mockService struct {
 	webhookErr   error
 }
 
-func (m *mockService) ListAvailableMethods(context.Context) ([]GatewayInfo, error) { return nil, nil }
+func (m *mockService) ListAvailableMethods(context.Context, Payee) ([]GatewayInfo, error) {
+	return nil, nil
+}
 func (m *mockService) CreateCheckoutSession(context.Context, CreateCheckoutRequest) (*CreateCheckoutResponse, error) {
 	return nil, nil
 }
@@ -39,7 +41,7 @@ func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string
 func (m *mockService) SetTaskCompleter(TaskCompleter) {}
 
 // serve routes a webhook POST through a mux so PathValue("gatewayId") resolves.
-func serveWebhook(svc PaymentService) *httptest.ResponseRecorder {
+func serveWebhook(svc Service) *httptest.ResponseRecorder {
 	h := NewHTTPHandler(svc)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/payments/{gatewayId}/webhook", h.HandleWebhook)
@@ -116,21 +118,21 @@ func TestHandleValidateReference_VerificationFailureIs401(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 }
 
-// newRealServiceForGateway wires a real PaymentService (not the shallow
+// newRealServiceForGateway wires a real Service (not the shallow
 // mockService above) around a single registered gateway, for tests that
-// need to prove behavior all the way through PaymentService into a
-// PaymentGateway — e.g. that HTTPHandler's context enrichment actually
+// need to prove behavior all the way through Service into a
+// Gateway — e.g. that HTTPHandler's context enrichment actually
 // reaches VerifyWebhook. repo is nil: safe here only because these tests
 // drive gateway.VerifyWebhook to fail before any repository call happens.
-func newRealServiceForGateway(t *testing.T, gatewayID string, gw PaymentGateway) PaymentService {
+func newRealServiceForGateway(t *testing.T, gatewayID string, gw Gateway) Service {
 	t.Helper()
-	path := writeTempConfig(t, fmt.Sprintf(`{"version":"1.0","methods":[{"id":%q,"is_active":true}]}`, gatewayID))
+	cfg := Config{Methods: []MethodConfig{{GatewayInfo: GatewayInfo{ID: gatewayID, IsActive: true}}}}
 	factories := map[string]Factory{
-		gatewayID: func(json.RawMessage) (PaymentGateway, error) { return gw, nil },
+		gatewayID: func(func(any) error) (Gateway, error) { return gw, nil },
 	}
-	registry, err := NewRegistry(path, factories)
+	registry, err := NewRegistry(cfg, factories)
 	require.NoError(t, err)
-	return NewPaymentService(nil, registry, &fakeReferences{})
+	return NewService(nil, registry, &fakeReferences{})
 }
 
 func TestHandleWebhook_PopulatesRequestContextForVerifyWebhook(t *testing.T) {

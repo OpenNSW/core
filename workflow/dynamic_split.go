@@ -191,7 +191,10 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		for idx, templateID := range batch {
 			futures[idx] = workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 				StartToCloseTimeout: 15 * time.Second,
-			}), "FetchWorkflowDefinitionActivity", templateID)
+				// Without a policy a template that can't be fetched is retried forever; with it the
+				// split parks once the attempts run out.
+				RetryPolicy: taskRetryPolicy,
+			}), "FetchWorkflowDefinitionActivity", templateID, g.manifestVersion())
 		}
 
 		for idx, templateID := range batch {
@@ -210,6 +213,7 @@ func (g *graphInterpreter) spawnChildWorkflows(
 		childVars := map[string]any{
 			VarParentWorkflowID: parentInfo.WorkflowExecution.ID,
 			VarCaseID:           g.caseID(),
+			VarManifestVersion:  g.manifestVersion(),
 			VarSplitNodeID:      node.ID,
 			VarBranchID:         p.BranchID,
 			iterKey: map[string]any{

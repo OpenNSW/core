@@ -214,6 +214,10 @@ If the user-input step's template declares `"output_namespace": "userform"`, the
 
 The server **logs a warning and drops the payload**, then resumes the workflow as if the body were empty. This is intentional: a misconfigured template shouldn't break a running task, but data must never land in unscoped top-level keys (that would let a caller overwrite slots owned by other steps). If you see a submission silently fail to appear in the next render, check that the active step's template declares an output namespace.
 
+### Drafts
+
+A step whose template declares `draft` also accepts a draft: the host's draft route calls `SaveDraft` with the same inner object. The draft is stored under the same namespace, so the next render shows it, but the step stays where it is: the state, `step_id` and `version` do not change, so other open views are not made stale. Drafts can be partial; nothing checks them for completeness. A draft for a step that has been submitted or has moved on is rejected as stale (`409`), and one for a step without `draft` is rejected (`400`).
+
 ### Empty bodies
 
 A `POST` with an empty body (or no JSON object) is valid — it acts as a **resume signal** with no data attached. Useful for wait-for-event steps where the resume itself is the event.
@@ -255,7 +259,7 @@ These are not magic — they're strings written by plugins. Your application can
 By design, these are hidden from the frontend:
 
 - **Temporal coordinates** — `TaskWorkflowID`, parent coordinates, etc. They're internal to the orchestrator and never serialised in `TaskView`. The only step-related fields a client sees are `step_id` (to send back) and `version` (read-only).
-- **Render config** — the JSON snapshot in `TaskRecord.RenderConfig` is server-side only; the FE sees the rendered output, not the template.
+- **Render config** — the config a task's task template names is server-side only; the FE sees the rendered output, not the template.
 - **Which plugin handled a step** — irrelevant to the UI.
 - **Workflow / task definitions** — also internal.
 

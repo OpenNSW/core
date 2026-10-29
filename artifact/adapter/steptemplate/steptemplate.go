@@ -32,6 +32,15 @@ func (l *loadable) Parse(raw []byte) error {
 	if t.ID == "" {
 		return fmt.Errorf("step template: missing id")
 	}
+	if t.Draft != nil {
+		// A draft is stored only under the step's namespace and authorized only by its command.
+		if t.Draft.Command == "" {
+			return fmt.Errorf("step template %q: draft has no command", t.ID)
+		}
+		if t.OutputNamespace == "" {
+			return fmt.Errorf("step template %q: draft needs an output_namespace", t.ID)
+		}
+	}
 	l.StepTemplate = t
 	return nil
 }

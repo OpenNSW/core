@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestOAuth2_Apply(t *testing.T) {
@@ -323,9 +324,10 @@ func TestOAuth2_EndpointParams_RejectsReserved(t *testing.T) {
 			assert.Contains(t, err.Error(), key)
 
 			// Config path: rejected at build time, before any request is made.
-			options := []byte(`{"token_url":"https://idp.example/token","client_id":"c",` +
-				`"client_secret":"s","endpoint_params":{"` + key + `":"x"}}`)
-			_, err = Build("oauth2", options)
+			_, err = Build(Config{Type: TypeOAuth2, OAuth2: &OAuth2Config{
+				TokenURL: "https://idp.example/token", ClientID: "c", ClientSecret: "s",
+				EndpointParams: EndpointParams{key: {"x"}},
+			}})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), key)
 		})
@@ -373,7 +375,50 @@ func TestEndpointParams_UnmarshalJSON(t *testing.T) {
 	// An explicitly null field is an absent field, not a malformed one.
 	t.Run("a null object is no parameters", func(t *testing.T) {
 		var c OAuth2Config
-		require.NoError(t, json.Unmarshal([]byte(`{"endpoint_params":null}`), &c))
+		require.NoError(t, json.Unmarshal([]byte(`{"endpointParams":null}`), &c))
+		assert.Empty(t, c.EndpointParams)
+	})
+}
+
+func TestEndpointParams_UnmarshalYAML(t *testing.T) {
+	t.Run("scalar becomes a single-element slice", func(t *testing.T) {
+		var p EndpointParams
+		require.NoError(t, yaml.Unmarshal([]byte(`resource: https://api.example`), &p))
+		assert.Equal(t, EndpointParams{"resource": {"https://api.example"}}, p)
+	})
+
+	t.Run("sequence is preserved", func(t *testing.T) {
+		var p EndpointParams
+		require.NoError(t, yaml.Unmarshal([]byte(`resource: [a, b]`), &p))
+		assert.Equal(t, EndpointParams{"resource": {"a", "b"}}, p)
+	})
+
+	t.Run("rejects a non-string value", func(t *testing.T) {
+		var p EndpointParams
+		err := yaml.Unmarshal([]byte(`resource: 42`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be a string or an array of strings")
+	})
+
+	t.Run("rejects a null value", func(t *testing.T) {
+		var p EndpointParams
+		err := yaml.Unmarshal([]byte(`resource: null`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"resource"`)
+		assert.Contains(t, err.Error(), "not null")
+	})
+
+	t.Run("rejects a null sequence element", func(t *testing.T) {
+		var p EndpointParams
+		err := yaml.Unmarshal([]byte(`resource: [a, null]`), &p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"resource"`)
+		assert.Contains(t, err.Error(), "not null")
+	})
+
+	t.Run("a null mapping is no parameters", func(t *testing.T) {
+		var c OAuth2Config
+		require.NoError(t, yaml.Unmarshal([]byte(`endpointParams: null`), &c))
 		assert.Empty(t, c.EndpointParams)
 	})
 }

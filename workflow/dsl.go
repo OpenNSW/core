@@ -83,6 +83,13 @@ const (
 	// so a descendant at any depth can read it directly without walking a parent-to-parent
 	// chain.
 	VarCaseID = "_case_id"
+	// VarManifestVersion holds the artifact manifest version the workflow resolves its templates
+	// through (see artifact.Set). A host sets it when it starts a top-level workflow, from the
+	// version current at that moment. It is carried unchanged to every child, and reaches the
+	// host on every task activation (TaskPayload.ManifestVersion) and definition fetch, so a
+	// deploy never changes the templates of a workflow already running. The engine itself never
+	// resolves artifacts; a workflow started without it reports 0.
+	VarManifestVersion = "_manifest_version"
 	// VarBranchID contains the unique branch ID assigned to the specific child workflow branch.
 	VarBranchID = "_branch_id"
 
@@ -210,7 +217,8 @@ type BatchGatewayConfig struct {
 	ItemsVariable string `json:"items_variable,omitempty"`
 
 	// IDField is the field name within each item used as the unique identifier for
-	// ID-based merging at the paired BATCH_JOIN. Defaults to "id" if empty.
+	// ID-based merging at the paired BATCH_JOIN. Defaults to "id" if empty. The value
+	// must be a unique, non-empty string.
 	IDField string `json:"id_field,omitempty"`
 }
 

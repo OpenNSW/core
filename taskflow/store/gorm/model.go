@@ -13,15 +13,16 @@ import (
 
 // TaskRecordModel is the GORM-compatible model for store.TaskRecord.
 type TaskRecordModel struct {
-	TaskID               string          `gorm:"primaryKey;column:task_id;type:text"`
-	TaskType             string          `gorm:"column:task_type;type:text;index"`
-	State                string          `gorm:"column:state;type:text"`
-	RenderConfig         json.RawMessage `gorm:"column:render_config;type:jsonb;serializer:json"`
-	ParentWorkflowID     string          `gorm:"column:parent_workflow_id;type:text;index"`
-	CaseID               string          `gorm:"column:case_id;type:text;not null;default:''"`
-	ParentStepID         string          `gorm:"column:parent_step_id;type:text"`
-	TaskWorkflowID       string          `gorm:"column:task_workflow_id;type:text;index"`
-	ActiveTaskTemplateID string          `gorm:"column:active_task_template_id;type:text"`
+	TaskID               string `gorm:"primaryKey;column:task_id;type:text"`
+	TaskType             string `gorm:"column:task_type;type:text;index"`
+	State                string `gorm:"column:state;type:text"`
+	TaskTemplateID       string `gorm:"column:task_template_id;type:text;not null;default:''"`
+	ParentWorkflowID     string `gorm:"column:parent_workflow_id;type:text;index"`
+	CaseID               string `gorm:"column:case_id;type:text;not null;default:''"`
+	ManifestVersion      int    `gorm:"column:manifest_version;not null;default:0"`
+	ParentStepID         string `gorm:"column:parent_step_id;type:text"`
+	TaskWorkflowID       string `gorm:"column:task_workflow_id;type:text;index"`
+	ActiveTaskTemplateID string `gorm:"column:active_task_template_id;type:text"`
 	// ActiveStepID and Seq belong to the guarded step statements in store.go. InitTask never
 	// writes them (see TaskStore.InitTask), so a full-record save cannot move them backwards.
 	// The table needs: active_step_id UUID NULL, seq BIGINT NOT NULL DEFAULT 0.
@@ -64,10 +65,11 @@ func (m TaskRecordModel) ToDomain() store.TaskRecord {
 		TaskID:               m.TaskID,
 		TaskType:             m.TaskType,
 		State:                m.State,
-		RenderConfig:         m.RenderConfig,
+		TaskTemplateID:       m.TaskTemplateID,
 		ParentWorkflowID:     m.ParentWorkflowID,
 		ParentStepID:         m.ParentStepID,
 		CaseID:               m.CaseID,
+		ManifestVersion:      m.ManifestVersion,
 		TaskWorkflowID:       m.TaskWorkflowID,
 		ActiveTaskTemplateID: m.ActiveTaskTemplateID,
 		ActiveStepID:         activeStepID,
@@ -101,9 +103,10 @@ func FromDomain(r store.TaskRecord) TaskRecordModel {
 		TaskID:               r.TaskID,
 		TaskType:             r.TaskType,
 		State:                r.State,
-		RenderConfig:         r.RenderConfig,
+		TaskTemplateID:       r.TaskTemplateID,
 		ParentWorkflowID:     r.ParentWorkflowID,
 		CaseID:               r.CaseID,
+		ManifestVersion:      r.ManifestVersion,
 		ParentStepID:         r.ParentStepID,
 		TaskWorkflowID:       r.TaskWorkflowID,
 		ActiveTaskTemplateID: r.ActiveTaskTemplateID,

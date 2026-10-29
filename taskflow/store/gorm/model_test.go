@@ -4,7 +4,6 @@
 package gorm
 
 import (
-	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -27,10 +26,11 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 		TaskID:               "task-1",
 		TaskType:             "TEST",
 		State:                "PENDING_USER",
-		RenderConfig:         json.RawMessage(`{"layout":"form"}`),
+		TaskTemplateID:       "test:task",
 		ParentWorkflowID:     "consignment-9--node-3--branch-1",
 		ParentStepID:         "step-3",
 		CaseID:               "consignment-9",
+		ManifestVersion:      3,
 		TaskWorkflowID:       "task-wf-1",
 		ActiveTaskTemplateID: "tmpl-1",
 		ActiveStepID:         "0a0a0a0a-0000-4000-8000-00000000000a",
@@ -44,6 +44,9 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 
 	if got.CaseID != original.CaseID {
 		t.Errorf("CaseID not preserved: got %q, want %q", got.CaseID, original.CaseID)
+	}
+	if got.ManifestVersion != original.ManifestVersion {
+		t.Errorf("ManifestVersion: got %d, want %d", got.ManifestVersion, original.ManifestVersion)
 	}
 	if got.TaskID != original.TaskID {
 		t.Errorf("TaskID: got %q, want %q", got.TaskID, original.TaskID)
@@ -60,8 +63,8 @@ func TestRoundTrip_PreservesFields(t *testing.T) {
 	if got.ActiveTaskTemplateID != original.ActiveTaskTemplateID {
 		t.Errorf("ActiveTaskTemplateID: got %q, want %q", got.ActiveTaskTemplateID, original.ActiveTaskTemplateID)
 	}
-	if string(got.RenderConfig) != string(original.RenderConfig) {
-		t.Errorf("RenderConfig: got %s, want %s", got.RenderConfig, original.RenderConfig)
+	if got.TaskTemplateID != original.TaskTemplateID {
+		t.Errorf("TaskTemplateID: got %q, want %q", got.TaskTemplateID, original.TaskTemplateID)
 	}
 	if !reflect.DeepEqual(got.Data, original.Data) {
 		t.Errorf("Data not preserved: got %#v, want %#v", got.Data, original.Data)

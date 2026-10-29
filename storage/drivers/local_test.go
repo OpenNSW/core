@@ -57,12 +57,21 @@ func TestLocalFSDriver_DirectoryHashing(t *testing.T) {
 		t.Errorf("expected content type application/pdf, got %s", contentType)
 	}
 
+	// Test Stat
+	info, err := driver.Stat(ctx, key)
+	if err != nil {
+		t.Errorf("Stat failed: %v", err)
+	}
+	if want := (ObjectInfo{ContentType: "application/pdf", Size: int64(len(content))}); info != want {
+		t.Errorf("Stat = %+v, want %+v", info, want)
+	}
+
 	// Verify GetDownloadURL: should point at the content route and be tokenized
-	url, err := driver.GetDownloadURL(ctx, key)
+	url, err := driver.GetDownloadURL(ctx, key, DispositionInline)
 	if err != nil {
 		t.Errorf("GetDownloadURL failed: %v", err)
 	}
-	if !strings.HasPrefix(url, "http://localhost:8080/api/v1/storage/"+key+"/content?") || !strings.Contains(url, "token=") || !strings.Contains(url, "expiresAt=") {
+	if !strings.HasPrefix(url, "http://localhost:8080/api/v1/storage/"+key+"/content?") || !strings.Contains(url, "token=") || !strings.Contains(url, "expiresAt=") || !strings.Contains(url, "disposition=inline") {
 		t.Errorf("unexpected URL format: %s", url)
 	}
 
@@ -257,24 +266,85 @@ func TestLocalFSDriver_LinkVerification(t *testing.T) {
 
 	// 1. Valid Link
 	expiresAt := time.Now().Add(time.Hour).Unix()
-	token := GenerateDownloadToken(key, secret, expiresAt)
-	if !driver.VerifyDownloadToken(key, token, expiresAt) {
+	token := GenerateDownloadToken(key, secret, expiresAt, DispositionAttachment)
+	if !driver.VerifyDownloadToken(key, token, expiresAt, DispositionAttachment) {
 		t.Error("valid token failed verification")
 	}
 
 	// 2. Invalid Key
-	if driver.VerifyDownloadToken("wrong-key.pdf", token, expiresAt) {
+	if driver.VerifyDownloadToken("wrong-key.pdf", token, expiresAt, DispositionAttachment) {
 		t.Error("token verified for wrong key")
 	}
 
 	// 3. Modified Expiration
-	if driver.VerifyDownloadToken(key, token, expiresAt+1) {
+	if driver.VerifyDownloadToken(key, token, expiresAt+1, DispositionAttachment) {
 		t.Error("token verified despite modified expiration")
 	}
 
 	// 4. Invalid Signature
-	if driver.VerifyDownloadToken(key, "invalid-token", expiresAt) {
+	if driver.VerifyDownloadToken(key, "invalid-token", expiresAt, DispositionAttachment) {
 		t.Error("invalid token signature was accepted")
+	}
+
+	// 5. Modified Disposition
+	if driver.VerifyDownloadToken(key, token, expiresAt, DispositionInline) {
+		t.Error("token verified despite modified disposition")
+	}
+}
+
+func TestLocalFSDriver_Stat(t *testing.T) {
+	driver, err := NewLocalFSDriver(t.TempDir(), "http://localhost:8080", "secret", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	ctx := context.Background()
+	const key = "550e8400-e29b-41d4-a716-446655440000.xml"
+
+	if _, err := driver.Stat(ctx, key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Stat of a missing file: err = %v, want ErrNotFound", err)
+	}
+
+	if err := driver.Save(ctx, key, bytes.NewReader([]byte("<a/>")), "text/xml"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := driver.Stat(ctx, key)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if want := (ObjectInfo{ContentType: "text/xml", Size: 4}); info != want {
+		t.Errorf("Stat = %+v, want %+v", info, want)
+	}
+
+	if err := driver.Delete(ctx, key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := driver.Stat(ctx, key); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Stat after Delete: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := driver.Stat(ctx, "../outside"); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("Stat of a traversal key: err = %v, want ErrInvalidPath", err)
+	}
+}
+
+func TestLocalFSDriver_StatWithoutRecordedType(t *testing.T) {
+	driver, err := NewLocalFSDriver(t.TempDir(), "http://localhost:8080", "secret", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("NewLocalFSDriver: %v", err)
+	}
+	const key = "550e8400-e29b-41d4-a716-446655440000"
+	if err := driver.Save(context.Background(), key, bytes.NewReader([]byte("x")), ""); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := driver.Stat(context.Background(), key)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.ContentType != DefaultMime {
+		t.Errorf("ContentType = %q, want %q", info.ContentType, DefaultMime)
+	}
+	if _, contentType, err := driver.Get(context.Background(), key); err != nil || contentType != DefaultMime {
+		t.Errorf("Get type = %q, err = %v; want %q", contentType, err, DefaultMime)
 	}
 }
 
@@ -301,7 +371,7 @@ func TestLocalFSDriver_URLsRequirePublicURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalFSDriver: %v", err)
 	}
-	if _, err := driver.GetDownloadURL(context.Background(), "550e8400-e29b-41d4-a716-446655440000.pdf"); err == nil {
+	if _, err := driver.GetDownloadURL(context.Background(), "550e8400-e29b-41d4-a716-446655440000.pdf", DispositionInline); err == nil {
 		t.Error("GetDownloadURL succeeded without a PublicURL")
 	}
 	if _, err := driver.GetUploadURL(context.Background(), "550e8400-e29b-41d4-a716-446655440000.pdf", "application/pdf", 4); err == nil {
@@ -331,7 +401,7 @@ func TestLocalFSDriver_RoutePrefix(t *testing.T) {
 			}
 			// The URL is built from the same pattern, and a trailing slash on
 			// PublicURL does not double up.
-			url, err := driver.GetDownloadURL(context.Background(), key)
+			url, err := driver.GetDownloadURL(context.Background(), key, DispositionInline)
 			if err != nil {
 				t.Fatalf("GetDownloadURL: %v", err)
 			}

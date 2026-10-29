@@ -22,6 +22,7 @@ import (
 	"github.com/OpenNSW/core/taskflow/callbacktoken"
 	"github.com/OpenNSW/core/taskflow/extensions"
 	"github.com/OpenNSW/core/taskflow/plugins"
+	"github.com/OpenNSW/core/taskflow/renderconfig"
 	"github.com/OpenNSW/core/taskflow/renderer"
 	"github.com/OpenNSW/core/taskflow/store"
 	engine "github.com/OpenNSW/core/workflow"
@@ -83,6 +84,9 @@ type TaskCompletedCallback func(parentWorkflowID string, parentStepID string, fi
 // Callers serving HTTP should answer 409 and have the client refetch.
 var ErrStaleStep = errors.New("step is no longer the active step of the task")
 
+// ErrTaskNotOpen is returned by CancelTask for a task that has completed or does not exist.
+var ErrTaskNotOpen = errors.New("task is not open: it has completed or does not exist")
+
 // ErrStepIDRequired is returned by CompleteTaskStep when the caller did not say which step it is
 // completing. A caller serving HTTP should answer it with 400.
 var ErrStepIDRequired = errors.New("step ID is required")
@@ -90,30 +94,42 @@ var ErrStepIDRequired = errors.New("step ID is required")
 // ErrTaskNotFound means no task has the given ID. A caller serving HTTP should answer it with 404.
 var ErrTaskNotFound = errors.New("task not found")
 
+// ErrStepNotGuarded is returned by CompleteTaskStep and SaveDraft when the TaskManager was built
+// WithRequiredPreResumeExtensions and the active step's template does not declare one of them in
+// its PRE_RESUME phase, or there is no extensions registry to run them. Nothing is written. A
+// caller serving HTTP should answer it with 403: the step is open to no one until its template
+// says who may act on it.
+var ErrStepNotGuarded = errors.New("step template does not declare a required pre-resume extension")
+
 // TaskManager orchestrates decoupled tasks and interactions under parent workflows.
 // It bridges macro-level workflows and micro-level interactive tasks via a single DB entry per task.
 type TaskManager struct {
 	db                  store.TaskStore
 	renderer            renderer.Renderer
-	registry            *artifact.Registry
+	artifacts           *artifact.Set
 	pluginsRegistry     *plugins.Registry
 	extensionsRegistry  *extensions.Registry
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
 	logger              *slog.Logger
+	// requiredPreResume are the extension ids every step template must declare in its
+	// PRE_RESUME phase before CompleteTaskStep or SaveDraft runs the step
+	// (WithRequiredPreResumeExtensions).
+	requiredPreResume []string
 }
 
 // NewTaskManager creates a TaskManager instance.
 //
 //   - db                  — the persistence/in-memory task store.
-//   - registry            — artifact registry holding task templates, step templates, workflow definitions, and render configs.
+//   - artifacts           — the artifact manifests holding task templates, step templates, workflow definitions, and render configs.
+//     Every task resolves them through the manifest version its parent workflow carries (see engine.VarManifestVersion).
 //   - pluginsRegistry     — registry containing task execution plugin handlers.
 //   - taskWorkflowManager — the TemporalManager used to start and complete Task sub-workflows.
 //   - onTaskCompleted     — callback invoked when a Task workflow finishes;
 //     typically invokes Parent.CompleteActivation to resume the parent workflow using stored coordinates.
 func NewTaskManager(
 	db store.TaskStore,
-	registry *artifact.Registry,
+	artifacts *artifact.Set,
 	pluginsRegistry *plugins.Registry,
 	extensionsRegistry *extensions.Registry,
 	taskWorkflowManager engine.TemporalManager,
@@ -123,7 +139,7 @@ func NewTaskManager(
 ) *TaskManager {
 	tm := &TaskManager{
 		db:                  db,
-		registry:            registry,
+		artifacts:           artifacts,
 		pluginsRegistry:     pluginsRegistry,
 		extensionsRegistry:  extensionsRegistry,
 		onTaskCompleted:     onTaskCompleted,
@@ -140,22 +156,49 @@ func NewTaskManager(
 	return tm
 }
 
+// registryFor returns the registry of manifest version v. A task without a version cannot resolve
+// templates: falling back to the current version would change templates under a running task. That
+// is a host wiring fault no retry repairs, so it fails without retrying; a version this replica has
+// not loaded yet may still appear, so that error stays retryable.
+//
+// Temporal reads retryability off the returned error itself, not anything it wraps, so callers
+// running as an Activity return the error unwrapped.
+func (tm *TaskManager) registryFor(ctx context.Context, taskTemplateID string, v int) (*artifact.Registry, error) {
+	if v <= 0 {
+		return nil, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("template %q: no artifact manifest version (got %d); the workflow was started without %s", taskTemplateID, v, engine.VarManifestVersion),
+			"NoManifestVersion", artifact.ErrUnknownManifestVersion)
+	}
+	reg, err := tm.artifacts.Registry(ctx, v)
+	if err != nil {
+		return nil, fmt.Errorf("template %q: %w", taskTemplateID, err)
+	}
+	return reg, nil
+}
+
 // StartTask is called by the parent workflow engine when it activates a TASK node.
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
 func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
-	template, err := tasktemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
+	reg, err := tm.registryFor(ctx, payload.TaskTemplateID, payload.ManifestVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	template, err := tasktemplate.Load(ctx, reg, payload.TaskTemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("load task template %q: %w", payload.TaskTemplateID, err)
 	}
 
-	wfDef, err := workflowdef.Load(ctx, tm.registry, template.WorkflowID)
+	wfDef, err := workflowdef.Load(ctx, reg, template.WorkflowID)
 	if err != nil {
 		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, err)
 	}
 
-	renderConfig, err := generictemplate.Load(ctx, tm.registry, template.RenderConfigID)
-	if err != nil {
+	// The record keeps only the task template id, and every render resolves the config through it
+	// (see renderconfig.Load).
+	// Loading it here fails the task at start, not at its first render, when it is missing.
+	if _, err := generictemplate.Load(ctx, reg, template.RenderConfigID); err != nil {
 		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
 	}
 
@@ -173,15 +216,18 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		maputil.SetNestedKey(initialData, k, v)
 	}
 	initialData["_task_id"] = taskID
+	// The task's own workflow resolves its steps through the same manifest version.
+	initialData[engine.VarManifestVersion] = payload.ManifestVersion
 
 	record := store.TaskRecord{
 		TaskID:           taskID,
 		TaskType:         template.Type,
 		State:            "STARTING",
-		RenderConfig:     renderConfig,
+		TaskTemplateID:   template.ID,
 		ParentWorkflowID: payload.WorkflowID,
 		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
 		CaseID:           payload.CaseID,       // the same at every level of nesting (see engine.VarCaseID)
+		ManifestVersion:  payload.ManifestVersion,
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,
 		CreatedAt:        time.Now(),
@@ -197,7 +243,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	if err := tm.db.InitTask(ctx, record); err != nil {
 		return nil, fmt.Errorf("create task record: %w", err)
 	}
-	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type)
+	tm.logger.InfoContext(ctx, "task record created", "task_id", taskID, "template", payload.TaskTemplateID, "task_type", template.Type, "manifest_version", payload.ManifestVersion)
 
 	err = tm.taskWorkflowManager.StartWorkflow(ctx, taskWorkflowID, wfDef, initialData)
 	if err != nil {
@@ -231,7 +277,14 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		return nil, fmt.Errorf("[StartTaskStep] no task record found for workflow %s", payload.WorkflowID)
 	}
 
-	stepTemplate, err := steptemplate.Load(ctx, tm.registry, payload.TaskTemplateID)
+	// The record's version is the one the task started on; every step uses it.
+	reg, err := tm.registryFor(ctx, payload.TaskTemplateID, record.ManifestVersion)
+	if err != nil {
+		return nil, err
+	}
+	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
+
+	stepTemplate, err := steptemplate.Load(ctx, reg, payload.TaskTemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("[StartTaskStep] load step template %q: %w", payload.TaskTemplateID, err)
 	}
@@ -280,7 +333,7 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		OutputNamespace: stepTemplate.OutputNamespace,
 	}
 
-	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID)
+	tm.logger.InfoContext(ctx, "starting step", "task_id", record.TaskID, "step_id", payload.ActivationID, "seq", payload.Seq, "plugin_type", stepTemplate.PluginType, "template", payload.TaskTemplateID, "manifest_version", record.ManifestVersion)
 
 	err = plugin.Execute(pluginCtx, stepTemplate.PluginProperties)
 	suspended := errors.Is(err, plugins.ErrSuspended)
@@ -326,6 +379,10 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engi
 		// Not a workflow we own — safe to ignore.
 		return nil
 	}
+	if record.State == store.StateCancelled {
+		tm.logger.InfoContext(ctx, "dropping completion of a cancelled task", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID)
+		return nil
+	}
 
 	tm.logger.InfoContext(ctx, "task workflow completed", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID, "seq", completion.Seq)
 
@@ -334,6 +391,10 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engi
 		return fmt.Errorf("mark task %s completed: %w", record.TaskID, err)
 	}
 	if rows == 0 {
+		if cur, ok := tm.db.GetTask(ctx, record.TaskID); ok && cur.State == store.StateCancelled {
+			tm.logger.InfoContext(ctx, "dropping completion of a task cancelled while completing", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID)
+			return nil
+		}
 		// Nothing later than the end of the workflow should be on the row. Still wake the parent: the
 		// workflow has ended, and holding it back would hang the parent.
 		tm.logger.WarnContext(ctx, "task row was already past the completion; not marked completed", "task_id", record.TaskID, "seq", completion.Seq)
@@ -373,7 +434,8 @@ func (tm *TaskManager) CompleteTaskStepByToken(ctx context.Context, token string
 //  1. Pre-check, from the task row: the task is not completed and stepID is its active step.
 //     This only turns away obviously stale calls early; the authority is step 4.
 //  2. Pre-resume extensions (authz, validation) run on deep copies and can reject the call. They
-//     must have no side effects.
+//     must have no side effects. A TaskManager built WithRequiredPreResumeExtensions first refuses,
+//     with ErrStepNotGuarded, a step whose template does not declare every required one.
 //  3. The submission is prepared: it is confined to the step's OutputNamespace and stripped of
 //     system keys.
 //  4. The step's Temporal Activity is completed. Exactly one caller wins; a step that is not
@@ -395,8 +457,8 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	if !exists {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
-	if record.State == store.StateCompleted {
-		return fmt.Errorf("%w: task %s already completed", ErrStaleStep, taskID)
+	if record.State == store.StateCompleted || record.State == store.StateCancelled {
+		return fmt.Errorf("%w: task %s is %s", ErrStaleStep, taskID, record.State)
 	}
 	if record.ActiveStepID != stepID {
 		// Also covers a task whose first step has not been claimed: no step ID names it yet.
@@ -404,9 +466,19 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	}
 	seq := record.Seq
 
-	stepTemplate, err := steptemplate.Load(ctx, tm.registry, record.ActiveTaskTemplateID)
+	reg, err := tm.registryFor(ctx, record.ActiveTaskTemplateID, record.ManifestVersion)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", taskID, err)
+	}
+	// Extensions (a notification's template, for example) resolve through the task's version.
+	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
+
+	stepTemplate, err := steptemplate.Load(ctx, reg, record.ActiveTaskTemplateID)
 	if err != nil {
 		return fmt.Errorf("failed to load active step template %q: %w", record.ActiveTaskTemplateID, err)
+	}
+	if err := tm.checkRequiredPreResume(stepTemplate); err != nil {
+		return err
 	}
 
 	// Pre-resume extensions (blocking, read-only) receive deep copies of the record and payload so
@@ -473,6 +545,78 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	return nil
 }
 
+// CancelTask closes a task from outside its workflow, for an admin who must take it away from
+// whoever is working on it. The task workflow manager must implement engine.WorkflowTerminator.
+//
+// It only closes the task. The parent's TASK node that started it keeps waiting on it, and what
+// happens to that node is the caller's decision: typically engine.ActivationParker's
+// ForceParkActivation on the record's ParentWorkflowID and ParentStepID, so an admin can resolve it.
+//
+// Two steps, each safe to repeat, so a call that failed part way can be made again:
+//
+//  1. The task workflow is terminated first, so it cannot start another step or complete the
+//     parent's step. One that has already closed is accepted.
+//  2. The row is set to StateCancelled, unless the task has completed (ErrTaskNotOpen). This also
+//     advances seq, and ClaimStep/CompleteTask refuse StateCancelled, so any step write still in
+//     flight is dropped as stale.
+func (tm *TaskManager) CancelTask(ctx context.Context, taskID, reason string) error {
+	terminator, ok := tm.taskWorkflowManager.(engine.WorkflowTerminator)
+	if !ok {
+		return fmt.Errorf("cancel task %s: the task workflow manager cannot terminate workflows", taskID)
+	}
+	record, exists := tm.db.GetTask(ctx, taskID)
+	if !exists {
+		return fmt.Errorf("%w: task %s not found", ErrTaskNotOpen, taskID)
+	}
+	if record.State == store.StateCompleted {
+		return fmt.Errorf("%w: task %s has completed", ErrTaskNotOpen, taskID)
+	}
+
+	err := terminator.TerminateWorkflow(ctx, record.TaskWorkflowID, "", reason)
+	if errors.Is(err, engine.ErrWorkflowNotFound) {
+		tm.logger.InfoContext(ctx, "task workflow already closed", "task_id", taskID, "task_workflow_id", record.TaskWorkflowID)
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("terminate task workflow %s: %w", record.TaskWorkflowID, err)
+	}
+
+	rows, err := tm.db.CancelTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("mark task %s cancelled: %w", taskID, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: task %s has completed", ErrTaskNotOpen, taskID)
+	}
+	tm.logger.InfoContext(ctx, "task cancelled", "task_id", taskID, "task_workflow_id", record.TaskWorkflowID, "reason", reason)
+	return nil
+}
+
+// HoldTask marks a task ON_HOLD when a node in its workflow parks for admin intervention (wire it
+// to the task workflow runner's AdminParkHandler). While ON_HOLD, the task's view renders no legal
+// actions and SaveDraft refuses drafts as stale; resolving the park (RETRY or COMPLETE) moves the
+// row on when the retried or next step claims it, or when the task workflow completes.
+//
+// The write is guarded by payload.Seq and refuses COMPLETED or CANCELLED rows, so a late park
+// notification that arrives after the park was resolved and a later step claimed the row is
+// dropped.
+func (tm *TaskManager) HoldTask(ctx context.Context, payload engine.AdminParkPayload) error {
+	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
+	if !exists {
+		return nil
+	}
+	rows, err := tm.db.HoldTask(ctx, record.TaskID, payload.Seq)
+	if err != nil {
+		return fmt.Errorf("mark task %s on hold: %w", record.TaskID, err)
+	}
+	if rows == 0 {
+		tm.logger.InfoContext(ctx, "dropping stale hold of task", "task_id", record.TaskID, "task_workflow_id", payload.WorkflowID, "seq", payload.Seq)
+		return nil
+	}
+	tm.logger.InfoContext(ctx, "task placed on hold", "task_id", record.TaskID, "task_workflow_id", payload.WorkflowID, "node_id", payload.NodeID, "seq", payload.Seq)
+	return nil
+}
+
 // submissionData returns the task data with payload stored in it. Writes are confined to the active
 // step's declared OutputNamespace, which was loaded from the registry. An open top-level merge
 // would let callers overwrite slots owned by other steps (or internal keys like _task_id), so the
@@ -495,6 +639,38 @@ func (tm *TaskManager) submissionData(ctx context.Context, record store.TaskReco
 	}
 	data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
 	return data
+}
+
+// checkRequiredPreResume returns ErrStepNotGuarded unless step declares, in its PRE_RESUME phase,
+// every extension the TaskManager requires (WithRequiredPreResumeExtensions). With none required it
+// allows everything, as before. With some required and no extensions registry, it refuses every
+// step: runExtensions would skip the extensions, so nothing would check the caller.
+//
+// That an id is declared is enough here. runExtensions refuses a declared PRE_RESUME extension the
+// registry does not know, so a required extension that was never registered still fails closed.
+func (tm *TaskManager) checkRequiredPreResume(step types.StepTemplate) error {
+	if len(tm.requiredPreResume) == 0 {
+		return nil
+	}
+	if tm.extensionsRegistry == nil {
+		return fmt.Errorf("%w: step template %q: no extensions registry is configured to run them", ErrStepNotGuarded, step.ID)
+	}
+	for _, id := range tm.requiredPreResume {
+		if !declaresExtension(step.Extensions, id, types.PhasePreResume) {
+			return fmt.Errorf("%w: step template %q does not declare %q in phase %s", ErrStepNotGuarded, step.ID, id, types.PhasePreResume)
+		}
+	}
+	return nil
+}
+
+// declaresExtension reports whether extensions lists id in phase.
+func declaresExtension(extensions []types.ExtensionConfig, id string, phase types.ExecutionPhase) bool {
+	for _, ext := range extensions {
+		if ext.ID == id && ext.Phase == phase {
+			return true
+		}
+	}
+	return false
 }
 
 // runExtensions executes the configured extensions matching phase against the
@@ -536,7 +712,14 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 		return TaskView{}, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
-	view, err := tm.renderer.Render(context, record.RenderConfig, renderer.Facts{State: record.State, Data: record.Data})
+	renderConfig, err := renderconfig.Load(context, tm.artifacts, record)
+	if err != nil {
+		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
+	}
+	// The renderer's template provider resolves the render config's templates through the task's
+	// version, so a form does not change under an open task.
+	renderCtx := artifact.WithManifestVersion(context, record.ManifestVersion)
+	view, err := tm.renderer.Render(renderCtx, renderConfig, renderer.Facts{State: record.State, Data: record.Data})
 	if err != nil {
 		return TaskView{}, fmt.Errorf("rendering task %s: %w", taskID, err)
 	}

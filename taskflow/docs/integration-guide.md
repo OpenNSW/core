@@ -13,7 +13,7 @@ To run the orchestrator, you provide concrete implementations of four dependenci
 | Dependency        | Interface                            | What it does                                                   |
 |-------------------|--------------------------------------|----------------------------------------------------------------|
 | Task store        | `store.TaskStore`                    | Persists `TaskRecord`s                                         |
-| Template registry | `orchestrator.TaskTemplateRegistry`  | Looks up task / step / workflow / render-config definitions |
+| Artifacts         | `*artifact.Set`                      | Task / step / workflow / render-config definitions, per manifest version |
 | Plugin registry   | `*plugins.Registry` (concrete)       | Maps `TaskType` → plugin handler                               |
 | Temporal manager  | `engine.TemporalManager`             | Starts task workflows and resumes parked activities            |
 | Renderer          | `renderer.Renderer`                  | Turns `(state, data)` + render config → a UI view              |
@@ -22,10 +22,10 @@ To run the orchestrator, you provide concrete implementations of four dependenci
 Then you call:
 
 ```go
-tm := orchestrator.NewTaskManager(db, registry, pluginsReg, taskWorkflowManager, onTaskCompleted, rdr)
+tm := orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions */, taskWorkflowManager, onTaskCompleted, rdr)
 ```
 
-…and wire `tm.StartTask`, `tm.StartTaskStep`, and `tm.HandleTaskCompletion` into your Temporal handlers. `demo/main.go` is the complete worked example.
+…and wire `tm.StartTask`, `tm.StartTaskStep`, and `tm.HandleTaskCompletion` into your Temporal handlers. Start every parent workflow with `workflow.VarManifestVersion` set to `artifacts.Current()`: `StartTask` records that version on the task and refuses a payload without one, and every later step, submission and render of the task resolves through it. `demo/main.go` is the complete worked example.
 
 ---
 
@@ -42,6 +42,7 @@ type TaskStore interface {
     ClaimStep(ctx context.Context, taskID string, claim StepClaim) (int64, error)
     WriteRenderState(ctx context.Context, taskID, stepID string, seq int64, state string, data map[string]any) (int64, error)
     PersistSubmission(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
+    WriteDraft(ctx context.Context, taskID, stepID string, seq int64, data map[string]any) (int64, error)
     CompleteTask(ctx context.Context, taskID string, seq int64) (int64, error)
 
     // Guarded claim writes: the same kind of statement, on the claim columns only.
@@ -56,13 +57,14 @@ type TaskStore interface {
 - **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). Must return `(zero, false)` when absent, never panic.
 - **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
 - **`GetAllTasks`** returns every record if `parentWorkflowID == ""`, otherwise only records where `record.ParentWorkflowID == parentWorkflowID`. Used by the portal listing API.
-- **The four step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
+- **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
 
   | Method              | Guard                                | Sets                                                                        |
   |---------------------|--------------------------------------|-----------------------------------------------------------------------------|
   | `ClaimStep`         | stored `seq <= claim.Seq`            | `active_step_id`, `seq`, `active_task_template_id`, `state`, `data` (replaced, not merged) |
   | `WriteRenderState`  | `active_step_id = stepID AND seq = seq` | `state`, `data`                                                          |
   | `PersistSubmission` | `active_step_id = stepID AND seq = seq` | `data`, `state = ADVANCING`, `seq = seq + 1`                             |
+  | `WriteDraft`        | `active_step_id = stepID AND seq = seq AND state NOT IN (STARTING_STEP, ADVANCING, COMPLETED)` | `data` only                       |
   | `CompleteTask`      | stored `seq <= seq`                  | `state = COMPLETED`, `seq`                                                  |
 
   Return the number of rows changed. **0 rows means the write was stale and was dropped; it is not an error.** Return an error only when the store failed.
@@ -82,6 +84,8 @@ ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS active_step_id UUID NULL;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_by TEXT NULL;
 ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NULL;
+ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS task_template_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_records_v2 DROP COLUMN IF EXISTS render_config;
 ```
 
 `InitTask` leaves the claim columns out of its insert, so tasks can still be created before they exist. Add them before anything calls `ClaimTask` or `ReleaseTask`.
@@ -114,9 +118,9 @@ This is read-only from the orchestrator's perspective. How definitions get *into
 | `GetTaskTemplate`    | `payload.TaskTemplateID` from the parent workflow | `StartTask`                                              |
 | `GetStepTemplate` | `payload.TaskTemplateID` from the child workflow  | `StartTaskStep`                                           |
 | `GetWorkflow`        | `TaskTemplate.WorkflowID`                         | `StartTask`                                              |
-| `GetGenericTemplate` | `TaskTemplate.RenderConfigID`                     | `StartTask` (snapshotted into `TaskRecord.RenderConfig`) |
+| `GetGenericTemplate` | `TaskTemplate.RenderConfigID`                     | `StartTask`, and each render (through `TaskRecord.TaskTemplateID`) |
 
-The render config is **snapshotted** into the `TaskRecord` at start time. If you mutate a render config in the registry, existing tasks keep their original view — which is the desired behaviour for audit and replay.
+The `TaskRecord` keeps only the render config's **id**. Every render resolves it again through the task's `ManifestVersion` (`renderconfig.Load`), so a task keeps the view of the manifest it started on, whatever is published later. Published artifacts never change, and the artifact `Set` keeps the files it loads, so this costs no fetch after the first.
 
 See [`template-reference.md`](template-reference.md) for the JSON shapes.
 
@@ -167,16 +171,16 @@ taskWorkflowManager := engine.NewTemporalManager(
 The handlers wire into the orchestrator:
 
 ```go
-parentTaskHandler := func(p engine.TaskPayload) (map[string]any, error) {
-    return tm.StartTask(p)
+parentTaskHandler := func(ctx context.Context, p engine.TaskPayload) (map[string]any, error) {
+    return tm.StartTask(ctx, p)
 }
 
-taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
-    return tm.StartTaskStep(p)
+taskHandler := func(ctx context.Context, p engine.TaskPayload) (map[string]any, error) {
+    return tm.StartTaskStep(ctx, p)
 }
 
-taskCompletionHandler := func(c engine.WorkflowCompletion) error {
-    return tm.HandleTaskCompletion(context.Background(), c)
+taskCompletionHandler := func(ctx context.Context, c engine.WorkflowCompletion) error {
+    return tm.HandleTaskCompletion(ctx, c)
 }
 ```
 
@@ -189,16 +193,16 @@ taskCompletionHandler := func(c engine.WorkflowCompletion) error {
 ```go
 var tm *orchestrator.TaskManager
 
-taskHandler := func(p engine.TaskPayload) (map[string]any, error) {
+taskHandler := func(ctx context.Context, p engine.TaskPayload) (map[string]any, error) {
     if tm == nil {
         return nil, fmt.Errorf("task manager not initialised")
     }
-    return tm.StartTaskStep(p)
+    return tm.StartTaskStep(ctx, p)
 }
 
 // ... construct managers ...
 
-tm = orchestrator.NewTaskManager(db, registry, pluginsReg, taskWorkflowManager, onTaskCompleted, rdr)
+tm = orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions */, taskWorkflowManager, onTaskCompleted, rdr)
 ```
 
 ---
@@ -235,13 +239,13 @@ type Renderer interface {
 }
 ```
 
-The renderer turns a snapshotted render config + the task's current `(state, data)` into a `json.RawMessage` (e.g. a map of UI slot → component, a custom layout config, or schema). The library is deliberately agnostic about what your config or UI representation looks like — `Render` receives raw JSON and decides what to do.
+The renderer turns the task's render config + the task's current `(state, data)` into a `json.RawMessage` (e.g. a map of UI slot → component, a custom layout config, or schema). The library is deliberately agnostic about what your config or UI representation looks like — `Render` receives raw JSON and decides what to do.
 
 `Facts` also carries `Claims map[string]bool` — authorization decisions the *caller* resolved before rendering, which a renderer may use to decide what this particular caller is allowed to see. taskflow makes no policy decision of its own; it only forwards them. Callers supply them per request through `ZoneViewAssembler.Assemble(ctx, record, claims)` and pass `nil` when their render configs gate nothing on a claim.
 
 `demo/renderer.go` is a minimal state-keyed renderer: the config is `{state: {slot: component}}` and it picks the entry matching the current `State` (falling back to a `default` entry). Most real consumers will want something richer — templated payloads, schema lookups, role-based slot selection.
 
-The render config is snapshotted into the `TaskRecord` at `StartTask` time. Once a task is running, mutating the registry entry won't affect it.
+The render config is resolved through the task's manifest version (`renderconfig.Load`) on every render, so a manifest published after the task started does not change it.
 
 ---
 
@@ -281,13 +285,13 @@ What your host needs to do:
 
 ## Error semantics
 
-`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
+`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrStepNotGuarded` (see [Requiring an authorization extension](#requiring-an-authorization-extension)) maps to 403. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
 
 The orchestrator uses two sentinel errors to signal "this isn't really an error, the workflow should park":
 
 | Sentinel                                                         | Returned by                                        | Meaning                                                                                  |
 |------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------|
-| `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartTaskStep` (when plugin suspends) | The Temporal activity should park indefinitely; the orchestrator will resume it later.   |
+| `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartTaskStep` (when plugin suspends) | The step waits for a completion: its activity ends, and its node waits in the workflow, with no timeout, until `CompleteActivation` resumes it. |
 | `plugins.ErrSuspended`                                           | A plugin's `Execute` method                        | "I dispatched the work; don't advance the workflow until something external resumes me." |
 
 `StartTaskStep` translates `ErrSuspended` from a plugin into `ErrResultPending` for Temporal. Both are normal happy-path values, not failures.
@@ -299,18 +303,18 @@ A real error from `StartTask` / `StartTaskStep` (template not found, plugin fail
 ## What `StartTask` does, step by step
 
 ```go
-func (tm *TaskManager) StartTask(payload engine.TaskPayload) (map[string]any, error) {
+func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
     // 1. Resolve TaskTemplate → workflow definition → render config
     // 2. Reject if the child workflow has parallel gateways
     // 3. taskID := payload.ActivationID (the parent's step ID); taskWorkflowID := "task-wf-" + taskID
     // 4. Build the initial Data map from payload.Inputs (setNestedKey for dotted keys)
-    // 5. Persist TaskRecord (state=STARTING, parent coords, render config snapshot)
+    // 5. Persist TaskRecord (state=STARTING, parent coords, render config id)
     // 6. Start the child task workflow on the task queue
-    // 7. Return activity.ErrResultPending — the parent activity parks
+    // 7. Return activity.ErrResultPending — the parent's node waits for the task to complete
 }
 ```
 
-Note that **the parent activity returns `ErrResultPending` even on success**. The parent workflow doesn't get its result until `onTaskCompleted` wakes it later.
+Note that **`StartTask` returns `ErrResultPending` even on success**. The parent's activity ends there, and the parent workflow doesn't get the task's result until `onTaskCompleted` completes its node later.
 
 ## What `StartTaskStep` does
 
@@ -331,7 +335,8 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID string, payload map[string]any) error {
     // 0. stepID is required (ErrStepIDRequired → 400)
     // 1. Pre-check the row: task not completed and stepID is the active step (else ErrStaleStep → 409)
-    // 2. Pre-resume extensions on copies of the record and payload (authz, validation)
+    // 2. Pre-resume extensions on copies of the record and payload (authz, validation). With
+    //    WithRequiredPreResumeExtensions, a template missing a required one is refused first (ErrStepNotGuarded → 403)
     // 3. TemporalManager.CompleteActivation(TaskWorkflowID, stepID, payload). Exactly one caller wins;
     //    a step that is not pending fails with ErrStaleStep and nothing is written
     // 4. PersistSubmission (state ADVANCING, seq+1), guarded; 0 rows is success
@@ -342,6 +347,17 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 The portal calls this with the `step_id` its task view reported and whatever payload makes sense for the current step. The shape is typed by your step templates and plugins, not by the orchestrator. A nil return means the workflow **accepted** the step; the row shows `ADVANCING` (or the next step) from then on, so clients refetch instead of assuming the state. Map `ErrStepIDRequired` to 400 and `ErrStaleStep` to 409.
 
 An external system that calls back is addressed by the **callback token** the dispatch carried in `X-Task-ID` (see `plugins.CallbackToken`): call `CompleteTaskStepByToken(ctx, token, payload)`. A malformed token returns an error wrapping `callbacktoken.ErrInvalid` (400). The receiver should also use the token as its idempotency key: it is the same on every retry of one step's dispatch and different for every step.
+
+### Requiring an authorization extension
+
+`CompleteTaskStep` and `SaveDraft` run the `PRE_RESUME` extensions the active step's template declares, and only those. A template that declares none resumes for any caller who reaches these methods, and with no extensions registry no extension runs at all. If an extension of yours decides who may act, require it:
+
+```go
+tm := orchestrator.NewTaskManager(db, registry, pluginsRegistry, extensionsRegistry, wf, onTaskCompleted, renderer,
+    orchestrator.WithRequiredPreResumeExtensions("authz"))
+```
+
+Both methods then refuse, with `ErrStepNotGuarded` and before anything runs or is written, a step whose template does not declare every required id in its `PRE_RESUME` phase, and every step when the extensions registry is nil. A required extension that is declared but not registered is refused too, as any unregistered `PRE_RESUME` extension is. It is off by default. Turn it on once every template that parks declares the extension; any that doesn't can no longer be completed.
 
 ## What `HandleTaskCompletion` does
 
@@ -366,7 +382,7 @@ Things the demo cuts corners on, that you'll want for a real deployment:
 - **Observability.** Plugins log via `log.Printf`. Replace with your structured logger; surface task state transitions, plugin errors, and callback failures to your observability stack.
 - **Schema.** Add `active_step_id` and `seq` to your task table (section 1) before deploying a version that uses the guarded writes, and `claimed_by` and `claimed_at` before using task claims.
 - **Plugin error handling.** Decide what should retry vs. fail-fast. The orchestrator currently surfaces non-`ErrSuspended` plugin errors to Temporal, which will retry per the activity's retry policy.
-- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task. Add authn/authz at your HTTP layer. A task claim is not part of that check (see [Task claims](#7-task-claims)).
+- **Authorisation.** `CompleteTaskStep` accepts any payload for any known task unless a `PRE_RESUME` extension refuses it. Authenticate at your HTTP layer, authorize in an extension, and require that extension with `WithRequiredPreResumeExtensions` so a template that forgets it fails closed. A task claim is not part of that check (see [Task claims](#7-task-claims)).
 
 ---
 

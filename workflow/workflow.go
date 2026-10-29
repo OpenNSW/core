@@ -4,12 +4,14 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/OpenNSW/core/shared/maputil"
@@ -33,6 +35,10 @@ type graphInterpreter struct {
 	// pendingAdminResolutions holds a Settable for each node currently parked in
 	// NodeStatusAwaitingAdmin, keyed by that park's ActivationID. See admin_recovery.go.
 	pendingAdminResolutions map[string]workflow.Settable
+
+	// pendingCompletions holds a Settable for each TASK step that may be completed through
+	// CompleteActivation, keyed by its ActivationID. See completion.go.
+	pendingCompletions map[string]workflow.Settable
 }
 
 // GraphInterpreterWorkflow is the entry point for the Temporal workflow that interprets a graph definition.
@@ -97,6 +103,7 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 		instance:                instance,
 		edgeTokens:              make(map[string]int),
 		pendingAdminResolutions: make(map[string]workflow.Settable),
+		pendingCompletions:      make(map[string]workflow.Settable),
 	}
 	interp.buildIndexes()
 
@@ -129,8 +136,13 @@ func GraphInterpreterWorkflow(ctx workflow.Context, def WorkflowDefinition, init
 	})
 
 	interp.startAdminResolutionDispatcher(ctx)
+	if err := interp.registerCompletionHandler(ctx); err != nil {
+		return nil, fmt.Errorf("failed to set %s update handler: %w", completeActivationUpdate, err)
+	}
 
-	ao := workflow.ActivityOptions{StartToCloseTimeout: 24 * time.Hour * 365}
+	// The END node's WorkflowCompletedActivity runs with these options. Every other Activity sets its
+	// own (handleTaskNode's ExecuteTaskActivity among them).
+	ao := workflow.ActivityOptions{StartToCloseTimeout: completionActivityTimeout, RetryPolicy: taskRetryPolicy}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
 	// Begin Execution
@@ -429,6 +441,28 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 	return nil
 }
 
+// manifestVersion returns the artifact manifest version this execution resolves templates
+// through (see VarManifestVersion), or 0 if the host set none. The variable passes through
+// Temporal's JSON payloads, so a whole number arrives as a float64; a value that is not a
+// positive whole number counts as none.
+func (g *graphInterpreter) manifestVersion() int {
+	switch v := g.instance.WorkflowVariables[VarManifestVersion].(type) {
+	case int:
+		return max(v, 0)
+	case int64:
+		return int(max(v, 0))
+	case float64:
+		if v > 0 && v == float64(int(v)) {
+			return int(v)
+		}
+	case json.Number:
+		if n, err := v.Int64(); err == nil && n > 0 {
+			return int(n)
+		}
+	}
+	return 0
+}
+
 // caseID returns the case this execution belongs to (see VarCaseID).
 func (g *graphInterpreter) caseID() string {
 	if v, ok := g.instance.WorkflowVariables[VarCaseID].(string); ok && v != "" {
@@ -437,25 +471,73 @@ func (g *graphInterpreter) caseID() string {
 	return g.instance.ID
 }
 
+// taskActivityTimeout bounds one attempt of a task's Activity: running the step's plugin. A step that
+// waits for a person ends its Activity first (see completion.go), so the wait doesn't count against
+// it. An attempt whose worker died or whose call hangs is retried when this runs out.
+const taskActivityTimeout = 10 * time.Minute
+
+// completionActivityTimeout bounds one attempt of WorkflowCompletedActivity. The completion hook does
+// its work and returns without waiting for anyone, so a few minutes is ample, and a worker that dies
+// during an attempt is noticed when it runs out.
+const completionActivityTimeout = 5 * time.Minute
+
+// taskRetryPolicy bounds the retries of a task's Activity, of WorkflowCompletedActivity and of a
+// split's FetchWorkflowDefinitionActivity, so an error that never clears ends in a park for an admin
+// instead of retrying forever. An attempt that
+// times out is retried like one that failed. Retries back off from 1s, doubling to a cap of 1h,
+// and stop after taskMaxAttempts: about 24h of retrying in all. A non-retryable error parks at once.
+var taskRetryPolicy = &temporal.RetryPolicy{
+	InitialInterval:    time.Second,
+	BackoffCoefficient: 2,
+	MaximumInterval:    time.Hour,
+	MaximumAttempts:    taskMaxAttempts,
+}
+
+// taskMaxAttempts is how many times a task's Activity runs before it parks: 13 attempts doubling from
+// 1s to the 1h cap (about 68 minutes), then 23 more an hour apart.
+const taskMaxAttempts = 36
+
 func (g *graphInterpreter) handleTaskNode(ctx workflow.Context, nodeInfo *NodeInfo, node *Node, outEdges []Edge) error {
 	inputs, err := g.mapTaskInputs(node.InputMapping)
 	if err != nil {
 		return err
 	}
 
-	var result map[string]any
+	// The step may be completed from the moment its Activity starts: a host can complete a step it
+	// suspended before the Activity has reported back.
+	completion, unregister := g.expectCompletion(ctx, nodeInfo.ActivationID)
 
 	// nodeInfo.ActivationID was minted by the caller (mintActivation, via executeNode or an admin
-	// retry) before dispatching here; the Activity is addressed by that same ID so a stale
-	// completion from an earlier run of this node no longer matches.
+	// retry) before dispatching here; the Activity is addressed by that same ID, and so is the step's
+	// completion, so a stale completion from an earlier run of this node no longer matches.
 	nodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		ActivityID:          nodeInfo.ActivationID,
-		StartToCloseTimeout: 24 * time.Hour * 365,
+		StartToCloseTimeout: taskActivityTimeout,
+		RetryPolicy:         taskRetryPolicy,
 	})
 
+	var taskResult TaskResult
 	err = workflow.ExecuteActivity(nodeCtx, "ExecuteTaskActivity", node.TaskTemplateID, inputs, g.caseID(),
-		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq}).Get(ctx, &result)
+		ActivationRef{NodeID: node.ID, Seq: nodeInfo.Seq, ManifestVersion: g.manifestVersion()}).Get(ctx, &taskResult)
+	result := taskResult.Output
+	if err == nil {
+		switch {
+		case taskResult.Suspended:
+			// Wait, outside any Activity, for CompleteActivation to deliver the step's output.
+			err = completion.Get(ctx, &result)
+		case completion.IsReady():
+			// A ForceParkActivation arrived while the Activity was still running; read its error so
+			// the node parks instead of ignoring an accepted force-park.
+			err = completion.Get(ctx, nil)
+		}
+	}
+	// The step now takes no completion: it completed, failed or was cancelled. This must happen
+	// here, not on return, since the node returns only after the rest of the graph has run.
+	unregister()
 	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
 		return withCategory(ParkCategoryTaskFailure, err)
 	}
 

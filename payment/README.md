@@ -6,10 +6,10 @@ The `payment` package provides a modular and extensible payment orchestration sy
 
 The system consists of several key components:
 
-1.  **PaymentGateway**: An interface for gateway-specific integrations (e.g., LankaPay, GovPay). It handles session creation, webhook parsing, and real-time validation formatting.
-2.  **GatewayRegistry**: A pure discovery and lookup service. It manages gateway registration, configuration injection, and provides sanitized metadata for the UI.
-3.  **PaymentRepository**: Handles persistence for `PaymentTransaction` records using GORM.
-4.  **PaymentService**: The high-level orchestrator. It uses the Registry to find the correct Gateway and coordinates between the gateway logic, database, and internal events.
+1.  **Gateway**: An interface for gateway-specific integrations (e.g., LankaPay, GovPay). It handles session creation, webhook parsing, and real-time validation formatting.
+2.  **Registry**: A pure discovery and lookup service. It is built from a `payment.Config` value (it reads no files), manages gateway registration and configuration injection, and provides sanitized metadata for the UI.
+3.  **Repository**: Handles persistence for `Transaction` records using GORM.
+4.  **Service**: The high-level orchestrator. It uses the Registry to find the correct Gateway and coordinates between the gateway logic, database, and internal events.
 5.  **HTTPHandler**: Exposes the payment service via RESTful endpoints for both public and internal use.
 
 ## Integration
@@ -22,40 +22,52 @@ import "github.com/OpenNSW/core/payment"
 
 ## Getting Started
 
-### 1. Implement a PaymentGateway
+### 1. Implement a Gateway
 
-Each payment gateway requires a dedicated implementation of the `PaymentGateway` interface.
+Each payment gateway requires a dedicated implementation of the `Gateway` interface.
 
 ```go
-type MyGateway struct {}
+type MyGateway struct{ cfg Config }
+
+// Config is this gateway's own config: the method's "config" block.
+type Config struct {
+    BaseURL      string `yaml:"base_url"`
+    ClientSecret string `yaml:"client_secret"`
+}
 
 // NewMyGateway is this gateway's Factory, called once by the registry at
-// init time with its raw config from payment_methods.json.
-func NewMyGateway(config json.RawMessage) (payment.PaymentGateway, error) {
-    // Unmarshal gateway-specific settings from JSON.
-    return &MyGateway{}, nil
+// init time. decode decodes the method's "config" block into this gateway's
+// own config type.
+func NewMyGateway(decode func(v any) error) (payment.Gateway, error) {
+    var cfg Config
+    if err := decode(&cfg); err != nil {
+        return nil, err
+    }
+    return &MyGateway{cfg: cfg}, nil
 }
 
 func (g *MyGateway) GetFlowType() payment.InteractionType {
     return payment.FlowTypeRedirect
 }
 
-// ValidateMetadata declares what this gateway cannot operate without. It
-// runs before a reference number is generated and before anything is
-// persisted, so a caller that omitted a required key fails immediately
-// rather than at callback time, when the configuration responsible is out
-// of reach. Presence checks on the request only — no I/O, no outside state.
-// A gateway with no requirements returns nil.
-func (g *MyGateway) ValidateMetadata(metadata map[string]string) error {
-    if strings.TrimSpace(metadata["my_merchant_id"]) == "" {
-        return errors.New("my_merchant_id is required")
+// ValidatePayeeMapping checks one entry of this method's "payees" config:
+// the ids this gateway needs to collect for a payee. The registry calls it
+// for every mapping at startup, so a mapping missing an id fails startup
+// rather than a payer's checkout. Well-formedness only — no I/O. A gateway
+// that needs no ids returns nil.
+func (g *MyGateway) ValidatePayeeMapping(mapping json.RawMessage) error {
+    var ids struct {
+        MerchantID string `json:"merchant_id"`
+    }
+    if err := json.Unmarshal(mapping, &ids); err != nil || strings.TrimSpace(ids.MerchantID) == "" {
+        return errors.New("merchant_id is required")
     }
     return nil
 }
 
 func (g *MyGateway) CreateSession(ctx context.Context, req payment.SessionRequest) (*payment.SessionResponse, error) {
-    // Logic to initialize session with gateway. req.Metadata carries the
-    // checkout's pass-through metadata, already past ValidateMetadata.
+    // Logic to initialize session with gateway. req.PayeeMapping carries this
+    // gateway's ids for req.Payee, already past ValidatePayeeMapping.
     return &payment.SessionResponse{...}, nil
 }
 
@@ -93,40 +105,63 @@ func (g *MyGateway) HandleValidateReference(ctx context.Context, tx *payment.Val
     return &payment.ValidationResponse{...}, nil
 }
 
-func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string) (*payment.WebhookPayload, *payment.WebhookResponse, error) {
+func (g *MyGateway) ParseWebhook(ctx context.Context, body []byte, headers map[string][]string, payees payment.PayeeLookup) (*payment.WebhookPayload, *payment.WebhookResponse, error) {
     // Logic to parse the gateway webhook into a domain-neutral payload,
-    // plus the gateway-specific acknowledgement to relay back.
+    // plus the gateway-specific acknowledgement to relay back. If the
+    // notification names the account paid into, check it against
+    // payees(ctx, reference), the mapping of the payee the reference was
+    // issued for.
     return &payment.WebhookPayload{...}, &payment.WebhookResponse{...}, nil
 }
 ```
 
 ### 2. Configure Payment Methods
 
-The `payment_methods.json` file is the source of truth for available methods.
+A `payment.Config` lists the available methods. It is plain data with `yaml` struct tags: the package reads no files, so the host loads it as part of its own config, typically with [`configyaml`](../configyaml), which also resolves `{{env:NAME}}` / `{{file:/path}}` placeholders so secrets stay out of the file.
 
-```json
-{
-  "version": "1.0",
-  "methods": [
-    {
-      "id": "lankapay",
-      "is_active": true,
-      "render_info": {
-        "display_name": "Credit/Debit Card (LankaPay)",
-        "description": "Pay securely using your card.",
-        "display_order": 1
-      },
-      "config": {
-        "base_url": "https://sandbox.govpay.lk"
-      }
-    }
-  ]
-}
+```yaml
+payment:
+  methods:
+    - id: lankapay
+      is_active: true
+      render_info:
+        display_name: Credit/Debit Card (LankaPay)
+        description: Pay securely using your card.
+        display_order: 1
+      config:
+        base_url: https://sandbox.govpay.lk
+        client_secret: "{{env:LANKAPAY_CLIENT_SECRET}}"
+      payees:
+        org_a:
+          defaults: { merchant_id: M-100 }
+          services:
+            certificate_fee: {}
+            lab_fee: { merchant_id: M-200 }
 ```
+
+Each method's `config` block is handed to its gateway's `Factory` undecoded, for the gateway to decode into its own config type. Because it lands in a typed struct, a placeholder resolves to the field's type: `"{{env:MERCHANT_ID}}"` set to `00123` stays the string `"00123"` in a `string` field.
+
+JSON is valid YAML, so a JSON file with the same shape loads the same way:
+
+```go
+var cfg payment.Config
+err := configyaml.LoadAndExpand("configs/payment_methods.json", &cfg)
+```
+
+#### Payees
+
+A checkout names its **payee** in the host's own terms: an `org_id` and a `service_id` (`CreateCheckoutRequest.Payee`). It never carries a gateway's account ids. Each method maps the payees it can collect for to its own ids under `payees`:
+
+- `payees.<org_id>.services.<service_id>` lists a payee. Only listed services are mapped: an org's `defaults` alone map nothing.
+- A payee's mapping is its service entry merged over its org's `defaults`, keys in the service entry winning. Above, `org_a/certificate_fee` maps to `{"merchant_id":"M-100"}` and `org_a/lab_fee` to `{"merchant_id":"M-200"}`.
+- Both are objects whose keys the method's gateway defines, as deep as its account structure needs. Core never reads them; it hands the gateway each merged mapping as a JSON object, which the gateway checks in `ValidatePayeeMapping` at startup.
+- Payee ids are decoded without a target type, so YAML infers each value's type. Quote an id that looks like a number (`merchant_id: "00123"`), and don't use placeholders in payee entries: a resolved value's type is inferred too.
+
+A checkout with a method that does not map its payee fails with `ErrPayeeNotMapped` before a reference is issued or anything is persisted, and `ListInfo` / `ListAvailableMethods` only return the methods that map the payee they are asked about.
 
 ### 3. Instantiate the Registry
 
-The `GatewayRegistry` loads the configuration and maps each method ID to its implementation.
+The `Registry` takes the loaded configuration and maps each method ID to its implementation.
 
 ```go
 factories := map[string]payment.Factory{
@@ -134,7 +169,16 @@ factories := map[string]payment.Factory{
     "govpay":   govpay.NewGateway,
 }
 
-registry, err := payment.NewRegistry("configs/payment_methods.json", factories)
+type AppConfig struct {
+    Payment payment.Config `yaml:"payment"`
+}
+
+var appCfg AppConfig
+if err := configyaml.LoadAndExpand("config.yaml", &appCfg); err != nil {
+    log.Fatal(err)
+}
+
+registry, err := payment.NewRegistry(appCfg.Payment, factories)
 ```
 
 ### 4. Supply a ReferenceGenerator
@@ -151,11 +195,11 @@ func (g refGenerator) GenerateReference(ctx context.Context, req payment.CreateC
 
 ### 5. Setup the Orchestrator
 
-The `PaymentService` acts as the orchestrator using the Registry as a lookup.
+The `Service` acts as the orchestrator using the Registry as a lookup.
 
 ```go
-repo := payment.NewPaymentRepository(db)
-service := payment.NewPaymentService(repo, registry, refGenerator{})
+repo := payment.NewRepository(db)
+service := payment.NewService(repo, registry, refGenerator{})
 
 handler := payment.NewHTTPHandler(service)
 ```
@@ -163,19 +207,25 @@ handler := payment.NewHTTPHandler(service)
 ## Key Flows
 
 ### Checkout Initialization
-The frontend calls `CreateCheckoutSession`. The Service takes a reference from its `ReferenceGenerator`, looks up the gateway implementation via the Registry, and delegates the session creation to that gateway.
+The frontend calls `CreateCheckoutSession` with the payee and the selected method. The Service looks up the gateway implementation and resolves its ids for the payee via the Registry, takes a reference from its `ReferenceGenerator`, persists the transaction with its `org_id` and `service_id`, and delegates the session creation to that gateway with the resolved mapping.
 
 ### Real-Time Validation
 When a user enters a reference in a bank app, the gateway calls NSW.
 1. The Service looks up the Gateway via the Registry, then calls **VerifyWebhook** to authenticate the caller. A failure here stops the flow immediately — no reference lookup happens, and no presentment info is disclosed.
 2. The Service uses the Gateway to **Extract** the reference number.
 3. The Service fetches the transaction from the **Database**.
-4. The Service passes the record back to the Gateway to **Validate** and format the protocol-specific response.
+4. The Service resolves the gateway's ids for the transaction's payee and passes the record, with them, back to the Gateway to **Validate** and format the protocol-specific response.
 
 ### Webhook Processing
-Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing, and then performs domain actions: updating status, persisting metadata, and firing internal events.
+Gateways notify the payment service of results. The Service looks up the gateway via the Registry, calls **VerifyWebhook** to authenticate the caller (again, a failure stops the flow before any parsing or settlement), delegates the parsing (handing the gateway a `PayeeLookup` to check the notification against the payee its reference was issued for), and then performs domain actions: updating status, persisting metadata, and firing internal events.
 
 Once a payment reaches SUCCESS or FAILED, the Service resumes the workflow step it was created for through its **TaskCompleter**, calling `CompleteTaskStepByToken` with the `CallbackToken` the checkout carried (`CreateCheckoutRequest.CallbackToken`, required). The token is opaque to this package and names one step, so a settlement that arrives after the task has moved on completes nothing. Core taskflow's `*orchestrator.TaskManager` satisfies `TaskCompleter`; build the token with `plugins.CallbackToken` when creating the checkout.
+
+## Schema
+
+`Transaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.
+
+A host upgrading an existing table adds both columns as nullable, backfills them (e.g. from each row's stored gateway metadata), then makes them `NOT NULL`. A pending transaction left without them cannot be presented or settled.
 
 ## Verification error classification
 
@@ -190,13 +240,13 @@ Conflating the two means an operational blip on your own side (not an attack) ca
 
 `VerifyWebhook(ctx, body, headers)` was deliberately kept to plain params rather than `*http.Request`, to keep gateways transport-agnostic and unit-testable without `httptest`. This covers header-based schemes (an OAuth2 bearer token) and body-based schemes (an HMAC signature) directly — but some schemes need more: a signature computed over the HTTP method and request path, a check against query parameters, an IP allowlist against the remote address, or an mTLS client-certificate check against the TLS connection state.
 
-Rather than changing `VerifyWebhook`'s signature every time a scheme needs a different dimension of the request — which would mean a coordinated breaking change across every implementer, every time — that data is available via context: `HTTPHandler` attaches the full inbound `*http.Request` to the context (via `payment.ContextWithRequest`) before ever calling into `PaymentService`, on every request, so a gateway's `VerifyWebhook` can retrieve it with `payment.RequestFromContext(ctx)` and read whatever dimension its own scheme requires, without `core/payment` ever having to anticipate which one that is:
+Rather than changing `VerifyWebhook`'s signature every time a scheme needs a different dimension of the request — which would mean a coordinated breaking change across every implementer, every time — that data is available via context: `HTTPHandler` attaches the full inbound `*http.Request` to the context (via `payment.ContextWithRequest`) before ever calling into `Service`, on every request, so a gateway's `VerifyWebhook` can retrieve it with `payment.RequestFromContext(ctx)` and read whatever dimension its own scheme requires, without `core/payment` ever having to anticipate which one that is:
 
 ```go
 func (g *MyGateway) VerifyWebhook(ctx context.Context, body []byte, headers map[string][]string) error {
     req := payment.RequestFromContext(ctx)
     if req == nil {
-        // Not available — e.g. PaymentService was invoked directly,
+        // Not available — e.g. Service was invoked directly,
         // bypassing HTTPHandler (a unit test, say). Fall back to whatever
         // the explicit body/headers params allow, or fail closed if this
         // scheme can't verify without the request.
@@ -230,12 +280,14 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 
 ### Core Interfaces
 
-- **PaymentGateway**: Interface for gateway implementations
-- **PaymentService**: Main orchestrator service
-- **PaymentRepository**: Database persistence layer
+- **Gateway**: Interface for gateway implementations
+- **Service**: Main orchestrator service
+- **Repository**: Database persistence layer
 
 ### Data Types
 
+- `Payee`: Who a checkout pays (`org_id`, `service_id`), mapped to each gateway's ids by its `payees` config
+- `PayeeLookup`: Resolves a gateway's mapping for the payee a reference was issued for, handed to `ParseWebhook`
 - `SessionRequest`: Checkout session initialization
 - `SessionResponse`: Session response with checkout details
 - `WebhookPayload`: Incoming webhook data
@@ -247,9 +299,9 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 ### Constructor Functions
 
 - `NewRegistry(configPath string, factories map[string]Factory)`: Create a gateway registry
-- `NewPaymentService(repo PaymentRepository, registry GatewayRegistry, refGen ReferenceGenerator)`: Create payment service
-- `NewPaymentRepository(db *gorm.DB)`: Create payment repository
-- `NewHTTPHandler(service PaymentService)`: Create HTTP handler
+- `NewService(repo Repository, registry Registry, refGen ReferenceGenerator)`: Create payment service
+- `NewRepository(db *gorm.DB)`: Create payment repository
+- `NewHTTPHandler(service Service)`: Create HTTP handler
 
 ### Context Helpers
 
@@ -262,6 +314,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
 - `ErrDuplicateReference`: A transaction already holds the reference the `ReferenceGenerator` issued
+- `ErrPayeeNotMapped`: The selected method has no mapping for the checkout's payee
 - `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
 - `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
 
@@ -289,8 +342,8 @@ func setupPayments(db *gorm.DB) *payment.HTTPHandler {
     }
     
     // Setup service, with your ReferenceGenerator
-    repo := payment.NewPaymentRepository(db)
-    service := payment.NewPaymentService(repo, registry, yourRefGen)
+    repo := payment.NewRepository(db)
+    service := payment.NewService(repo, registry, yourRefGen)
     
     // Return handler for HTTP endpoints
     return payment.NewHTTPHandler(service)
