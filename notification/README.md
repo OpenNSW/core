@@ -1,12 +1,6 @@
-# notifications
+# notification
 
-`github.com/OpenNSW/core/notifications` is its own Go module. It moved from `github.com/OpenNSW/core/notification` in the root module. The package is still named `notification`, so only the import path changes; code keeps using `notification.X`. Import it with the name written out, as `goimports` writes it when a package's name differs from its path:
-
-```go
-import notification "github.com/OpenNSW/core/notifications"
-```
-
-A multi-channel notification router with a pluggable provider model. Your application registers one provider per channel type (email, SMS, etc.); the manager dispatches each `Request` to the correct provider at runtime.
+`github.com/OpenNSW/core/notification` is a multi-channel notification router with a pluggable provider model. Your application registers one provider per channel type (email, SMS, etc.); the manager dispatches each `Request` to the correct provider at runtime.
 
 ## Usage
 
@@ -14,8 +8,8 @@ Each provider takes its own typed config in its constructor and is handed, ready
 
 ```go
 import (
-    notification "github.com/OpenNSW/core/notifications"
-    "github.com/OpenNSW/core/notifications/providers"
+    "github.com/OpenNSW/core/notification"
+    "github.com/OpenNSW/core/notification/providers"
 )
 
 sms, err := providers.NewSMSProvider(cfg.Notification.SMS)
@@ -91,8 +85,21 @@ notification:
     password: "{{env:SMS_PASSWORD}}"
     sidCode: NSW
   email:
-    baseURL: https://email.example.com
-    token: "{{env:EMAIL_TOKEN}}"
+    baseURL: https://pingmailer.example.com
+    # path: /notify # optional, defaults to "/notify"
+    # allowInsecureHTTP: true # only for a plain-HTTP in-cluster URL
+    auth:
+      type: oauth2
+      oauth2:
+        tokenURL: https://idp.example.com/oauth2/token
+        clientID: replace-with-pingmailer-client-id
+        clientSecret: "{{env:NOTIFICATION_EMAIL_CLIENT_SECRET}}"
+        endpointParams:
+          resource: https://mail.example.com
+    smtpHost: mail.example.com
+    smtpPort: 587
+    sender: no-reply@example.com
+    # senderName: Trade National Single Window
 ```
 
-The config fields are typed, so a value decodes into its field's type: a secret that only looks like a number (a password of `12345678`, a SID code of `0123`) stays the string it was. The email `token` is the bearer token itself; configyaml resolves the placeholder, and the provider uses it as written.
+The config fields are typed, so a value decodes into its field's type: a secret that only looks like a number (a password of `12345678`, a SID code of `0123`) stays the string it was. Secret placeholders are resolved by `configyaml`, and the provider uses the resolved values as written.

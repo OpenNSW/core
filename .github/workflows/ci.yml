@@ -398,24 +398,24 @@ jobs:
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
-  # The notifications/ package is its own Go module, so the root ./... jobs above do not
+  # The notification/ package is its own Go module, so the root ./... jobs above do not
   # cover it. Run its quality checks and tests independently.
-  notifications-module:
-    name: Notifications Module
+  notification-module:
+    name: Notification Module
     runs-on: ubuntu-latest
     permissions:
       contents: read
     defaults:
       run:
-        working-directory: notifications
+        working-directory: notification
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version-file: 'notifications/go.mod'
-          cache-dependency-path: notifications/go.sum
+          go-version-file: 'notification/go.mod'
+          cache-dependency-path: notification/go.sum
           cache: true
 
       - name: Verify go.mod
@@ -428,7 +428,7 @@ jobs:
         with:
           version: v2.11.2
           args: --timeout=5m
-          working-directory: notifications
+          working-directory: notification
 
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...

@@ -17,7 +17,7 @@ updates:
       - "/uiprojector"
       - "/trace"
       - "/storage"
-      - "/notifications"
+      - "/notification"
       - "/json"
       - "/xmlgen"
       - "/htmlgen"

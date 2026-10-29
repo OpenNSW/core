@@ -27,7 +27,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`htmlgen`](htmlgen/README.md)             | Print-ready HTML document generation from a static template and structured data, with contextual escaping                                                                                     |
 | [`httputil`](httputil/README.md)           | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
 | [`json`](json/README.md)                   | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
-| [`notifications`](notifications/README.md) | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
+| [`notification`](notification/README.md)   | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
 | [`pagination`](pagination/README.md)       | Standard pagination envelope and query parameter parsing                                                                                                                                      |
 | [`payment`](payment/README.md)             | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
 | [`remote`](remote/README.md)               | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
@@ -77,7 +77,7 @@ flowchart TD
         P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · API_CALL · custom"]
     end
 
-    SS["payment · remote · notifications · storage"]
+    SS["payment · remote · notification · storage"]
     AR[("artifact registry<br>workflow defs · task templates<br>form schemas · render templates")]
 
     Portal -->|HTTP| server
