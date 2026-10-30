@@ -11,38 +11,52 @@ import (
 )
 
 // Category classifies an Error and decides its HTTP status, so handlers never
-// pick a status by hand.
-type Category string
-
-const (
-	CategoryInvalid         Category = "invalid"         // 400 Bad Request
-	CategoryUnauthenticated Category = "unauthenticated" // 401 Unauthorized
-	CategoryForbidden       Category = "forbidden"       // 403 Forbidden
-	CategoryNotFound        Category = "notFound"        // 404 Not Found
-	CategoryConflict        Category = "conflict"        // 409 Conflict
-	CategoryTooManyRequests Category = "tooManyRequests" // 429 Too Many Requests
-	CategoryUnavailable     Category = "unavailable"     // 503 Service Unavailable
-	CategoryInternal        Category = "internal"        // 500 Internal Server Error
-)
-
-var categoryStatus = map[Category]int{
-	CategoryInvalid:         http.StatusBadRequest,
-	CategoryUnauthenticated: http.StatusUnauthorized,
-	CategoryForbidden:       http.StatusForbidden,
-	CategoryNotFound:        http.StatusNotFound,
-	CategoryConflict:        http.StatusConflict,
-	CategoryTooManyRequests: http.StatusTooManyRequests,
-	CategoryUnavailable:     http.StatusServiceUnavailable,
-	CategoryInternal:        http.StatusInternalServerError,
+// pick a status by hand. Use a predefined category, or declare one with
+// NewCategory for a status they don't cover.
+type Category struct {
+	name   string
+	status int
 }
 
-// Status returns the HTTP status for c. An unknown category is 500, so a
-// mistyped category fails loudly instead of passing as a client error.
+// NewCategory declares a category written with status, which must be a 4xx
+// or 5xx code. Declare it once, as a package-level value:
+//
+//	var CategoryTooEarly = httputil.NewCategory("tooEarly", http.StatusTooEarly)
+func NewCategory(name string, status int) Category {
+	return Category{name: name, status: status}
+}
+
+var (
+	CategoryInvalid              = NewCategory("invalid", http.StatusBadRequest)
+	CategoryUnauthenticated      = NewCategory("unauthenticated", http.StatusUnauthorized)
+	CategoryForbidden            = NewCategory("forbidden", http.StatusForbidden)
+	CategoryNotFound             = NewCategory("notFound", http.StatusNotFound)
+	CategoryConflict             = NewCategory("conflict", http.StatusConflict)
+	CategoryTooLarge             = NewCategory("tooLarge", http.StatusRequestEntityTooLarge)
+	CategoryUnsupportedMediaType = NewCategory("unsupportedMediaType", http.StatusUnsupportedMediaType)
+	CategoryUnprocessable        = NewCategory("unprocessable", http.StatusUnprocessableEntity)
+	CategoryTooManyRequests      = NewCategory("tooManyRequests", http.StatusTooManyRequests)
+	CategoryUnavailable          = NewCategory("unavailable", http.StatusServiceUnavailable)
+	CategoryInternal             = NewCategory("internal", http.StatusInternalServerError)
+)
+
+// Status returns the HTTP status for c. A zero Category, or one whose status
+// is not 4xx or 5xx, is 500, so a missing or mistyped category fails loudly
+// instead of passing as a client error or a success.
 func (c Category) Status() int {
-	if status, ok := categoryStatus[c]; ok {
-		return status
+	if !validErrorStatus(c.status) {
+		return http.StatusInternalServerError
 	}
-	return http.StatusInternalServerError
+	return c.status
+}
+
+// String returns the category's name.
+func (c Category) String() string {
+	return c.name
+}
+
+func validErrorStatus(status int) bool {
+	return status >= http.StatusBadRequest && status <= 599
 }
 
 // Error is a client-facing API error. Declare each one once, as a
@@ -173,7 +187,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 			level = slog.LevelError
 		}
 		slog.Log(r.Context(), level, "httputil: request failed",
-			"code", apiErr.Code, "error", err, "correlationId", correlationID)
+			"code", apiErr.Code, "category", apiErr.Category.String(), "error", err, "correlationId", correlationID)
 	}
 
 	details := apiErr.details
