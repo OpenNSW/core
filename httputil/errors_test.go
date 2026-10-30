@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-var errMemberNotFound = Error{
+var errMemberNotFound = ErrorDef{
 	Code:     "PB-1003",
 	Category: CategoryNotFound,
 	Message:  Message{Key: "pb.member.not_found", DefaultValue: "Member not found"},
@@ -25,7 +25,7 @@ var errMemberNotFound = Error{
 	},
 }
 
-var errInvalidRequest = Error{
+var errInvalidRequest = ErrorDef{
 	Code:     "PB-1001",
 	Category: CategoryInvalid,
 	Message:  Message{Key: "pb.request.invalid", DefaultValue: "Invalid request"},
@@ -84,11 +84,11 @@ func TestCategory_Status(t *testing.T) {
 func TestError_WithParamsFillsEachMessageWithItsOwnParams(t *testing.T) {
 	err := errMemberNotFound.WithParams(map[string]string{"memberId": "m-42"})
 
-	if err.Message.Params != nil {
-		t.Fatalf("expected no params on the title, got %v", err.Message.Params)
+	if err.Message().Params != nil {
+		t.Fatalf("expected no params on the title, got %v", err.Message().Params)
 	}
-	if err.Description.Params["memberId"] != "m-42" {
-		t.Fatalf("unexpected description params: %v", err.Description.Params)
+	if err.Description().Params["memberId"] != "m-42" {
+		t.Fatalf("unexpected description params: %v", err.Description().Params)
 	}
 	if errMemberNotFound.Description.Params != nil {
 		t.Fatal("WithParams modified the declared error")
@@ -106,8 +106,31 @@ func TestError_WithDetailsDoesNotAlias(t *testing.T) {
 	if len(second.details) != 2 || second.details[1].Field != "c" {
 		t.Fatalf("unexpected second details: %+v", second.details)
 	}
-	if errInvalidRequest.details != nil {
-		t.Fatal("WithDetails modified the declared error")
+}
+
+func TestErrorDef_ReturnsANewErrorEachTime(t *testing.T) {
+	if first, second := errMemberNotFound.Err(), errMemberNotFound.Err(); first == second {
+		t.Fatal("expected Err to return a new *Error each time")
+	}
+
+	var got *Error
+	if !errors.As(fmt.Errorf("load: %w", errMemberNotFound.Err()), &got) {
+		t.Fatal("expected errors.As to find the *Error")
+	}
+	_ = got.WithParams(map[string]string{"memberId": "m-42"})
+
+	if errMemberNotFound.Description.Params != nil || got.Description().Params != nil {
+		t.Fatal("WithParams on a returned error changed it or its declaration")
+	}
+}
+
+func TestError_GettersReturnCopies(t *testing.T) {
+	err := errMemberNotFound.WithParams(map[string]string{"memberId": "m-42"})
+
+	err.Description().Params["memberId"] = "changed"
+
+	if got := err.Description().Params["memberId"]; got != "m-42" {
+		t.Fatalf("changing a getter's params changed the error: %q", got)
 	}
 }
 
@@ -116,17 +139,17 @@ func TestError_IsAndAs(t *testing.T) {
 	err := fmt.Errorf("load member: %w",
 		errMemberNotFound.WithParams(map[string]string{"memberId": "m-42"}).Wrap(cause))
 
-	if !errors.Is(err, &errMemberNotFound) {
+	if !errors.Is(err, errMemberNotFound.Err()) {
 		t.Fatal("expected errors.Is to match the declared error")
 	}
-	if errors.Is(err, &errInvalidRequest) {
+	if errors.Is(err, errInvalidRequest.Err()) {
 		t.Fatal("expected errors.Is not to match a different error")
 	}
 	if !errors.Is(err, cause) {
 		t.Fatal("expected errors.Is to reach the wrapped cause")
 	}
 	var apiErr *Error
-	if !errors.As(err, &apiErr) || apiErr.Description.Params["memberId"] != "m-42" {
+	if !errors.As(err, &apiErr) || apiErr.Description().Params["memberId"] != "m-42" {
 		t.Fatalf("expected errors.As to find the parameterized error, got %+v", apiErr)
 	}
 	if !strings.Contains(err.Error(), "PB-1003: Member not found: sql: no rows") {
@@ -183,7 +206,7 @@ func TestWriteError_OmitsEmptyDescriptionAndCorrelationID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	WriteError(w, req, &errInvalidRequest)
+	WriteError(w, req, errInvalidRequest.Err())
 
 	got := w.Body.String()
 	if strings.Contains(got, "description") || strings.Contains(got, "correlationId") {
@@ -268,7 +291,7 @@ func TestWriteError_WrappedCauseIsLoggedNotSent(t *testing.T) {
 
 func TestWriteError_ServerCategoryLogsAtErrorLevel(t *testing.T) {
 	logs := captureLogs(t)
-	errUpstream := Error{
+	errUpstream := ErrorDef{
 		Code:     "PB-5031",
 		Category: CategoryUnavailable,
 		Message:  Message{Key: "pb.upstream.unavailable", DefaultValue: "Payment gateway unavailable"},
@@ -287,7 +310,7 @@ func TestWriteError_ServerCategoryLogsAtErrorLevel(t *testing.T) {
 func TestWriteError_ContextAddedByWrappingIsLogged(t *testing.T) {
 	logs := captureLogs(t)
 
-	w, _ := writeError(t, fmt.Errorf("member %s: %w", "m-42", &errMemberNotFound))
+	w, _ := writeError(t, fmt.Errorf("member %s: %w", "m-42", errMemberNotFound.Err()))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)

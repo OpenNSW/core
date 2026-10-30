@@ -49,16 +49,16 @@ func TestCatalog_AllowsASharedKeyWithTheSameDefault(t *testing.T) {
 func TestCatalog_Rejects(t *testing.T) {
 	tests := []struct {
 		name    string
-		mutate  func(e *Error)
+		mutate  func(e *ErrorDef)
 		wantErr string
 	}{
-		{"duplicate code", func(e *Error) { e.Code = errMemberNotFound.Code }, "declared twice"},
-		{"conflicting key default", func(e *Error) { e.Message.Key = errMemberNotFound.Message.Key }, "elsewhere"},
-		{"malformed code", func(e *Error) { e.Code = "pb-12" }, "not an upper-case prefix"},
-		{"missing category", func(e *Error) { e.Category = Category{} }, "not a 4xx or 5xx"},
-		{"non-error category status", func(e *Error) { e.Category = NewCategory("ok", http.StatusOK) }, "not a 4xx or 5xx"},
-		{"missing message key", func(e *Error) { e.Message.Key = "" }, "message has no key"},
-		{"description without key", func(e *Error) { e.Description = Message{DefaultValue: "x"} }, "description has no key"},
+		{"duplicate code", func(e *ErrorDef) { e.Code = errMemberNotFound.Code }, "declared twice"},
+		{"conflicting key default", func(e *ErrorDef) { e.Message.Key = errMemberNotFound.Message.Key }, "elsewhere"},
+		{"malformed code", func(e *ErrorDef) { e.Code = "pb-12" }, "not an upper-case prefix"},
+		{"missing category", func(e *ErrorDef) { e.Category = Category{} }, "not a 4xx or 5xx"},
+		{"non-error category status", func(e *ErrorDef) { e.Category = NewCategory("ok", http.StatusOK) }, "not a 4xx or 5xx"},
+		{"missing message key", func(e *ErrorDef) { e.Message.Key = "" }, "message has no key"},
+		{"description without key", func(e *ErrorDef) { e.Description = Message{DefaultValue: "x"} }, "description has no key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
