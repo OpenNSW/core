@@ -19,9 +19,9 @@ var codePattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]{4}$`)
 // A service lists its declared errors once and calls Catalog from a test, to
 // catch duplicates, and from a go generate step that writes the result as
 // en.json for its frontends.
-func Catalog(errs ...Error) (map[string]string, error) {
+func Catalog(errs ...ErrorDef) (map[string]string, error) {
 	catalog := make(map[string]string)
-	byCode := make(map[string]Error)
+	byCode := make(map[string]ErrorDef)
 	var problems []error
 
 	addKey := func(code string, m Message, field string, required bool) {
@@ -38,7 +38,7 @@ func Catalog(errs ...Error) (map[string]string, error) {
 		catalog[m.Key] = m.DefaultValue
 	}
 
-	for _, e := range append([]Error{ErrInternal}, errs...) {
+	for _, e := range append([]ErrorDef{ErrInternal}, errs...) {
 		if !codePattern.MatchString(e.Code) {
 			problems = append(problems, fmt.Errorf("code %q is not an upper-case prefix, a hyphen and 4 digits", e.Code))
 		}
@@ -64,7 +64,7 @@ func Catalog(errs ...Error) (map[string]string, error) {
 
 // sameDeclaration reports whether a and b declare the same error, so listing
 // one error twice (or listing ErrInternal) is not a conflict.
-func sameDeclaration(a, b Error) bool {
+func sameDeclaration(a, b ErrorDef) bool {
 	return a.Code == b.Code && a.Category == b.Category &&
 		a.Message.Key == b.Message.Key && a.Message.DefaultValue == b.Message.DefaultValue &&
 		a.Description.Key == b.Description.Key && a.Description.DefaultValue == b.Description.DefaultValue

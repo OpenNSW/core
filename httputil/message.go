@@ -39,6 +39,13 @@ func (m Message) WithParams(params map[string]string) Message {
 	return m
 }
 
+// clone returns m with its own copy of Params, so a caller can't change the
+// map held by an Error or a declaration.
+func (m Message) clone() Message {
+	m.Params = maps.Clone(m.Params)
+	return m
+}
+
 // String returns DefaultValue with its placeholders filled in from Params.
 func (m Message) String() string {
 	return interpolate(m.DefaultValue, m.Params)

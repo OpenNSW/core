@@ -59,11 +59,11 @@ func validErrorStatus(status int) bool {
 	return status >= http.StatusBadRequest && status <= 599
 }
 
-// Error is a client-facing API error. Declare each one once, as a
-// package-level value, and return it as an error with &ErrX, ErrX.WithParams,
-// ErrX.WithDetails or ErrX.Wrap:
+// ErrorDef declares a client-facing API error. Declare each one once, as a
+// package-level value, and return a new *Error from it with Err, WithParams,
+// WithDetails or Wrap:
 //
-//	var ErrMemberNotFound = httputil.Error{
+//	var ErrMemberNotFound = httputil.ErrorDef{
 //		Code:     "PB-1003",
 //		Category: httputil.CategoryNotFound,
 //		Message:  httputil.Message{Key: "pb.member.not_found", DefaultValue: "Member not found"},
@@ -75,9 +75,9 @@ func validErrorStatus(status int) bool {
 //
 //	return ErrMemberNotFound.WithParams(map[string]string{"memberId": id})
 //
-// errors.Is(err, &ErrX) matches any error derived from ErrX, since errors
-// are compared by Code.
-type Error struct {
+// An ErrorDef is not an error, so a declaration is never returned, and
+// changed, by mistake: every request gets its own *Error.
+type ErrorDef struct {
 	// Code is stable and unique, e.g. "PB-1003": an upper-case prefix per
 	// service or package, a hyphen, then 4 digits.
 	Code string
@@ -88,10 +88,53 @@ type Error struct {
 	// Description is the cause or what to do, e.g. "No member has the ID
 	// {{memberId}}". It is optional.
 	Description Message
+}
 
+// Err returns a new *Error from d, for an error with no params, details or
+// cause.
+func (d ErrorDef) Err() *Error {
+	return &Error{def: d}
+}
+
+// WithParams returns a new *Error from d with params filling the
+// placeholders of both Message and Description.
+func (d ErrorDef) WithParams(params map[string]string) *Error {
+	return d.Err().WithParams(params)
+}
+
+// WithDetails returns a new *Error from d with details, for reporting every
+// invalid field of a request at once.
+func (d ErrorDef) WithDetails(details ...FieldError) *Error {
+	return d.Err().WithDetails(details...)
+}
+
+// Wrap returns a new *Error from d that keeps cause for logging.
+func (d ErrorDef) Wrap(cause error) *Error {
+	return d.Err().Wrap(cause)
+}
+
+// Error is a client-facing API error made from an ErrorDef, for one request.
+// Its fields are read through methods, so an Error can only be made from an
+// ErrorDef. errors.Is(err, ErrX.Err()) matches any error made from ErrX, since
+// errors are compared by Code.
+type Error struct {
+	def     ErrorDef
 	details []FieldError
 	cause   error
 }
+
+// Code returns the error's stable code, e.g. "PB-1003".
+func (e *Error) Code() string { return e.def.Code }
+
+// Category returns the category that decides the HTTP status.
+func (e *Error) Category() Category { return e.def.Category }
+
+// Message returns the short title, with any params filled by WithParams.
+func (e *Error) Message() Message { return e.def.Message.clone() }
+
+// Description returns the cause or what to do, with any params filled by
+// WithParams.
+func (e *Error) Description() Message { return e.def.Description.clone() }
 
 // FieldError reports one invalid input field.
 type FieldError struct {
@@ -103,7 +146,7 @@ type FieldError struct {
 // ErrInternal is written for every server failure: any error that is not an
 // *Error. Packages declare client errors only and let WriteError fall back to
 // this one.
-var ErrInternal = Error{
+var ErrInternal = ErrorDef{
 	Code:     "SYS-5000",
 	Category: CategoryInternal,
 	Message:  Message{Key: "sys.internal", DefaultValue: "Internal server error"},
@@ -115,29 +158,32 @@ var ErrInternal = Error{
 
 // WithParams returns a copy of e with params filling the placeholders of both
 // Message and Description. Each message keeps only the params it uses.
-func (e Error) WithParams(params map[string]string) *Error {
-	e.Message = e.Message.WithParams(params)
-	e.Description = e.Description.WithParams(params)
-	return &e
+func (e *Error) WithParams(params map[string]string) *Error {
+	c := *e
+	c.def.Message = e.def.Message.WithParams(params)
+	c.def.Description = e.def.Description.WithParams(params)
+	return &c
 }
 
 // WithDetails returns a copy of e with details added, for reporting every
 // invalid field of a request at once.
-func (e Error) WithDetails(details ...FieldError) *Error {
-	e.details = slices.Concat(e.details, details)
-	return &e
+func (e *Error) WithDetails(details ...FieldError) *Error {
+	c := *e
+	c.details = slices.Concat(e.details, details)
+	return &c
 }
 
 // Wrap returns a copy of e that keeps cause for logging. WriteError logs the
 // cause but never sends it to the client.
-func (e Error) Wrap(cause error) *Error {
-	e.cause = cause
-	return &e
+func (e *Error) Wrap(cause error) *Error {
+	c := *e
+	c.cause = cause
+	return &c
 }
 
 // Error implements error. The text is for logs, not for clients.
 func (e *Error) Error() string {
-	s := e.Code + ": " + e.Message.String()
+	s := e.def.Code + ": " + e.def.Message.String()
 	if e.cause != nil {
 		s += ": " + e.cause.Error()
 	}
@@ -153,7 +199,7 @@ func (e *Error) Unwrap() error {
 // matches a declared error however it was parameterized or wrapped.
 func (e *Error) Is(target error) bool {
 	t, ok := target.(*Error)
-	return ok && t.Code == e.Code
+	return ok && t.def.Code == e.def.Code
 }
 
 // errorBody is the JSON shape of an API error response.
@@ -180,24 +226,24 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	var apiErr *Error
 	if !errors.As(err, &apiErr) || apiErr == nil {
 		slog.ErrorContext(r.Context(), "httputil: unhandled error", "error", err, "correlationId", correlationID)
-		apiErr = &ErrInternal
+		apiErr = ErrInternal.Err()
 	} else if apiErr.cause != nil || err != error(apiErr) {
 		level := slog.LevelWarn
-		if status := apiErr.Category.Status(); status >= http.StatusInternalServerError {
+		if status := apiErr.def.Category.Status(); status >= http.StatusInternalServerError {
 			level = slog.LevelError
 		}
 		slog.Log(r.Context(), level, "httputil: request failed",
-			"code", apiErr.Code, "category", apiErr.Category.String(), "error", err, "correlationId", correlationID)
+			"code", apiErr.def.Code, "category", apiErr.def.Category.String(), "error", err, "correlationId", correlationID)
 	}
 
 	details := apiErr.details
 	if details == nil {
 		details = []FieldError{}
 	}
-	JSON(w, apiErr.Category.Status(), errorBody{
-		Code:          apiErr.Code,
-		Message:       apiErr.Message,
-		Description:   apiErr.Description,
+	JSON(w, apiErr.def.Category.Status(), errorBody{
+		Code:          apiErr.def.Code,
+		Message:       apiErr.def.Message,
+		Description:   apiErr.def.Description,
 		Details:       details,
 		CorrelationID: correlationID,
 	})
