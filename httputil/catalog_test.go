@@ -4,6 +4,7 @@
 package httputil
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -54,7 +55,8 @@ func TestCatalog_Rejects(t *testing.T) {
 		{"duplicate code", func(e *Error) { e.Code = errMemberNotFound.Code }, "declared twice"},
 		{"conflicting key default", func(e *Error) { e.Message.Key = errMemberNotFound.Message.Key }, "elsewhere"},
 		{"malformed code", func(e *Error) { e.Code = "pb-12" }, "not an upper-case prefix"},
-		{"unknown category", func(e *Error) { e.Category = "missing" }, "unknown category"},
+		{"missing category", func(e *Error) { e.Category = Category{} }, "not a 4xx or 5xx"},
+		{"non-error category status", func(e *Error) { e.Category = NewCategory("ok", http.StatusOK) }, "not a 4xx or 5xx"},
 		{"missing message key", func(e *Error) { e.Message.Key = "" }, "message has no key"},
 		{"description without key", func(e *Error) { e.Description = Message{DefaultValue: "x"} }, "description has no key"},
 	}

@@ -55,20 +55,28 @@ func writeError(t *testing.T, err error) (*httptest.ResponseRecorder, errorBody)
 }
 
 func TestCategory_Status(t *testing.T) {
-	tests := map[Category]int{
-		CategoryInvalid:         http.StatusBadRequest,
-		CategoryUnauthenticated: http.StatusUnauthorized,
-		CategoryForbidden:       http.StatusForbidden,
-		CategoryNotFound:        http.StatusNotFound,
-		CategoryConflict:        http.StatusConflict,
-		CategoryTooManyRequests: http.StatusTooManyRequests,
-		CategoryUnavailable:     http.StatusServiceUnavailable,
-		CategoryInternal:        http.StatusInternalServerError,
-		Category("typo"):        http.StatusInternalServerError,
+	tests := []struct {
+		category Category
+		want     int
+	}{
+		{CategoryInvalid, http.StatusBadRequest},
+		{CategoryUnauthenticated, http.StatusUnauthorized},
+		{CategoryForbidden, http.StatusForbidden},
+		{CategoryNotFound, http.StatusNotFound},
+		{CategoryConflict, http.StatusConflict},
+		{CategoryTooLarge, http.StatusRequestEntityTooLarge},
+		{CategoryUnsupportedMediaType, http.StatusUnsupportedMediaType},
+		{CategoryUnprocessable, http.StatusUnprocessableEntity},
+		{CategoryTooManyRequests, http.StatusTooManyRequests},
+		{CategoryUnavailable, http.StatusServiceUnavailable},
+		{CategoryInternal, http.StatusInternalServerError},
+		{NewCategory("tooEarly", http.StatusTooEarly), http.StatusTooEarly},
+		{Category{}, http.StatusInternalServerError},
+		{NewCategory("ok", http.StatusOK), http.StatusInternalServerError},
 	}
-	for c, want := range tests {
-		if got := c.Status(); got != want {
-			t.Errorf("%q.Status() = %d, want %d", c, got, want)
+	for _, tt := range tests {
+		if got := tt.category.Status(); got != tt.want {
+			t.Errorf("%q.Status() = %d, want %d", tt.category, got, tt.want)
 		}
 	}
 }

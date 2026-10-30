@@ -14,7 +14,7 @@ var codePattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]{4}$`)
 // Catalog returns every message key of errs, and of ErrInternal, with its
 // English default: the starting point for translators. It fails on a code
 // declared twice with different content, a key declared twice with a
-// different default, a malformed code, an unknown category or a missing key.
+// different default, a malformed code, a category without a 4xx or 5xx status or a missing key.
 //
 // A service lists its declared errors once and calls Catalog from a test, to
 // catch duplicates, and from a go generate step that writes the result as
@@ -42,8 +42,8 @@ func Catalog(errs ...Error) (map[string]string, error) {
 		if !codePattern.MatchString(e.Code) {
 			problems = append(problems, fmt.Errorf("code %q is not an upper-case prefix, a hyphen and 4 digits", e.Code))
 		}
-		if _, ok := categoryStatus[e.Category]; !ok {
-			problems = append(problems, fmt.Errorf("%s: unknown category %q", e.Code, e.Category))
+		if !validErrorStatus(e.Category.status) {
+			problems = append(problems, fmt.Errorf("%s: category %q has status %d, not a 4xx or 5xx", e.Code, e.Category, e.Category.status))
 		}
 		if prev, ok := byCode[e.Code]; ok {
 			if !sameDeclaration(prev, e) {
