@@ -164,10 +164,10 @@ func parseAs[T Artifact](raw []byte) (T, error) {
 	var t T
 	p, ok := any(&t).(Parser)
 	if !ok {
-		return t, fmt.Errorf("artifact type %T has no Parse method", t)
+		return t, fmt.Errorf("%w: artifact type %T has no Parse method", ErrInvalid, t)
 	}
 	if err := p.Parse(raw); err != nil {
-		return t, fmt.Errorf("parse artifact: %w", err)
+		return t, fmt.Errorf("%w: parse artifact: %w", ErrInvalid, err)
 	}
 	return t, nil
 }

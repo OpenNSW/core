@@ -33,11 +33,11 @@ type PaymentConfig struct {
 func (p *PaymentPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
 	var cfg PaymentConfig
 	if err := json.Unmarshal(configRaw, &cfg); err != nil {
-		return fmt.Errorf("failed to parse generic_payment config: %w", err)
+		return Permanent(ErrorTypeConfig, fmt.Errorf("failed to parse generic_payment config: %w", err))
 	}
 
 	if cfg.PaymentServiceURL == "" {
-		return fmt.Errorf("missing 'payment_service_url' in generic_payment config")
+		return Permanent(ErrorTypeConfig, fmt.Errorf("missing 'payment_service_url' in generic_payment config"))
 	}
 
 	ctx.Record.State = "PENDING_PAYMENT"
@@ -46,7 +46,7 @@ func (p *PaymentPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) er
 
 	token, err := CallbackToken(ctx.Record)
 	if err != nil {
-		return err
+		return Permanent(ErrorTypeInput, err)
 	}
 	if err := p.dispatcher(ctx.Context, cfg.PaymentServiceURL, token, ctx.Record.Data); err != nil {
 		return fmt.Errorf("payment dispatch failed: %w", err)

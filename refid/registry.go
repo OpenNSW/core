@@ -58,6 +58,28 @@
 // daily-reset uniqueness set, for random segments); omitting all date
 // components gives a scope that never resets.
 //
+// # Date formats
+//
+// A date segment's format is a pattern of letters where a repeated letter means
+// zero padding: "yyyyMMdd" renders 20260305 and "yyyyMd" renders 202635. The
+// fields are:
+//
+//	yyyy, yy   year (2026, 26)
+//	MM, M      month (03, 3)
+//	dd, d      day of the month (05, 5)
+//	HH, H      hour, 0-23 (04, 4)
+//	mm, m      minute (07, 7)
+//	ss, s      second (09, 9)
+//
+// Text in single quotes is literal ("yyyyMMdd'T'HHmm" renders 20260305T0407, and
+// a doubled single quote is an apostrophe), as is any other character that is
+// not an ASCII letter or digit ("yyyy-MM-dd", "d/M/yyyy"). NewRegistry rejects what it does not
+// understand: unknown letters, a run of letters that is not a form above
+// ("yyy", "MMM"), unquoted digits (which is what a Go reference layout such as
+// "20060102" looks like), an unterminated quote, and a format with no field.
+// Unpadded fields make IDs variable-width: "yyyyMd" gives 2026111 for both 11
+// January and 1 November.
+//
 // # Timezone
 //
 // Each format reads the clock in its own timezone, an IANA time zone name set
@@ -71,7 +93,7 @@
 //	    timezone: Asia/Colombo
 //	    segments:
 //	      - type: date
-//	        layout: "2006/01/"
+//	        format: "yyyy/MM/"
 //	      - type: sequence
 //	        sequence:
 //	          scopeKey: "{issuer}:{idType}:{yyyy}"
@@ -211,7 +233,8 @@ type registry struct {
 // table. It returns an error if the config contains:
 //   - duplicate (issuer, idType) pairs
 //   - a segment that references an undefined list name
-//   - a segment with missing required fields (e.g. empty scopeKey, empty layout)
+//   - a segment with missing required fields (e.g. empty scopeKey, empty format)
+//   - a date segment whose format is not valid (see "Date formats")
 //   - an unrecognised segment type
 //   - more than one stateful (sequence or random) segment in a single format
 //   - a format with a date segment or a date placeholder in a scope key but no

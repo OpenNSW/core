@@ -16,7 +16,7 @@ Six segment types, each with its own config fields ([../config.go](../config.go)
 | `literal` | `value` | the fixed string, unchanged |
 | `list` | `list`, `param` | a caller-supplied param, after validating it against a named list |
 | `param` | `param`, `pattern` | a caller-supplied param as is, after checking it against a required, anchored RE2 `pattern` |
-| `date` | `layout` | the current time, in the format's `timezone`, in a Go reference-date layout |
+| `date` | `format` | the current time, in the format's `timezone`, as a letter pattern where a repeated letter means zero padding (`yyyyMMdd` → `20260305`, `yyyyMd` → `202635`) |
 | `sequence` | nested `sequence:` → `scopeKey`, `padding` | a durable counter, zero-padded |
 | `random` | nested `random:` → `scopeKey`, `charset`, `length`, `maxAttempts` | a fixed-length random value, checked for collisions |
 
@@ -86,8 +86,8 @@ Any row using a date token needs `timezone` on its format. For `Asia/Colombo` (U
 "Daily" row resets at 18:30 UTC, local midnight, rather than at 05:30 local time.
 
 There is no quarterly or weekly placeholder. A cadence outside the three date tokens needs
-a caller-supplied param (e.g. pass `quarter: "2026Q3"` and reference `{quarter}`), since Go's
-time layouts cannot format quarters.
+a caller-supplied param (e.g. pass `quarter: "2026Q3"` and reference `{quarter}`), since date
+formats have no quarter field.
 
 ---
 
@@ -248,7 +248,7 @@ issuers:
           - type: literal
             value: "-"
           - type: date
-            layout: "20060102"
+            format: "yyyyMMdd"
           - type: literal
             value: "-"
           - type: sequence
@@ -274,7 +274,7 @@ issuers:
           - type: literal
             value: "CASE-"
           - type: date
-            layout: "2006"
+            format: "yyyy"
           - type: literal
             value: "-"
           - type: sequence
@@ -329,7 +329,7 @@ issuers:
         timezone: Asia/Colombo
         segments:
           - type: date
-            layout: "20060102"
+            format: "yyyyMMdd"
           - type: literal
             value: "-RTA-"
           - type: sequence
@@ -419,7 +419,7 @@ issuers:
           - type: literal
             value: "TKT-"
           - type: date
-            layout: "20060102"
+            format: "yyyyMMdd"
           - type: literal
             value: "-"
           - type: random
@@ -468,7 +468,7 @@ issuers:
           - type: literal
             value: "-"
           - type: date
-            layout: "20060102"
+            format: "yyyyMMdd"
 
 lists:
   office_location: [COL, GAL, KAN]
@@ -516,7 +516,7 @@ issuers:
           - type: literal
             value: "/"
           - type: date
-            layout: "06"
+            format: "yy"
       - idType: physical_cert
         segments:
           - type: literal
