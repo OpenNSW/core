@@ -5,34 +5,30 @@ package authn
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
 // TestGetAuthContextFromRequest tests context retrieval.
 func TestGetAuthContext_FromRequest(t *testing.T) {
-	uc := &UserContext{
-		ID:        "persisted-user-id",
-		IDPUserID: testUserID,
-		Roles:     []string{"exporter"},
+	authCtx := &AuthContext{Principal: Principal{
+		Subject:  testUserID,
+		ClientID: testClientID,
+		Roles:    []string{"exporter"},
 		ExtraClaims: ExtraClaims{
 			"email":    testEmail,
 			"ouId":     testOUID,
 			"ouHandle": testOUHandle,
 		},
-	}
-	authCtx := &AuthContext{User: uc}
+	}}
 	ctx := context.WithValue(context.Background(), AuthContextKey, authCtx)
 
 	retrieved := GetAuthContext(ctx)
 	if retrieved == nil {
-		t.Error("expected to retrieve auth context")
-		return
+		t.Fatal("expected to retrieve auth context")
 	}
-	if retrieved.User == nil {
-		t.Fatalf("expected user context to be set")
-	}
-	if retrieved.User.ID != "persisted-user-id" || retrieved.User.IDPUserID != testUserID {
-		t.Errorf("got user context %v", retrieved.User)
+	if retrieved.Subject() != testUserID || retrieved.ClientID() != testClientID {
+		t.Errorf("got principal %+v", retrieved.Principal)
 	}
 }
 
@@ -55,46 +51,50 @@ func TestGetAuthContext_WrongType(t *testing.T) {
 	}
 }
 
-// TestUserContext_JSONUnmarshaling tests UserContext structure.
-func TestUserContext_Structure(t *testing.T) {
-	uc := &UserContext{
-		ID:        "persisted-user-id",
-		IDPUserID: testUserID,
-		Roles:     []string{"exporter"},
-		ExtraClaims: ExtraClaims{
-			"email":        testEmail,
-			"phone_number": testPhone,
-			"ouId":         testOUID,
-			"ouHandle":     testOUHandle,
-		},
+// TestAuthContext_Accessors locks in that every accessor reads straight
+// through to the Principal and is nil-safe.
+func TestAuthContext_Accessors(t *testing.T) {
+	authCtx := &AuthContext{Principal: Principal{
+		Subject:  testUserID,
+		ClientID: testClientID,
+		Roles:    []string{"exporter"},
+		Scopes:   []string{"nsw:task:read"},
+		Email:    testEmail,
+		OUID:     testOUID,
+		OUHandle: testOUHandle,
+	}}
+
+	if got := authCtx.Email(); got != testEmail {
+		t.Errorf("Email() = %q, want %q", got, testEmail)
+	}
+	if got := authCtx.OUID(); got != testOUID {
+		t.Errorf("OUID() = %q, want %q", got, testOUID)
+	}
+	if got := authCtx.OUHandle(); got != testOUHandle {
+		t.Errorf("OUHandle() = %q, want %q", got, testOUHandle)
+	}
+	if got := authCtx.Subject(); got != testUserID {
+		t.Errorf("Subject() = %q, want %q", got, testUserID)
+	}
+	if got := authCtx.ClientID(); got != testClientID {
+		t.Errorf("ClientID() = %q, want %q", got, testClientID)
+	}
+	if got := authCtx.Roles(); !slices.Equal(got, []string{"exporter"}) {
+		t.Errorf("Roles() = %v, want [exporter]", got)
+	}
+	if got := authCtx.Scopes(); !slices.Equal(got, []string{"nsw:task:read"}) {
+		t.Errorf("Scopes() = %v, want [nsw:task:read]", got)
 	}
 
-	if uc.ID != "persisted-user-id" {
-		t.Errorf("got user id %s, want persisted-user-id", uc.ID)
-	}
-	if uc.IDPUserID != testUserID {
-		t.Errorf("got idp user id %s, want %s", uc.IDPUserID, testUserID)
-	}
-	if uc.ExtraClaims.String("email") != testEmail {
-		t.Errorf("got email %s, want %s", uc.ExtraClaims.String("email"), testEmail)
-	}
-	if uc.ExtraClaims.String("phone_number") != testPhone {
-		t.Errorf("got phone number %s, want %s", uc.ExtraClaims.String("phone_number"), testPhone)
-	}
-	if uc.ExtraClaims.String("ouId") != testOUID {
-		t.Errorf("got ou id %s, want %s", uc.ExtraClaims.String("ouId"), testOUID)
-	}
-	if uc.ExtraClaims.String("ouHandle") != testOUHandle {
-		t.Errorf("got ou handle %s, want %s", uc.ExtraClaims.String("ouHandle"), testOUHandle)
-	}
-	if len(uc.Roles) != 1 || uc.Roles[0] != "exporter" {
-		t.Errorf("got roles %v, want [exporter]", uc.Roles)
+	var nilCtx *AuthContext
+	if nilCtx.Subject() != "" || nilCtx.ClientID() != "" || nilCtx.Roles() != nil || nilCtx.Scopes() != nil ||
+		nilCtx.Email() != "" || nilCtx.OUID() != "" || nilCtx.OUHandle() != "" {
+		t.Error("expected zero values from a nil AuthContext")
 	}
 }
 
 // TestAuthContext_ExtraClaims completes the accessor seam: consumers should be
-// able to read extra claims without branching on principal type or nil-checking
-// two levels.
+// able to read extra claims without nil-checking two levels.
 func TestAuthContext_ExtraClaims(t *testing.T) {
 	tests := []struct {
 		name string
@@ -103,9 +103,8 @@ func TestAuthContext_ExtraClaims(t *testing.T) {
 	}{
 		{"nil receiver", nil, ""},
 		{"empty context", &AuthContext{}, ""},
-		{"user principal", &AuthContext{User: &UserContext{ExtraClaims: ExtraClaims{"email": testEmail}}}, testEmail},
-		{"client principal", &AuthContext{Client: &ClientContext{ExtraClaims: ExtraClaims{"email": "svc@example.com"}}}, "svc@example.com"},
-		{"user with nil claims", &AuthContext{User: &UserContext{}}, ""},
+		{"principal with claims", &AuthContext{Principal: Principal{ExtraClaims: ExtraClaims{"email": testEmail}}}, testEmail},
+		{"principal with nil claims", &AuthContext{Principal: Principal{Subject: testUserID}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
