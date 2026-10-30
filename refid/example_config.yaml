@@ -13,8 +13,11 @@
 #   list      — emits a caller-supplied value after validating it is in the named list.
 #   param     — emits a caller-supplied value as is, for values from an open set. Its
 #               required `pattern` (RE2, matched against the whole value) constrains it.
-#   date      — formats the current time, in the format's timezone, using a Go reference-date
-#               layout string.
+#   date      — formats the current time, in the format's timezone, with a `format` pattern.
+#               A repeated letter means zero padding: yyyyMMdd gives 20260305, yyyyMd gives
+#               202635. Fields: yyyy yy (year), MM M (month), dd d (day), HH H (hour, 0-23),
+#               mm m (minute), ss s (second). Literal text goes in single quotes, as in
+#               yyyyMMdd'T'HHmm; any other character except a letter or digit is literal too.
 #   sequence  — increments a durable counter scoped by a key template and zero-pads the result.
 #               Settings go under a nested `sequence:` block (scopeKey, padding).
 #   random    — generates a fixed-length random string from a charset, reserved via a
@@ -64,7 +67,7 @@ issuers:
           - type: literal
             value: "-"
           - type: date
-            layout: "20060102"      # Go reference date for YYYYMMDD
+            format: "yyyyMMdd"      # 20260305; "yyyyMd" would give 202635 (no padding)
           - type: literal
             value: "-"
           - type: sequence
@@ -128,7 +131,7 @@ issuers:
           - type: literal
             value: "-"
           - type: date
-            layout: "20060102"
+            format: "yyyyMMdd"
           - type: literal
             value: "-"
           - type: sequence

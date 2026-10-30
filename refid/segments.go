@@ -166,10 +166,10 @@ func newParamSegment(cfg SegmentConfig) (*paramSegment, error) {
 // dateSegment
 // -----------------------------------------------------------------------
 
-// dateSegment formats the current time, in the format's timezone, using a Go
-// reference-date layout string.
+// dateSegment formats the current time, in the format's timezone, with a date
+// format such as "yyyyMMdd" (see compileDateFormat).
 type dateSegment struct {
-	layout string
+	format dateFormat
 }
 
 func (s *dateSegment) validate(_ map[string]string, _ time.Time) error {
@@ -177,17 +177,25 @@ func (s *dateSegment) validate(_ map[string]string, _ time.Time) error {
 }
 
 func (s *dateSegment) render(_ context.Context, _ map[string]string, now time.Time) (string, error) {
-	return now.Format(s.layout), nil
+	return s.format.render(now), nil
 }
 
 func (s *dateSegment) isStateful() bool { return false }
 
-// newDateSegment constructs a date segment and validates that a layout is provided.
+// newDateSegment constructs a date segment and validates its format. The empty
+// message also names the old layout field, which a config written before
+// format existed still sets: YAML decoding ignores the unknown key, so the
+// segment arrives here with no format.
 func newDateSegment(cfg SegmentConfig) (*dateSegment, error) {
-	if cfg.Layout == "" {
-		return nil, fmt.Errorf("refid: date segment requires a non-empty layout")
+	if cfg.Format == "" {
+		return nil, fmt.Errorf("refid: date segment requires a non-empty format " +
+			"(it replaces the old layout field; use \"yyyyMMdd\" where the layout was \"20060102\")")
 	}
-	return &dateSegment{layout: cfg.Layout}, nil
+	format, err := compileDateFormat(cfg.Format)
+	if err != nil {
+		return nil, fmt.Errorf("refid: date segment has an invalid format %q: %w", cfg.Format, err)
+	}
+	return &dateSegment{format: format}, nil
 }
 
 // -----------------------------------------------------------------------
@@ -395,13 +403,27 @@ func newRandomSegment(cfg SegmentConfig, issuer, idType string, store RandomStor
 // scopeKey template resolution
 // -----------------------------------------------------------------------
 
-// dateScopeTokens maps each date placeholder a scope key may use to the layout
-// it renders with. resolveScopeKey substitutes them and scopeKeyUsesDate looks
-// for them, so the two cannot drift apart.
-var dateScopeTokens = []struct{ token, layout string }{
-	{"{yyyy}", "2006"},
-	{"{yyyyMM}", "200601"},
-	{"{yyyyMMdd}", "20060102"},
+// dateScopeTokens maps each date placeholder a scope key may use to the date
+// format it renders with, the same engine a date segment uses. resolveScopeKey
+// substitutes them and scopeKeyUsesDate looks for them, so the two cannot drift
+// apart.
+var dateScopeTokens = []struct {
+	token  string
+	format dateFormat
+}{
+	{"{yyyy}", mustCompileDateFormat("yyyy")},
+	{"{yyyyMM}", mustCompileDateFormat("yyyyMM")},
+	{"{yyyyMMdd}", mustCompileDateFormat("yyyyMMdd")},
+}
+
+// mustCompileDateFormat compiles a format that is a constant in this package,
+// and panics if it is invalid, which no input can cause.
+func mustCompileDateFormat(format string) dateFormat {
+	f, err := compileDateFormat(format)
+	if err != nil {
+		panic(fmt.Sprintf("refid: built-in date format %q: %v", format, err))
+	}
+	return f
 }
 
 // scopeKeyUsesDate reports whether tmpl contains a date placeholder, which makes
@@ -426,7 +448,7 @@ func resolveScopeKey(tmpl, issuer, idType string, params map[string]string, now 
 	// picks these before any identically-named param).
 	replacements = append(replacements, "{issuer}", issuer, "{idType}", idType)
 	for _, d := range dateScopeTokens {
-		replacements = append(replacements, d.token, now.Format(d.layout))
+		replacements = append(replacements, d.token, d.format.render(now))
 	}
 
 	// Caller-supplied params (lower precedence).

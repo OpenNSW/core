@@ -106,7 +106,7 @@ func rtaConfig() refid.Config {
 							{Type: refid.SegmentTypeLiteral, Value: "RTA-APP-"},
 							{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
 							{Type: refid.SegmentTypeLiteral, Value: "-"},
-							{Type: refid.SegmentTypeDate, Layout: "20060102"},
+							{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"},
 							{Type: refid.SegmentTypeLiteral, Value: "-"},
 							{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6}},
 						},
@@ -623,7 +623,7 @@ func TestScopeKey_DailyReset(t *testing.T) {
 					{Type: refid.SegmentTypeLiteral, Value: "FCAU-"},
 					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
 					{Type: refid.SegmentTypeLiteral, Value: "-"},
-					{Type: refid.SegmentTypeDate, Layout: "20060102"},
+					{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"},
 					{Type: refid.SegmentTypeLiteral, Value: "-"},
 					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6}},
 				},
@@ -775,7 +775,7 @@ func TestNewRegistry_NoStoresNeededWithoutSequenceOrRandomSegments(t *testing.T)
 				Segments: []refid.SegmentConfig{
 					{Type: refid.SegmentTypeLiteral, Value: "PREFIX-"},
 					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
-					{Type: refid.SegmentTypeDate, Layout: "20060102"},
+					{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"},
 				},
 			}},
 		}},
@@ -824,20 +824,137 @@ func TestSegment_Sequence_InvalidPaddingRejected(t *testing.T) {
 	}
 }
 
-func TestSegment_Date_EmptyLayoutRejected(t *testing.T) {
+func TestSegment_Date_EmptyFormatRejected(t *testing.T) {
 	cfg := refid.Config{
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "TEST",
 			Formats: []refid.FormatConfig{{
 				IDType:   "bad",
-				Timezone: "UTC", // so the empty layout, not the missing zone, is what's rejected
-				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Layout: ""}},
+				Timezone: "UTC", // so the empty format, not the missing zone, is what's rejected
+				Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Format: ""}},
 			}},
 		}},
 	}
 	_, err := refid.NewRegistry(cfg, refid.WithSequenceStore(newMemStore()))
 	if err == nil {
-		t.Fatal("expected error for empty date layout, got nil")
+		t.Fatal("expected error for empty date format, got nil")
+	}
+	if !strings.Contains(err.Error(), "requires a non-empty format") {
+		t.Errorf("error = %q, want it to say the format is required", err)
+	}
+}
+
+// loadConfigYAML writes body to a file and loads it with LoadConfig.
+func loadConfigYAML(t *testing.T, body string) (refid.Config, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "refid_config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return refid.LoadConfig(path)
+}
+
+// dateYAML is a config whose only segment is a date segment, with dateLine as
+// the segment's remaining YAML (a layout or a format key).
+func dateYAML(dateLine string) string {
+	return `
+issuers:
+  - issuer: RTA
+    formats:
+      - idType: stamp
+        timezone: UTC
+        segments:
+          - type: date
+            ` + dateLine + `
+`
+}
+
+// A config written before format existed sets layout. Decoding ignores the
+// unknown key, so the segment has no format and NewRegistry names the problem
+// and the replacement instead of generating IDs without a date.
+func TestSegment_Date_OldLayoutKeyRejected(t *testing.T) {
+	cfg, err := loadConfigYAML(t, dateYAML(`layout: "20060102"`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	_, err = refid.NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected an error for a date segment that sets layout, got nil")
+	}
+	for _, want := range []string{"requires a non-empty format", "layout", "yyyyMMdd"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// A Go layout moved under the new key is not accepted either: its digits are
+// unquoted, so it is not mistaken for a format.
+func TestSegment_Date_GoLayoutAsFormatRejected(t *testing.T) {
+	// 2006909 is the typo from the issue: as a layout it rendered 2026909 and
+	// passed validation.
+	for _, layout := range []string{"20060102", "2006/01/", "2006-01-02T15:04", "2006909"} {
+		t.Run(layout, func(t *testing.T) {
+			cfg, err := loadConfigYAML(t, dateYAML(`format: "`+layout+`"`))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			_, err = refid.NewRegistry(cfg)
+			if err == nil {
+				t.Fatalf("expected an error for the Go layout %q, got nil", layout)
+			}
+			if !strings.Contains(err.Error(), "Go reference layout") {
+				t.Errorf("error = %q, want it to say this looks like a Go reference layout", err)
+			}
+		})
+	}
+}
+
+// A format of only spaces is not empty, so it gets past the "required" check,
+// and then has no field to render.
+func TestSegment_Date_WhitespaceOnlyFormatRejected(t *testing.T) {
+	cfg, err := loadConfigYAML(t, dateYAML(`format: "   "`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	_, err = refid.NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected an error for a whitespace-only format, got nil")
+	}
+	if !strings.Contains(err.Error(), "no date or time field") {
+		t.Errorf("error = %q, want it to say there is no date or time field", err)
+	}
+}
+
+// The error names the format and the segment, so a config with many formats
+// points at the one to fix.
+func TestSegment_Date_InvalidFormatErrorNamesTheFormat(t *testing.T) {
+	cfg, err := loadConfigYAML(t, dateYAML(`format: "yyyyy"`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	_, err = refid.NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected an error for the format yyyyy, got nil")
+	}
+	for _, want := range []string{`"RTA"`, `"stamp"`, "segment[0]", `"yyyyy"`, "year field"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestSegment_Date_ValidFormatsAccepted(t *testing.T) {
+	for _, format := range []string{"yyyyMMdd", "yyyyMd", "yyyy-MM-dd'T'HH:mm", "'Q1' yyyy", "d/M/yyyy H:m:s"} {
+		t.Run(format, func(t *testing.T) {
+			cfg, err := loadConfigYAML(t, dateYAML(`format: "`+format+`"`))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if _, err := refid.NewRegistry(cfg); err != nil {
+				t.Fatalf("NewRegistry: %v", err)
+			}
+		})
 	}
 }
 
@@ -1228,7 +1345,7 @@ func tzParam() refid.SegmentConfig {
 }
 
 func tzDate() refid.SegmentConfig {
-	return refid.SegmentConfig{Type: refid.SegmentTypeDate, Layout: "20060102"}
+	return refid.SegmentConfig{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"}
 }
 
 func tzSequence(scopeKey string) refid.SegmentConfig {
@@ -1372,7 +1489,7 @@ issuers:
         timezone: Asia/Colombo
         segments:
           - type: date
-            layout: "20060102"
+            format: "yyyyMMdd"
           - type: sequence
             sequence:
               scopeKey: "{issuer}:{idType}:{yyyyMMdd}"
