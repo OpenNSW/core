@@ -179,7 +179,13 @@ func (tm *TaskManager) registryFor(ctx context.Context, taskTemplateID string, v
 // StartTask is called by the parent workflow engine when it activates a TASK node.
 // It looks up the template registry, creates a single DB record with parent
 // coordinates, and kicks off the Task's internal workflow.
-func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
+//
+// An error retrying can't fix (a missing or invalid artifact, a definition the task can't run) is
+// returned as a non-retryable Temporal error, so the parent's node parks at once instead of being
+// retried.
+func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload) (_ map[string]any, err error) {
+	defer func() { err = surfacePermanent(err) }()
+
 	reg, err := tm.registryFor(ctx, payload.TaskTemplateID, payload.ManifestVersion)
 	if err != nil {
 		return nil, err
@@ -187,19 +193,19 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 
 	template, err := tasktemplate.Load(ctx, reg, payload.TaskTemplateID)
 	if err != nil {
-		return nil, fmt.Errorf("load task template %q: %w", payload.TaskTemplateID, err)
+		return nil, fmt.Errorf("load task template %q: %w", payload.TaskTemplateID, artifactError(err))
 	}
 
 	wfDef, err := workflowdef.Load(ctx, reg, template.WorkflowID)
 	if err != nil {
-		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, err)
+		return nil, fmt.Errorf("load workflow %q referenced by task template %q: %w", template.WorkflowID, template.ID, artifactError(err))
 	}
 
 	// The record keeps only the task template id, and every render resolves the config through it
 	// (see renderconfig.Load).
 	// Loading it here fails the task at start, not at its first render, when it is missing.
 	if _, err := generictemplate.Load(ctx, reg, template.RenderConfigID); err != nil {
-		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, err)
+		return nil, fmt.Errorf("load render config %q referenced by task template %q: %w", template.RenderConfigID, template.ID, artifactError(err))
 	}
 
 	// Use the parent's step ID as the TaskID. It names this run of the parent's TASK node, so it is
@@ -207,7 +213,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	// one. It is also a UUID.
 	taskID := payload.ActivationID
 	if taskID == "" {
-		return nil, fmt.Errorf("start task from template %q: payload has no step ID", payload.TaskTemplateID)
+		return nil, plugins.Permanent(plugins.ErrorTypeInput, fmt.Errorf("start task from template %q: payload has no step ID", payload.TaskTemplateID))
 	}
 	taskWorkflowID := "task-wf-" + taskID
 
@@ -236,7 +242,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 	// as TaskRecord only stores coordinates for a single active step.
 	for _, node := range wfDef.Nodes {
 		if node.Type == engine.NodeTypeGateway && node.GatewayType == engine.GatewayTypeParallelSplit {
-			return nil, fmt.Errorf("parallel steps are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType)
+			return nil, plugins.Permanent(plugins.ErrorTypeConfig, fmt.Errorf("parallel steps are not supported: task workflow %s contains parallel gateway %s (%s)", wfDef.ID, node.ID, node.GatewayType))
 		}
 	}
 
@@ -267,9 +273,16 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 //  3. Render write: store the plugin's state and data, guarded by the active step and seq. A fast
 //     callback can already have completed this step and started the next one, in which case the
 //     write matches nothing and is dropped. That is success, not an error.
-func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPayload) (map[string]any, error) {
+//
+// An error retrying can't fix (a missing or invalid step template, an unregistered plugin, or a
+// plugin error marked plugins.Permanent) is returned as a non-retryable Temporal error, so the step
+// parks at once instead of being retried. A record that can't be found stays retryable: the store reports a
+// database error the same way.
+func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPayload) (_ map[string]any, err error) {
+	defer func() { err = surfacePermanent(err) }()
+
 	if payload.ActivationID == "" {
-		return nil, fmt.Errorf("[StartTaskStep] payload for workflow %s has no step ID", payload.WorkflowID)
+		return nil, plugins.Permanent(plugins.ErrorTypeInput, fmt.Errorf("[StartTaskStep] payload for workflow %s has no step ID", payload.WorkflowID))
 	}
 
 	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
@@ -286,13 +299,13 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 
 	stepTemplate, err := steptemplate.Load(ctx, reg, payload.TaskTemplateID)
 	if err != nil {
-		return nil, fmt.Errorf("[StartTaskStep] load step template %q: %w", payload.TaskTemplateID, err)
+		return nil, fmt.Errorf("[StartTaskStep] load step template %q: %w", payload.TaskTemplateID, artifactError(err))
 	}
 
 	// Fetch the plugin from our registry using PluginType
 	plugin, ok := tm.pluginsRegistry.Get(stepTemplate.PluginType)
 	if !ok {
-		return nil, fmt.Errorf("[StartTaskStep] unregistered plugin for plugin type %s (required for template: %s)", stepTemplate.PluginType, payload.TaskTemplateID)
+		return nil, plugins.Permanent(plugins.ErrorTypeConfig, fmt.Errorf("[StartTaskStep] unregistered plugin for plugin type %s (required for template: %s)", stepTemplate.PluginType, payload.TaskTemplateID))
 	}
 
 	// The step's data is exactly its mapped inputs: everything an earlier step submitted reaches
@@ -785,4 +798,28 @@ func payloadKeys(payload map[string]any) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// artifactError marks err Permanent when the artifact is missing or doesn't parse, which loading it
+// again won't change. A loader I/O error stays retryable.
+func artifactError(err error) error {
+	if errors.Is(err, artifact.ErrNotFound) || errors.Is(err, artifact.ErrInvalid) {
+		return plugins.Permanent(plugins.ErrorTypeConfig, err)
+	}
+	return err
+}
+
+// surfacePermanent returns err as a non-retryable Temporal error when it is or wraps one marked
+// plugins.Permanent (or a non-retryable Temporal error). Temporal reads retryability from the
+// outermost error only, so a Permanent error wrapped with %w on its way out would otherwise be
+// retried. The message is err's own, given once; the chain under it is not kept.
+func surfacePermanent(err error) error {
+	if _, ok := err.(*temporal.ApplicationError); ok {
+		return err
+	}
+	errType, ok := plugins.PermanentType(err)
+	if !ok {
+		return err
+	}
+	return temporal.NewApplicationErrorWithOptions(err.Error(), errType, temporal.ApplicationErrorOptions{NonRetryable: true})
 }

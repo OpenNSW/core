@@ -160,6 +160,9 @@ func TestRegistry(t *testing.T) {
 		if errors.Is(err, artifact.ErrNotFound) {
 			t.Errorf("expected parse/validation error, not ErrNotFound, got %v", err)
 		}
+		if !errors.Is(err, artifact.ErrInvalid) {
+			t.Errorf("expected ErrInvalid, got %v", err)
+		}
 	})
 
 	// Scenario 7: Loader returns a non-ErrNotFound error
