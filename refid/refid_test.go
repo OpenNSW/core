@@ -891,7 +891,9 @@ func TestSegment_Date_OldLayoutKeyRejected(t *testing.T) {
 // A Go layout moved under the new key is not accepted either: its digits are
 // unquoted, so it is not mistaken for a format.
 func TestSegment_Date_GoLayoutAsFormatRejected(t *testing.T) {
-	for _, layout := range []string{"20060102", "2006/01/", "2006-01-02T15:04"} {
+	// 2006909 is the typo from the issue: as a layout it rendered 2026909 and
+	// passed validation.
+	for _, layout := range []string{"20060102", "2006/01/", "2006-01-02T15:04", "2006909"} {
 		t.Run(layout, func(t *testing.T) {
 			cfg, err := loadConfigYAML(t, dateYAML(`format: "`+layout+`"`))
 			if err != nil {
@@ -905,6 +907,22 @@ func TestSegment_Date_GoLayoutAsFormatRejected(t *testing.T) {
 				t.Errorf("error = %q, want it to say this looks like a Go reference layout", err)
 			}
 		})
+	}
+}
+
+// A format of only spaces is not empty, so it gets past the "required" check,
+// and then has no field to render.
+func TestSegment_Date_WhitespaceOnlyFormatRejected(t *testing.T) {
+	cfg, err := loadConfigYAML(t, dateYAML(`format: "   "`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	_, err = refid.NewRegistry(cfg)
+	if err == nil {
+		t.Fatal("expected an error for a whitespace-only format, got nil")
+	}
+	if !strings.Contains(err.Error(), "no date or time field") {
+		t.Errorf("error = %q, want it to say there is no date or time field", err)
 	}
 }
 

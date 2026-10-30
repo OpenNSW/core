@@ -77,6 +77,24 @@ func TestDateFormat_AdjacentFieldsSplitByLetter(t *testing.T) {
 	}
 }
 
+// Unpadded fields trade a fixed width for brevity, and the README warns that two
+// different dates can then render the same. This pins that warning, and that
+// the padded form tells them apart.
+func TestDateFormat_UnpaddedFieldsCanCollide(t *testing.T) {
+	jan11 := time.Date(2026, time.January, 11, 0, 0, 0, 0, time.UTC)
+	nov1 := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
+
+	a, b := renderFormat(t, "yyyyMd", jan11), renderFormat(t, "yyyyMd", nov1)
+	if a != "2026111" || b != "2026111" {
+		t.Errorf("yyyyMd gives %q for 11 January and %q for 1 November, want 2026111 for both", a, b)
+	}
+
+	a, b = renderFormat(t, "yyyyMMdd", jan11), renderFormat(t, "yyyyMMdd", nov1)
+	if a != "20260111" || b != "20261101" {
+		t.Errorf("yyyyMMdd gives %q and %q, want 20260111 and 20261101", a, b)
+	}
+}
+
 func TestDateFormat_Literals(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -114,6 +132,8 @@ func TestDateFormat_Rejected(t *testing.T) {
 		{"only a quoted literal", "'T'", "no date or time field"},
 		{"only punctuation", "-", "no date or time field"},
 		{"only a slash", "/", "no date or time field"},
+		{"only a space", " ", "no date or time field"},
+		{"only whitespace", " \t ", "no date or time field"},
 
 		// Letters from other pattern languages with another meaning.
 		{"uppercase Y is week-year", "YYYYMMDD", "week-based year"},
@@ -127,6 +147,8 @@ func TestDateFormat_Rejected(t *testing.T) {
 		{"Go layout with letters", "2006-Jan-02", "Go reference layout"},
 		{"unquoted digit after a field", "yyyy1", "unquoted digit"},
 		{"hint shows the migration", "20060102", `"yyyyMMdd"`},
+		{"the typo from the issue", "2006909", "Go reference layout"},
+		{"the typo is not read as year, month, day", "2006909", `unquoted digit "2"`},
 
 		// Unknown letters.
 		{"unknown letter J", "Jan", `unknown letter "J"`},
@@ -226,7 +248,9 @@ func TestDateFormat_MatchesGoFormatter(t *testing.T) {
 }
 
 // The year and the century boundary are where a two-digit or four-digit year
-// goes wrong.
+// goes wrong, and years outside 1 to 9999 are where a hand-written formatter
+// drifts from Go's: a negative year keeps its sign in front of the padded
+// digits, and yy uses the absolute year.
 func TestDateFormat_YearEdges(t *testing.T) {
 	tests := []struct {
 		at       time.Time
@@ -237,6 +261,11 @@ func TestDateFormat_YearEdges(t *testing.T) {
 		{time.Date(2009, 6, 1, 0, 0, 0, 0, time.UTC), "2009", "09"},
 		{time.Date(99, 6, 1, 0, 0, 0, 0, time.UTC), "0099", "99"},
 		{time.Date(9999, 6, 1, 0, 0, 0, 0, time.UTC), "9999", "99"},
+		{time.Date(0, 6, 1, 0, 0, 0, 0, time.UTC), "0000", "00"},
+		{time.Date(10000, 6, 1, 0, 0, 0, 0, time.UTC), "10000", "00"},
+		{time.Date(-1, 6, 1, 0, 0, 0, 0, time.UTC), "-0001", "01"},
+		{time.Date(-99, 6, 1, 0, 0, 0, 0, time.UTC), "-0099", "99"},
+		{time.Date(-1234, 6, 1, 0, 0, 0, 0, time.UTC), "-1234", "34"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.at.Format("2006"), func(t *testing.T) {

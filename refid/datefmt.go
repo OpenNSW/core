@@ -47,7 +47,7 @@ type dateField struct {
 var dateFields = map[byte]dateField{
 	'y': {"year", []dateForm{
 		{"yyyy", intPart(func(t time.Time) int { return t.Year() }, 4)},
-		{"yy", intPart(func(t time.Time) int { return t.Year() % 100 }, 2)},
+		{"yy", intPart(yearOfCentury, 2)},
 	}},
 	'M': {"month", []dateForm{
 		{"MM", intPart(func(t time.Time) int { return int(t.Month()) }, 2)},
@@ -83,15 +83,30 @@ var unsupportedDateLetters = map[byte]string{
 }
 
 // intPart renders an integer field, zero-padded to width. A width of 1 leaves it
-// unpadded.
+// unpadded. A negative value (only a year before 1 BC can be one) keeps its sign
+// in front of the padded digits, as Go's own formatter does: -0001, not 00-1.
 func intPart(get func(time.Time) int, width int) datePart {
 	return func(t time.Time) string {
-		s := strconv.Itoa(get(t))
+		n, sign := get(t), ""
+		if n < 0 {
+			n, sign = -n, "-"
+		}
+		s := strconv.Itoa(n)
 		if len(s) < width {
 			s = strings.Repeat("0", width-len(s)) + s
 		}
-		return s
+		return sign + s
 	}
+}
+
+// yearOfCentury is the last two digits of the year. Like Go's formatter it uses
+// the absolute year, so year -1 gives 01 and not -1.
+func yearOfCentury(t time.Time) int {
+	y := t.Year()
+	if y < 0 {
+		y = -y
+	}
+	return y % 100
 }
 
 func literalPart(s string) datePart {
