@@ -30,6 +30,11 @@
 //	randomStore, err := postgres.NewRandom(db)
 //	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store), refid.WithRandomStore(randomStore))
 //
+// Generate reads time.Now. WithClock replaces it, so a test can cross a year,
+// month or day boundary and check where a period-scoped counter restarts:
+//
+//	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store), refid.WithClock(func() time.Time { return now }))
+//
 // # Config format
 //
 // See the package-level example_config.yaml for a fully annotated example.
@@ -165,6 +170,7 @@ type RegistryOption func(*registryConfig)
 type registryConfig struct {
 	sequenceStore SequenceStore
 	randomStore   RandomStore
+	now           func() time.Time
 }
 
 // WithSequenceStore supplies the SequenceStore used to back "sequence"
@@ -184,6 +190,17 @@ func WithSequenceStore(store SequenceStore) RegistryOption {
 func WithRandomStore(store RandomStore) RegistryOption {
 	return func(rc *registryConfig) {
 		rc.randomStore = store
+	}
+}
+
+// WithClock sets the clock Generate reads, in place of time.Now. Generate calls
+// now once per ID, so every date segment and date placeholder of that ID shares
+// one instant. The clock supplies only the instant: each format renders it in
+// its own timezone, whatever zone the returned time carries. NewRegistry
+// returns an error when now is nil.
+func WithClock(now func() time.Time) RegistryOption {
+	return func(rc *registryConfig) {
+		rc.now = now
 	}
 }
 
@@ -208,8 +225,7 @@ type compiledFormat struct {
 type registry struct {
 	formats map[formatKey]*compiledFormat
 
-	// now returns the current time. It is time.Now except in tests, which
-	// replace it to pin the instant.
+	// now returns the current time. It is time.Now unless WithClock replaces it.
 	now func() time.Time
 }
 
@@ -223,13 +239,17 @@ type registry struct {
 //   - more than one stateful (sequence or random) segment in a single format
 //   - a format with a date segment or a date placeholder in a scope key but no
 //     timezone, or any timezone that is unknown or "Local"
+//   - a nil clock passed to WithClock
 //
 // Fail-fast at startup: every error that would surface at generation time is
 // caught here instead.
 func NewRegistry(cfg Config, opts ...RegistryOption) (Registry, error) {
-	var rc registryConfig
+	rc := registryConfig{now: time.Now}
 	for _, opt := range opts {
 		opt(&rc)
+	}
+	if rc.now == nil {
+		return nil, fmt.Errorf("refid: WithClock needs a non-nil clock")
 	}
 
 	formats := make(map[formatKey]*compiledFormat)
@@ -258,7 +278,7 @@ func NewRegistry(cfg Config, opts ...RegistryOption) (Registry, error) {
 		}
 	}
 
-	return &registry{formats: formats, now: time.Now}, nil
+	return &registry{formats: formats, now: rc.now}, nil
 }
 
 // Generate implements Registry.

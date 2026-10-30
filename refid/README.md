@@ -206,6 +206,21 @@ Zone names are resolved with Go's `time.LoadLocation`, so the host needs a time 
 > [!WARNING]
 > **Breaking change:** before `timezone` existed, every format used UTC. Add `timezone` to each format that has a `date` segment or a date placeholder in a scope key, or `NewRegistry` returns an error. Use `UTC` to keep the old behaviour exactly.
 
+### Setting the clock
+
+`Generate` reads `time.Now`. `refid.WithClock(func() time.Time)` replaces it, so a test can cross a year, month or day boundary and check where a period-scoped counter restarts:
+
+```go
+now := time.Date(2026, 12, 31, 18, 29, 59, 0, time.UTC)
+reg, err := refid.NewRegistry(cfg,
+	refid.WithSequenceStore(store),
+	refid.WithClock(func() time.Time { return now }),
+)
+// Generate ... then move time: now = now.Add(time.Second)
+```
+
+`Generate` calls the clock once per ID, so every date segment and date placeholder of that ID shares one instant. The clock supplies only the instant: each format renders it in its own `timezone`, whatever zone the returned `time.Time` carries. `NewRegistry` returns an error for a nil clock.
+
 ---
 
 ## Stateful Segment Limit

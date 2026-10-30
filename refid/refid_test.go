@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/OpenNSW/core/refid"
 )
@@ -602,62 +603,256 @@ func TestGenerate_CounterDoesNotAdvanceOnOverflow(t *testing.T) {
 // ScopeKey resolution — counter isolation
 // -----------------------------------------------------------------------
 
-func TestScopeKey_DailyReset(t *testing.T) {
-	// The scope key includes {yyyyMMdd}, so counters from different days must
-	// start fresh. We can observe this with the memStore: generate one ID,
-	// check the counter key used, then verify a different date would produce
-	// a different scope key (counter would restart at 1).
-	//
-	// We indirectly validate this by asserting that two calls on the same day
-	// produce counters 000001 and 000002, while calls with a different date
-	// component would use a separate scope key (hence a different counter bucket).
+// clockAt returns a clock that reads *at, so a test moves time by assigning it.
+func clockAt(at *time.Time) func() time.Time {
+	return func() time.Time { return *at }
+}
+
+func utc(year int, month time.Month, day, hour, min, sec int) time.Time {
+	return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
+}
+
+// A sequence scoped with a date placeholder restarts at 1 when the clock
+// crosses that period's boundary and continues within it. A sequence without a
+// date placeholder keeps counting across every boundary.
+func TestScopeKey_PeriodReset(t *testing.T) {
+	type step struct {
+		at   time.Time
+		want string
+	}
+	tests := []struct {
+		name     string
+		scopeKey string
+		steps    []step
+	}{
+		{
+			name: "yearly", scopeKey: "{issuer}:{idType}:{yyyy}",
+			steps: []step{
+				{utc(2026, 12, 31, 23, 59, 58), "0001"},
+				{utc(2026, 12, 31, 23, 59, 59), "0002"},
+				{utc(2027, 1, 1, 0, 0, 0), "0001"}, // new year
+				{utc(2027, 1, 1, 0, 0, 1), "0002"},
+				{utc(2027, 6, 15, 12, 0, 0), "0003"}, // same year, months later
+			},
+		},
+		{
+			name: "monthly", scopeKey: "{issuer}:{idType}:{yyyyMM}",
+			steps: []step{
+				{utc(2026, 1, 31, 23, 59, 59), "0001"},
+				{utc(2026, 2, 1, 0, 0, 0), "0001"}, // new month
+				{utc(2026, 2, 28, 23, 59, 59), "0002"},
+				{utc(2027, 2, 1, 0, 0, 0), "0001"}, // same month, a year later
+			},
+		},
+		{
+			name: "daily", scopeKey: "{issuer}:{idType}:{yyyyMMdd}",
+			steps: []step{
+				{utc(2026, 6, 14, 23, 59, 59), "0001"},
+				{utc(2026, 6, 15, 0, 0, 0), "0001"}, // new day
+				{utc(2026, 6, 15, 12, 0, 0), "0002"},
+				{utc(2026, 6, 16, 0, 0, 0), "0001"},
+			},
+		},
+		{
+			name: "no date placeholder", scopeKey: "{issuer}:{idType}",
+			steps: []step{
+				{utc(2026, 12, 31, 23, 59, 59), "0001"},
+				{utc(2027, 1, 1, 0, 0, 0), "0002"}, // year boundary
+				{utc(2027, 2, 1, 0, 0, 0), "0003"}, // month boundary
+				{utc(2027, 2, 2, 0, 0, 0), "0004"}, // day boundary
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := tt.steps[0].at
+			reg, err := refid.NewRegistry(refid.Config{Issuers: []refid.IssuerConfig{{
+				Issuer: "ACME",
+				Formats: []refid.FormatConfig{{
+					IDType:   "ref",
+					Timezone: "UTC",
+					Segments: []refid.SegmentConfig{
+						{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: tt.scopeKey, Padding: 4}},
+					},
+				}},
+			}}}, refid.WithSequenceStore(newMemStore()), refid.WithClock(clockAt(&now)))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, s := range tt.steps {
+				now = s.at
+				got, err := reg.Generate(context.Background(), "ACME", "ref", nil)
+				if err != nil {
+					t.Fatalf("at %s: %v", s.at.Format(time.RFC3339), err)
+				}
+				if got != s.want {
+					t.Errorf("at %s: ID = %q, want %q", s.at.Format(time.RFC3339), got, s.want)
+				}
+			}
+		})
+	}
+}
+
+// A daily scope that also carries a param restarts each param value's count at
+// midnight, independently of the others.
+func TestScopeKey_DailyResetPerParam(t *testing.T) {
 	store := newMemStore()
-	cfg := refid.Config{
-		Lists: map[string][]string{"office_location": {"COL"}},
+	now := utc(2026, 6, 14, 10, 0, 0)
+	reg, err := refid.NewRegistry(refid.Config{
+		Lists: map[string][]string{"office_location": {"COL", "KAN"}},
 		Issuers: []refid.IssuerConfig{{
 			Issuer: "FCAU",
 			Formats: []refid.FormatConfig{{
 				IDType:   "case_id",
 				Timezone: "UTC",
 				Segments: []refid.SegmentConfig{
-					{Type: refid.SegmentTypeLiteral, Value: "FCAU-"},
 					{Type: refid.SegmentTypeList, List: "office_location", Param: "officeCode"},
 					{Type: refid.SegmentTypeLiteral, Value: "-"},
-					{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"},
-					{Type: refid.SegmentTypeLiteral, Value: "-"},
-					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 6}},
+					{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{officeCode}:{yyyyMMdd}", Padding: 4}},
 				},
 			}},
 		}},
-	}
-	reg, err := refid.NewRegistry(cfg, refid.WithSequenceStore(store))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	params := map[string]string{"officeCode": "COL"}
-
-	id1, err := reg.Generate(ctx, "FCAU", "case_id", params)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id2, err := reg.Generate(ctx, "FCAU", "case_id", params)
+	}, refid.WithSequenceStore(store), refid.WithClock(clockAt(&now)))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	suffix1 := id1[len(id1)-6:]
-	suffix2 := id2[len(id2)-6:]
-	if suffix1 != "000001" {
-		t.Errorf("first counter: expected 000001, got %q", suffix1)
+	steps := []struct {
+		at     time.Time
+		office string
+		want   string
+	}{
+		{utc(2026, 6, 14, 10, 0, 0), "COL", "COL-0001"},
+		{utc(2026, 6, 14, 10, 0, 0), "KAN", "KAN-0001"},
+		{utc(2026, 6, 14, 23, 59, 59), "COL", "COL-0002"},
+		{utc(2026, 6, 15, 0, 0, 0), "COL", "COL-0001"}, // midnight: COL restarts
+		{utc(2026, 6, 15, 0, 0, 1), "COL", "COL-0002"},
+		{utc(2026, 6, 15, 0, 0, 2), "KAN", "KAN-0001"}, // KAN restarts on its own first call of the day
 	}
-	if suffix2 != "000002" {
-		t.Errorf("second counter: expected 000002, got %q", suffix2)
+	for _, s := range steps {
+		now = s.at
+		got, err := reg.Generate(context.Background(), "FCAU", "case_id", map[string]string{"officeCode": s.office})
+		if err != nil {
+			t.Fatalf("at %s: %v", s.at.Format(time.RFC3339), err)
+		}
+		if got != s.want {
+			t.Errorf("at %s: ID = %q, want %q", s.at.Format(time.RFC3339), got, s.want)
+		}
 	}
 
-	// The total number of scope keys used must be exactly 1 (same day).
-	if len(store.counters) != 1 {
-		t.Errorf("expected 1 scope key in store, got %d: %v", len(store.counters), store.counters)
+	// Two offices over two days: the first day's counters are left as they were.
+	if len(store.counters) != 4 {
+		t.Errorf("expected 4 scope keys in store, got %d: %v", len(store.counters), store.counters)
+	}
+	if got := store.counters["FCAU:case_id:COL:20260614"]; got != 2 {
+		t.Errorf("COL counter for 14 June = %d, want 2", got)
+	}
+}
+
+// -----------------------------------------------------------------------
+// WithClock
+// -----------------------------------------------------------------------
+
+// Generate reads the clock once per ID, so the date segments and the scope key
+// of one ID can't come from different instants. The clock here moves a month on
+// every read: a second read inside one Generate would show as a month that
+// disagrees between the ID's segments, or as a skipped month between IDs.
+func TestWithClock_ReadOncePerID(t *testing.T) {
+	reads := 0
+	base := utc(2026, 11, 15, 12, 0, 0)
+	clock := func() time.Time {
+		at := base.AddDate(0, reads, 0)
+		reads++
+		return at
+	}
+	reg, err := refid.NewRegistry(refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{{
+			IDType:   "ref",
+			Timezone: "UTC",
+			Segments: []refid.SegmentConfig{
+				{Type: refid.SegmentTypeDate, Format: "yyyy"},
+				{Type: refid.SegmentTypeLiteral, Value: "/"},
+				{Type: refid.SegmentTypeDate, Format: "MM"},
+				{Type: refid.SegmentTypeLiteral, Value: "/"},
+				{Type: refid.SegmentTypeSequence, Sequence: &refid.SequenceSegmentConfig{ScopeKey: "{issuer}:{idType}:{yyyyMM}", Padding: 4}},
+			},
+		}},
+	}}}, refid.WithSequenceStore(newMemStore()), refid.WithClock(clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Each month is new, so each ID is the first of its month's scope.
+	for i, want := range []string{"2026/11/0001", "2026/12/0001", "2027/01/0001"} {
+		got, err := reg.Generate(context.Background(), "ACME", "ref", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("ID %d = %q, want %q", i+1, got, want)
+		}
+	}
+	if reads != 3 {
+		t.Errorf("clock read %d times for 3 IDs, want 3", reads)
+	}
+}
+
+// The clock supplies an instant. The zone its time carries is ignored: each
+// format renders the instant in its own timezone.
+func TestWithClock_ClockZoneIsIgnored(t *testing.T) {
+	cfg := refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{
+			{IDType: "colombo_day", Timezone: "Asia/Colombo", Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"}}},
+			{IDType: "utc_day", Timezone: "UTC", Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeDate, Format: "yyyyMMdd"}}},
+		},
+	}}}
+
+	// 20:00 UTC on 31 December: already 1 January in Colombo, still 31 December in UTC.
+	instant := utc(2026, 12, 31, 20, 0, 0)
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zones := map[string]*time.Location{
+		"UTC":         time.UTC,
+		"New York":    newYork,
+		"fixed +1400": time.FixedZone("UTC+14", 14*60*60),
+	}
+	for name, loc := range zones {
+		t.Run(name, func(t *testing.T) {
+			reg, err := refid.NewRegistry(cfg, refid.WithClock(func() time.Time { return instant.In(loc) }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for idType, want := range map[string]string{"colombo_day": "20270101", "utc_day": "20261231"} {
+				got, err := reg.Generate(context.Background(), "ACME", idType, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got != want {
+					t.Errorf("%s = %q, want %q", idType, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestWithClock_NilRejected(t *testing.T) {
+	_, err := refid.NewRegistry(refid.Config{Issuers: []refid.IssuerConfig{{
+		Issuer: "ACME",
+		Formats: []refid.FormatConfig{{
+			IDType:   "fixed",
+			Segments: []refid.SegmentConfig{{Type: refid.SegmentTypeLiteral, Value: "X"}},
+		}},
+	}}}, refid.WithClock(nil))
+	if err == nil {
+		t.Fatal("expected an error for a nil clock")
+	}
+	if !strings.Contains(err.Error(), "WithClock") {
+		t.Errorf("error = %q, want it to name WithClock", err)
 	}
 }
 

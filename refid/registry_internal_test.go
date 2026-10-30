@@ -3,10 +3,11 @@
 
 package refid
 
-// These tests live in package refid so they can replace the registry's clock,
-// which the exported API doesn't expose. They pin the instant to check which
-// date each timezone renders and which scope key it counts under. Config
-// validation is tested from outside the package in refid_test.go.
+// These tests live in package refid so they can call the unexported helpers
+// (compileFormat, resolveScopeKey, scopeKeyUsesDate). They pin the instant
+// with WithClock to check which date each timezone renders and which scope key
+// it counts under. Config validation and the clock option are tested from
+// outside the package in refid_test.go.
 
 import (
 	"context"
@@ -68,11 +69,11 @@ func mustLocation(t *testing.T, name string) *time.Location {
 // move time by assigning to it.
 func newPinned(t *testing.T, cfg Config, now *time.Time, opts ...RegistryOption) Registry {
 	t.Helper()
+	opts = append(opts[:len(opts):len(opts)], WithClock(func() time.Time { return *now }))
 	reg, err := NewRegistry(cfg, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg.(*registry).now = func() time.Time { return *now }
 	return reg
 }
 
