@@ -213,27 +213,36 @@ type errorBody struct {
 
 // WriteError writes err as an API error. An *Error (found with errors.As) is
 // written with its category's status. Any other error, including nil, is
-// logged with the request's correlation ID and written as ErrInternal, so
-// internal error text never reaches the client.
+// written as ErrInternal, so internal error text never reaches the client.
 //
-// An *Error is logged when it carries more than its declaration: a cause
-// from Wrap, or context added by wrapping it in another error. Server
-// categories (internal, unavailable) log at error level, client categories
-// at warn level.
-func WriteError(w http.ResponseWriter, r *http.Request, err error) {
+// Whether err is logged depends only on what it is, never on how it was
+// wrapped on the way up:
+//   - an error that is not an *Error, or an *Error with a 5xx category, is
+//     logged at error level;
+//   - an *Error with a 4xx category is logged at warn level only when it
+//     carries a cause from Wrap. Other client errors are expected traffic,
+//     left to the service's access log.
+//
+// attrs are added to the log line as structured fields, e.g. "memberId", id.
+// Each log line also has the request's correlation ID.
+func WriteError(w http.ResponseWriter, r *http.Request, err error, attrs ...any) {
 	correlationID := CorrelationID(r)
 
 	var apiErr *Error
 	if !errors.As(err, &apiErr) || apiErr == nil {
-		slog.ErrorContext(r.Context(), "httputil: unhandled error", "error", err, "correlationId", correlationID)
+		slog.ErrorContext(r.Context(), "httputil: unhandled error",
+			append([]any{"error", err, "correlationId", correlationID}, attrs...)...)
 		apiErr = ErrInternal.Err()
-	} else if apiErr.cause != nil || err != error(apiErr) {
+	} else if serverError := apiErr.def.Category.Status() >= http.StatusInternalServerError; serverError || apiErr.cause != nil {
 		level := slog.LevelWarn
-		if status := apiErr.def.Category.Status(); status >= http.StatusInternalServerError {
+		if serverError {
 			level = slog.LevelError
 		}
 		slog.Log(r.Context(), level, "httputil: request failed",
-			"code", apiErr.def.Code, "category", apiErr.def.Category.String(), "error", err, "correlationId", correlationID)
+			append([]any{
+				"code", apiErr.def.Code, "category", apiErr.def.Category.String(),
+				"error", err, "correlationId", correlationID,
+			}, attrs...)...)
 	}
 
 	details := apiErr.details

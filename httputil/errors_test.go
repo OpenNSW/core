@@ -307,15 +307,63 @@ func TestWriteError_ServerCategoryLogsAtErrorLevel(t *testing.T) {
 	}
 }
 
-func TestWriteError_ContextAddedByWrappingIsLogged(t *testing.T) {
-	logs := captureLogs(t)
-
-	w, _ := writeError(t, fmt.Errorf("member %s: %w", "m-42", errMemberNotFound.Err()))
-
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", w.Code)
+func TestWriteError_PlainClientErrorIsNotLoggedHoweverWrapped(t *testing.T) {
+	tests := map[string]error{
+		"plain":        errMemberNotFound.Err(),
+		"fmt.Errorf":   fmt.Errorf("member %s: %w", "m-42", errMemberNotFound.Err()),
+		"errors.Join":  errors.Join(errMemberNotFound.Err()),
+		"with details": errInvalidRequest.WithDetails(FieldError{Field: "name"}),
 	}
-	if !strings.Contains(logs.String(), "member m-42") {
-		t.Fatalf("expected the wrapping context to be logged, got %s", logs)
+	for name, err := range tests {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+
+			w, body := writeError(t, err)
+
+			if body.Code != "PB-1003" && body.Code != "PB-1001" {
+				t.Fatalf("unexpected response: %d %+v", w.Code, body)
+			}
+			if logs.Len() != 0 {
+				t.Fatalf("expected no log for a client error without a cause, got %s", logs)
+			}
+		})
+	}
+}
+
+func TestWriteError_ServerCategoryIsLoggedWithoutCause(t *testing.T) {
+	logs := captureLogs(t)
+	errUnavailable := ErrorDef{
+		Code:     "PB-5032",
+		Category: CategoryUnavailable,
+		Message:  Message{Key: "pb.store.unavailable", DefaultValue: "Store unavailable"},
+	}
+
+	w, _ := writeError(t, errUnavailable.Err())
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+	if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "code=PB-5032") {
+		t.Fatalf("expected an error-level log for a server error, got %s", logs)
+	}
+}
+
+func TestWriteError_AddsAttrsToTheLogLine(t *testing.T) {
+	setCorrelationIDFunc(t, "c0ffee")
+	tests := map[string]error{
+		"wrapped client error": errMemberNotFound.Wrap(errors.New("sql: no rows in result set")),
+		"unknown error":        errors.New("boom"),
+	}
+	for name, err := range tests {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+			WriteError(httptest.NewRecorder(), req, err, "memberId", "m-42")
+
+			if !strings.Contains(logs.String(), "memberId=m-42") || !strings.Contains(logs.String(), "correlationId=c0ffee") {
+				t.Fatalf("expected the attrs and correlation ID in the log, got %s", logs)
+			}
+		})
 	}
 }
