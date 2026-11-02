@@ -12,6 +12,20 @@ type TaskTemplate struct {
 	Type           string `json:"type"`             // user-facing category (e.g. "APPLICATION")
 	WorkflowID     string `json:"workflow_id"`      // points at a registered engine.WorkflowDefinition
 	RenderConfigID string `json:"render_config_id"` // task-level render config
+	// Claimable says whether the task can be claimed (see store.TaskRecord.ClaimedBy). False, the
+	// default, gives it no claims. Taskflow does not enforce it: the host offers claims, and calls
+	// TaskManager.ClaimTask, only for a claimable task.
+	Claimable bool `json:"claimable"`
+	// Read lists who may read the task. Taskflow does not enforce it: the host decides which
+	// roles a caller holds.
+	Read ReadPolicy `json:"read"`
+}
+
+// ReadPolicy lists the roles that may read a task, in precedence order: a caller holding
+// several reads it as the first one listed. Roles are opaque to taskflow. An empty list leaves
+// the decision to the host.
+type ReadPolicy struct {
+	Roles []string `json:"roles"`
 }
 
 // ExecutionPhase identifies a point in the CompleteTaskStep lifecycle at which

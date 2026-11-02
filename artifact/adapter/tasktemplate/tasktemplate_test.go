@@ -33,6 +33,55 @@ func TestTaskTemplateAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("Load returns claimable and read roles", func(t *testing.T) {
+		m := testutil.MemLoader{
+			"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg",
+				"claimable": true, "read": {"roles": ["officer", "supervisor"]}}`),
+		}
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("test_task", "task_template", "", "task_v1.json")
+
+		template, err := tasktemplate.Load(context.Background(), reg, "test_task")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !template.Claimable {
+			t.Error("expected Claimable")
+		}
+		if got := template.Read.Roles; len(got) != 2 || got[0] != "officer" || got[1] != "supervisor" {
+			t.Errorf("expected read roles [officer supervisor] in order, got %v", got)
+		}
+	})
+
+	t.Run("Load without claimable or read leaves them empty", func(t *testing.T) {
+		m := testutil.MemLoader{
+			"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg"}`),
+		}
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("test_task", "task_template", "", "task_v1.json")
+
+		template, err := tasktemplate.Load(context.Background(), reg, "test_task")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if template.Claimable || len(template.Read.Roles) != 0 {
+			t.Errorf("expected no claims and no read roles, got claimable=%v roles=%v", template.Claimable, template.Read.Roles)
+		}
+	})
+
+	// claimable is a boolean: a string or number is refused, so "true" never counts as true.
+	t.Run("Load refuses a claimable that is not a boolean", func(t *testing.T) {
+		m := testutil.MemLoader{
+			"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg", "claimable": "true"}`),
+		}
+		reg := artifact.NewRegistry(m)
+		reg.RegisterArtifact("test_task", "task_template", "", "task_v1.json")
+
+		if _, err := tasktemplate.Load(context.Background(), reg, "test_task"); err == nil {
+			t.Error("expected an error for a string claimable")
+		}
+	})
+
 	t.Run("Load missing returns ErrNotFound", func(t *testing.T) {
 		reg := artifact.NewRegistry(testutil.MemLoader{})
 		_, err := tasktemplate.Load(context.Background(), reg, "missing")
