@@ -717,80 +717,41 @@ func TestGetTasksReturnsTheQueryError(t *testing.T) {
 	}
 }
 
-// FindTask returns the task the filter matches, the earliest created when several do, and
-// ErrTaskNotFound when none does. It reads every column but data.
-func TestFindTask(t *testing.T) {
+// GetTasks finds the task a callback resumes, by its case and the step it waits in, and reads
+// every column of it but data.
+func TestGetTasksFindsAWaitingTaskWithoutItsData(t *testing.T) {
 	s, ctx := newTestStore(t)
 	createRolesTable(t, s)
 	for _, r := range []store.TaskRecord{
-		{TaskID: "waiting", CaseID: "C1", ParentWorkflowID: "C1:export", CreatedAt: time.Unix(100, 0)},
-		{TaskID: "waiting-later", CaseID: "C1", ParentWorkflowID: "C1:payment", CreatedAt: time.Unix(200, 0)},
-		{TaskID: "form", CaseID: "C1", ParentWorkflowID: "C1:export", CreatedAt: time.Unix(50, 0)},
-		{TaskID: "other-case", CaseID: "C2", ParentWorkflowID: "C2:export", CreatedAt: time.Unix(10, 0)},
+		{TaskID: "waiting", CaseID: "C1", ParentWorkflowID: "C1:export"},
+		{TaskID: "form", CaseID: "C1", ParentWorkflowID: "C1:export"},
+		{TaskID: "other-case", CaseID: "C2", ParentWorkflowID: "C2:export"},
 	} {
 		r.TaskType, r.State, r.Data = "TEST", "STARTING", map[string]any{"big": "payload"}
 		if err := s.InitTask(ctx, r); err != nil {
 			t.Fatalf("InitTask %s: %v", r.TaskID, err)
 		}
 	}
-	for id, c := range map[string]store.StepClaim{
-		"waiting":       {StepID: stepA, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}},
-		"waiting-later": {StepID: stepB, Seq: 2, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}},
-		"other-case":    {StepID: stepB, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}},
-	} {
-		n, err := s.ClaimStep(ctx, id, c)
+	for _, id := range []string{"waiting", "other-case"} {
+		n, err := s.ClaimStep(ctx, id, store.StepClaim{StepID: stepA, Seq: 2, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}})
 		wantRows(t, n, err, 1)
 	}
 
-	// found is the part of the record the cases check; the rest is checked once below.
-	type found struct {
-		TaskID, StepID, State, Template, ParentWorkflowID string
-		Seq                                               int64
+	got, err := s.GetTasks(ctx, store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		name   string
-		filter store.TaskFilter
-		want   *found // nil: no task matches
-	}{
-		{"one workflow's waiting task", store.TaskFilter{CaseID: "C1", ParentWorkflowID: "C1:payment", ActiveTemplateID: "await"}, &found{"waiting-later", stepB, "QUEUED_EXTERNALLY", "await", "C1:payment", 2}},
-		{"the earliest of several", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"}, &found{"waiting", stepA, "QUEUED_EXTERNALLY", "await", "C1:export", 1}},
-		{"a task with no active step", store.TaskFilter{CaseID: "C1", State: "STARTING"}, &found{"form", "", "STARTING", "", "C1:export", 0}},
-		{"no match", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "PENDING_USER"}, nil},
-		{"another case's task is not found", store.TaskFilter{CaseID: "C3", ActiveTemplateID: "await"}, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := s.FindTask(ctx, tc.filter)
-			if tc.want == nil {
-				if !errors.Is(err, store.ErrTaskNotFound) {
-					t.Errorf("FindTask(%+v) = (%+v, %v), want ErrTaskNotFound", tc.filter, got, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("FindTask(%+v): %v", tc.filter, err)
-			}
-			if g := (found{got.TaskID, got.ActiveStepID, got.State, got.ActiveTaskTemplateID, got.ParentWorkflowID, got.Seq}); g != *tc.want {
-				t.Errorf("FindTask(%+v) = %+v, want %+v", tc.filter, g, *tc.want)
-			}
-			if got.Data != nil {
-				t.Errorf("FindTask returned data %v, want none", got.Data)
-			}
-			if got.CaseID != "C1" || got.TaskType != "TEST" || got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
-				t.Errorf("FindTask did not read the scalar columns: %+v", got)
-			}
-		})
+	if len(got) != 1 {
+		t.Fatalf("GetTasks = %d tasks, want only the waiting one", len(got))
 	}
-}
-
-// FindTask requires a case, and returns a failed read as an error other than ErrTaskNotFound.
-func TestFindTaskErrors(t *testing.T) {
-	s, ctx := newTestStore(t)
-	if _, err := s.FindTask(ctx, store.TaskFilter{State: "STARTING"}); !errors.Is(err, store.ErrCaseIDRequired) {
-		t.Errorf("FindTask without a case err = %v, want ErrCaseIDRequired", err)
+	r := got[0]
+	if r.TaskID != "waiting" || r.ActiveStepID != stepA || r.Seq != 2 || r.State != "QUEUED_EXTERNALLY" ||
+		r.ActiveTaskTemplateID != "await" || r.ParentWorkflowID != "C1:export" || r.CaseID != "C1" ||
+		r.TaskType != "TEST" || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() {
+		t.Errorf("GetTasks did not read the task's columns: %+v", r)
 	}
-	// No taskflow_task_roles table: a role filter's subquery fails.
-	if _, err := s.FindTask(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}}); err == nil || errors.Is(err, store.ErrTaskNotFound) {
-		t.Errorf("FindTask without a roles table err = %v, want an error other than ErrTaskNotFound", err)
+	if r.Data != nil {
+		t.Errorf("GetTasks returned data %v, want none", r.Data)
 	}
 }
 

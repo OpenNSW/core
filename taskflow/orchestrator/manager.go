@@ -785,6 +785,11 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 //
 // A non-nil error means the tasks could not be read. A filter that matches no task returns an empty
 // list and a nil error, so a caller can tell the two apart.
+//
+// GetTasks also finds the task to resume when an external system calls back without the task's
+// callback token: filter by the task's case and the step it waits in (ActiveTemplateID, State),
+// then pass the one task's TaskID and StepID to CompleteTaskStep. An empty result means nothing is
+// waiting; more than one means the filter is ambiguous, and the caller should not pick one.
 func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) ([]TaskView, error) {
 	records, err := tm.db.GetTasks(ctx, filter)
 	if err != nil {
@@ -792,44 +797,19 @@ func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) ([
 	}
 	views := make([]TaskView, 0, len(records))
 	for _, r := range records {
-		views = append(views, summaryView(r))
+		views = append(views, TaskView{
+			TaskID:    r.TaskID,
+			TaskType:  r.TaskType,
+			State:     r.State,
+			StepID:    r.ActiveStepID,
+			Version:   r.Seq,
+			ClaimedBy: r.ClaimedBy,
+			ClaimedAt: r.ClaimedAt,
+			CreatedAt: r.CreatedAt,
+			UpdatedAt: r.UpdatedAt,
+		})
 	}
 	return views, nil
-}
-
-// FindTask returns the summary of a task filter matches, as GetTasks lists it (View is not
-// populated). It is for a host resuming a task that waits on an external system, when that
-// system calls back without the task's ID or callback token: find the waiting task by its case
-// and step, then pass its TaskID and StepID to CompleteTaskStep.
-//
-// filter.CaseID is required (store.ErrCaseIDRequired). Narrow the filter to the one task wanted,
-// for example by ActiveTemplateID and State; when several tasks match, FindTask returns the
-// earliest created. Like GetTasks, it is a query, not an access check.
-//
-// When no task matches, the error wraps ErrTaskNotFound. Any other error means the task could not
-// be read: a callback handler should then fail so the sender retries, never acknowledge the
-// callback as though nothing were waiting.
-func (tm *TaskManager) FindTask(ctx context.Context, filter store.TaskFilter) (TaskView, error) {
-	record, err := tm.db.FindTask(ctx, filter)
-	if err != nil {
-		return TaskView{}, err
-	}
-	return summaryView(record), nil
-}
-
-// summaryView is the TaskView of r without its rendered View, as GetTasks and FindTask return it.
-func summaryView(r store.TaskRecord) TaskView {
-	return TaskView{
-		TaskID:    r.TaskID,
-		TaskType:  r.TaskType,
-		State:     r.State,
-		StepID:    r.ActiveStepID,
-		Version:   r.Seq,
-		ClaimedBy: r.ClaimedBy,
-		ClaimedAt: r.ClaimedAt,
-		CreatedAt: r.CreatedAt,
-		UpdatedAt: r.UpdatedAt,
-	}
 }
 
 // withoutSystemVars returns a copy of payload with system variables removed.

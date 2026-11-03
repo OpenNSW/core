@@ -48,19 +48,6 @@ func (t *testStore) GetTasks(_ context.Context, filter TaskFilter) ([]TaskRecord
 	return list, nil
 }
 
-func (t *testStore) FindTask(ctx context.Context, filter TaskFilter) (TaskRecord, error) {
-	if filter.CaseID == "" {
-		return TaskRecord{}, ErrCaseIDRequired
-	}
-	list, _ := t.GetTasks(ctx, filter)
-	if len(list) == 0 {
-		return TaskRecord{}, ErrTaskNotFound
-	}
-	found := list[0]
-	found.Data = nil
-	return found, nil
-}
-
 func (t *testStore) ClaimStep(context.Context, string, StepClaim) (int64, error) { return 0, nil }
 
 func (t *testStore) WriteRenderState(context.Context, string, string, int64, string, map[string]any) (int64, error) {

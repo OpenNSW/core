@@ -93,16 +93,12 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	return cp
 }
 
-// ErrTaskNotFound is wrapped by the error a TaskStore method that returns a single task
-// (GetTask, GetTaskByWorkflowID, FindTask) returns when no task matches. Check it with errors.Is:
-// any other error from them means the task could not be read, which a caller must not treat as
-// "no such task".
+// ErrTaskNotFound is wrapped by the error TaskStore.GetTask and TaskStore.GetTaskByWorkflowID
+// return when no task has the given ID. Check it with errors.Is: any other error from them means
+// the task could not be read, which a caller must not treat as "no such task".
 var ErrTaskNotFound = errors.New("task not found")
 
-// ErrCaseIDRequired is returned by TaskStore.FindTask for a filter without a CaseID.
-var ErrCaseIDRequired = errors.New("taskflow store: FindTask requires a CaseID")
-
-// TaskFilter selects the tasks TaskStore.GetTasks and TaskStore.FindTask return. Every field is optional: an empty field
+// TaskFilter selects the tasks TaskStore.GetTasks returns. Every field is optional: an empty field
 // does not filter, and a set field narrows the result. The zero TaskFilter matches every task.
 //
 // A filter is a query, not an access check. Taskflow never decides who may read a task, here or
@@ -128,8 +124,7 @@ type TaskFilter struct {
 	State string
 }
 
-// Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks
-// and FindTask.
+// Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks.
 func (f TaskFilter) Matches(r TaskRecord) bool {
 	if f.CaseID != "" && r.CaseID != f.CaseID {
 		return false
@@ -211,19 +206,11 @@ type TaskStore interface {
 	// the error wraps ErrTaskNotFound; any other error means the task could not be read.
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, error)
 	// GetTasks returns each task that filter matches (see TaskFilter.Matches) once, in no
-	// particular order. A non-nil error means the tasks could not be read; it is never returned
-	// for a filter that matches no task, which returns an empty result and a nil error.
+	// particular order, without its data: each record's Data is nil whatever the task holds (it is
+	// the one field that can be large, and a listing never shows it), and ReadRoles is empty as for
+	// the other reads. A non-nil error means the tasks could not be read; it is never returned for
+	// a filter that matches no task, which returns an empty result and a nil error.
 	GetTasks(context context.Context, filter TaskFilter) ([]TaskRecord, error)
-	// FindTask returns a task that filter matches (see TaskFilter.Matches), without its Data:
-	// the returned record's Data is nil whatever the task holds, and ReadRoles is empty as for the
-	// other reads. filter.CaseID is required: FindTask returns ErrCaseIDRequired without it. When
-	// several tasks match, it returns the earliest created (ties broken by TaskID), so narrow the
-	// filter to the one task wanted. When none matches, the error wraps ErrTaskNotFound; any other
-	// error means the task could not be read.
-	//
-	// It backs TaskManager.FindTask, which a host uses to find a task waiting on an external
-	// system, for example when that system calls back without the task's ID.
-	FindTask(context context.Context, filter TaskFilter) (TaskRecord, error)
 
 	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq and the
 	// state is not StateCancelled, so a retry of the same step matches again, an older step's late

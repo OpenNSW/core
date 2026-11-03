@@ -90,12 +90,13 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	return model.ToDomain(), nil
 }
 
-// filtered returns a query on taskflow_tasks narrowed by filter (see store.TaskFilter.Matches).
-// Each field adds its condition only when set. Roles match through a taskflow_task_roles subquery
-// rather than a join, so a task listing several of the roles appears once; with a case set too, the
-// case is applied on both sides so the (case_id, role) index serves the match.
-func (s *TaskStore) filtered(ctx context.Context, filter store.TaskFilter) *gorm.DB {
-	query := s.db.WithContext(ctx).Model(&TaskRecordModel{})
+// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once, reading
+// every column but data. Each field adds its condition only when set. Roles match through a
+// taskflow_task_roles subquery rather than a join, so a task listing several of the roles appears
+// once; with a case set too, the case is applied on both sides so the (case_id, role) index serves
+// the match.
+func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) ([]store.TaskRecord, error) {
+	query := s.db.WithContext(ctx).Omit("data")
 	if filter.CaseID != "" {
 		query = query.Where("case_id = ?", filter.CaseID)
 	}
@@ -115,13 +116,8 @@ func (s *TaskStore) filtered(ctx context.Context, filter store.TaskFilter) *gorm
 		}
 		query = query.Where("task_id IN (?)", matching)
 	}
-	return query
-}
-
-// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once.
-func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) ([]store.TaskRecord, error) {
 	var models []TaskRecordModel
-	if err := s.filtered(ctx, filter).Find(&models).Error; err != nil {
+	if err := query.Find(&models).Error; err != nil {
 		return nil, fmt.Errorf("get tasks: %w", err)
 	}
 
@@ -130,27 +126,6 @@ func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) ([]st
 		records[i] = m.ToDomain()
 	}
 	return records, nil
-}
-
-// FindTask returns the earliest created task filter matches, reading every column but data, the
-// one that can be large. filter.CaseID is required, so the query is served by the case_id index.
-func (s *TaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRecord, error) {
-	if filter.CaseID == "" {
-		return store.TaskRecord{}, store.ErrCaseIDRequired
-	}
-	var models []TaskRecordModel
-	err := s.filtered(ctx, filter).
-		Omit("data").
-		Order("created_at, task_id").
-		Limit(1).
-		Find(&models).Error
-	if err != nil {
-		return store.TaskRecord{}, fmt.Errorf("find task: %w", err)
-	}
-	if len(models) == 0 {
-		return store.TaskRecord{}, fmt.Errorf("%w: no task of case %s matches", store.ErrTaskNotFound, filter.CaseID)
-	}
-	return models[0].ToDomain(), nil
 }
 
 // jsonData encodes task data for the jsonb column the way FromDomain does.
