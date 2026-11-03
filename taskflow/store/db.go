@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/OpenNSW/core/shared/deepcopy"
@@ -33,6 +34,13 @@ type TaskRecord struct {
 	// CaseID is the case the task's workflow belongs to (see workflow.VarCaseID); GetAllTasks
 	// lists a case's tasks by it.
 	CaseID string `json:"case_id"`
+
+	// ReadRoles are the roles that may open the task, copied from its task template's read.roles
+	// when the task starts. They never change afterwards. InitTask stores them with the row; the
+	// host matches a caller against them (taskflow never decides who holds a role). The read
+	// methods leave this field empty: a host that needs a task's roles reads them where InitTask
+	// stored them.
+	ReadRoles []string `json:"read_roles,omitempty"`
 
 	// ManifestVersion is the artifact manifest version the task resolves its templates through
 	// (see workflow.VarManifestVersion): the parent workflow's at the time the task started. Every
@@ -76,6 +84,7 @@ type TaskRecord struct {
 func (r TaskRecord) DeepCopy() TaskRecord {
 	cp := r // value copy duplicates all scalar fields
 	cp.Data = deepcopy.Map(r.Data)
+	cp.ReadRoles = slices.Clone(r.ReadRoles)
 	if r.ClaimedAt != nil {
 		at := *r.ClaimedAt
 		cp.ClaimedAt = &at
@@ -134,6 +143,9 @@ type TaskStore interface {
 	// already correct, and overwriting it could rewind a row the guarded step statements have since
 	// moved forward. A non-nil error means the row does not exist and was not created; the caller
 	// must not proceed as though it had been.
+	//
+	// InitTask also stores the record's ReadRoles, atomically with the row: a task must never be
+	// readable without its roles, and a retry must not duplicate them.
 	InitTask(context context.Context, record TaskRecord) error
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)

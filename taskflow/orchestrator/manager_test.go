@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -301,7 +302,8 @@ func newTestRegistry() *artifact.Set {
 			"id": "test_template",
 			"type": "TEST",
 			"workflow_id": "test_workflow_v1",
-			"render_config_id": "test_render_config"
+			"render_config_id": "test_render_config",
+			"read": {"roles": ["officer"]}
 		}`),
 		"wf_test_workflow_v1.json": []byte(`{
 			"id": "test_workflow_v1",
@@ -605,6 +607,31 @@ func TestStartTask_PassesThroughCaseID(t *testing.T) {
 				t.Errorf("CaseID = %q, want %q", task.CaseID, tc.caseID)
 			}
 		})
+	}
+}
+
+// The task's read roles come from its task template's read.roles, so the store can record them with the row.
+func TestStartTask_CopiesReadRolesFromTemplate(t *testing.T) {
+	db := newSafeMockTaskStore()
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	payload := engine.TaskPayload{
+		ManifestVersion: 1,
+		WorkflowID:      "consignment-123",
+		ActivationID:    "step-1",
+		TaskTemplateID:  "test_template",
+		CaseID:          "consignment-123",
+	}
+	if _, err := tm.StartTask(context.Background(), payload); err != nil && !errors.Is(err, activity.ErrResultPending) {
+		t.Fatalf("StartTask failed: %v", err)
+	}
+
+	task, ok := db.GetTask(context.Background(), "step-1")
+	if !ok {
+		t.Fatal("expected task record to be saved")
+	}
+	if !slices.Equal(task.ReadRoles, []string{"officer"}) {
+		t.Errorf("ReadRoles = %v, want [officer]", task.ReadRoles)
 	}
 }
 

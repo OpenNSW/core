@@ -54,6 +54,8 @@ type TaskTemplate struct {
 }
 ```
 
+`StartTask` copies `read.roles` to the task (`store.TaskRecord.ReadRoles`), and the gorm store writes one `task_roles (task_id, role, case_id)` row per role in the same transaction as the task row. They never change afterwards, so editing a template affects only tasks started from a later manifest version. A host decides who may open a task by matching the caller's roles against these rows (for example by joining its own record of who holds each role on a case, on `(case_id, role)`). A task whose template lists no roles gets no rows. What a caller may see or do inside an open task is not set here: sections are gated by `visibleWhen.requireClaim`, and submissions by the `PRE_RESUME` extensions.
+
 The parent workflow refers to this task by `id`. When the parent hits a TASK node carrying `task_template_id: "demo_phyto_application_task"`, the orchestrator:
 
 1. Looks up this template.

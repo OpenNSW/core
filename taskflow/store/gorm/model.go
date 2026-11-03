@@ -41,6 +41,32 @@ func (TaskRecordModel) TableName() string {
 	return "task_records_v2"
 }
 
+// TaskRoleModel is one role that may open a task (store.TaskRecord.ReadRoles), one row per role.
+// InitTask writes the rows in the same transaction as the task row, and nothing changes them
+// afterwards. CaseID is copied from the task so a host can list a caller's tasks by joining its
+// own role holders on (case_id, role) without going through task_records_v2.
+//
+// The table needs: task_id TEXT, role TEXT, case_id TEXT NOT NULL DEFAULT ”,
+// PRIMARY KEY (task_id, role), and an index on (case_id, role).
+type TaskRoleModel struct {
+	TaskID string `gorm:"primaryKey;column:task_id;type:text"`
+	Role   string `gorm:"primaryKey;column:role;type:text"`
+	CaseID string `gorm:"column:case_id;type:text;not null;default:'';index:idx_task_roles_case_role,priority:1"`
+}
+
+func (TaskRoleModel) TableName() string {
+	return "task_roles"
+}
+
+// roleModels returns the task_roles rows for r, one per read role.
+func roleModels(r store.TaskRecord) []TaskRoleModel {
+	rows := make([]TaskRoleModel, 0, len(r.ReadRoles))
+	for _, role := range r.ReadRoles {
+		rows = append(rows, TaskRoleModel{TaskID: r.TaskID, Role: role, CaseID: r.CaseID})
+	}
+	return rows
+}
+
 // ToDomain converts the GORM model to the domain TaskRecord.
 func (m TaskRecordModel) ToDomain() store.TaskRecord {
 	var data map[string]any
