@@ -29,6 +29,8 @@ type TaskTemplate struct {
     Type           string `json:"type"`
     WorkflowID     string `json:"workflow_id"`
     RenderConfigID string `json:"render_config_id"`
+    Claimable      bool       `json:"claimable"`
+    Read           ReadPolicy `json:"read"` // Roles []string `json:"roles"`
 }
 ```
 
@@ -38,6 +40,8 @@ type TaskTemplate struct {
 | `type`             | yes      | User-facing category, surfaced as `TaskView.TaskType`. Convention: uppercase domain noun (`APPLICATION`, `REVIEW`, `RENEWAL`). |
 | `workflow_id`      | yes      | Resolves to an `engine.WorkflowDefinition` — the child workflow this task runs.                                                |
 | `render_config_id` | yes      | Resolves to a render config (raw JSON, read on each render).                                                                       |
+| `claimable`        | no       | `true` says the task can be claimed, so the others see who is working it. Omitted or `false`: the task has no claims. Must be a boolean. Taskflow does not enforce it: the host offers claims, and calls `ClaimTask`, only for a claimable task. |
+| `read.roles`       | no       | The roles that may read the task, in precedence order: a caller holding several reads it as the first one listed. Opaque to taskflow, which does not enforce them; the host decides which roles a caller holds. Empty: the host decides alone. A null or empty role is refused. |
 
 **Example** (`demo/templates/task_phyto_application_task.json`):
 
