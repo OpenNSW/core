@@ -43,14 +43,15 @@ func (TaskRecordModel) TableName() string {
 
 // TaskRoleModel is one role that may open a task (store.TaskRecord.ReadRoles), one row per role.
 // InitTask writes the rows in the same transaction as the task row, and nothing changes them
-// afterwards. CaseID is copied from the task so a host can list a caller's tasks by joining its
-// own role holders on (case_id, role) without going through task_records_v2.
+// afterwards. CaseID is copied from the task so GetTasks, or a host joining its own role
+// holders on (case_id, role), can match a case's roles without going through task_records_v2.
 //
 // The table needs: task_id TEXT, role TEXT, case_id TEXT NOT NULL DEFAULT ”,
-// PRIMARY KEY (task_id, role), and an index on (case_id, role).
+// PRIMARY KEY (task_id, role), an index on (case_id, role), and an index on role (for
+// GetTasks across every case).
 type TaskRoleModel struct {
 	TaskID string `gorm:"primaryKey;column:task_id;type:text"`
-	Role   string `gorm:"primaryKey;column:role;type:text;index:idx_task_roles_case_role,priority:2"`
+	Role   string `gorm:"primaryKey;column:role;type:text;index:idx_task_roles_case_role,priority:2;index:idx_task_roles_role"`
 	CaseID string `gorm:"column:case_id;type:text;not null;default:'';index:idx_task_roles_case_role,priority:1"`
 }
 

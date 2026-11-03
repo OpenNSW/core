@@ -31,8 +31,8 @@ type TaskRecord struct {
 	ParentWorkflowID string `json:"parent_workflow_id"`
 	ParentStepID     string `json:"parent_step_id"` // the parent's step ID: the Activity to complete
 
-	// CaseID is the case the task's workflow belongs to (see workflow.VarCaseID); GetAllTasks
-	// lists a case's tasks by it.
+	// CaseID is the case the task's workflow belongs to (see workflow.VarCaseID); GetTasks
+	// lists a case's tasks by it (TaskFilter.CaseID).
 	CaseID string `json:"case_id"`
 
 	// ReadRoles are the roles that may open the task, copied from its task template's read.roles
@@ -92,6 +92,31 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	return cp
 }
 
+// TaskFilter selects the tasks TaskStore.GetTasks returns. Every field narrows the result.
+//
+// A task is listed only to a caller holding one of its read roles: it matches when its ReadRoles
+// contain at least one of Roles. There is no way to skip that check. A caller that may see more
+// (an admin, say) is one the host gives more roles. So the zero TaskFilter, or one whose Roles came
+// back empty from the host's role lookup, matches no task, and a task whose template lists no read
+// roles is never matched.
+type TaskFilter struct {
+	// CaseID narrows the result to the case's tasks (TaskRecord.CaseID). Empty: every case.
+	CaseID string
+	// Roles are the roles the caller holds, as the host decides them; taskflow never does. They are
+	// matched by name only, in every case the filter covers: with CaseID empty, pass only roles the
+	// caller holds in every case, never a union of roles held in different cases. A role held in
+	// one case goes in a filter with that CaseID.
+	Roles []string
+}
+
+// Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks.
+func (f TaskFilter) Matches(r TaskRecord) bool {
+	if f.CaseID != "" && r.CaseID != f.CaseID {
+		return false
+	}
+	return slices.ContainsFunc(r.ReadRoles, func(role string) bool { return slices.Contains(f.Roles, role) })
+}
+
 // Task states written by the guarded step statements.
 const (
 	// StateStartingStep means a step has been claimed and its plugin has not yet reported the state
@@ -149,9 +174,9 @@ type TaskStore interface {
 	InitTask(context context.Context, record TaskRecord) error
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
-	// GetAllTasks returns the tasks of a case (TaskRecord.CaseID), or every task when caseID is
-	// empty.
-	GetAllTasks(context context.Context, caseID string) []TaskRecord
+	// GetTasks returns each task that filter matches (see TaskFilter.Matches) once, in no
+	// particular order.
+	GetTasks(context context.Context, filter TaskFilter) []TaskRecord
 
 	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq and the
 	// state is not StateCancelled, so a retry of the same step matches again, an older step's late

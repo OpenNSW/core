@@ -754,17 +754,19 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 	return res, nil
 }
 
-// GetAllTasks returns a lightweight summary of tasks for listing purposes. The View
-// field is intentionally not populated — callers should use GetTaskRenderInfo to fetch
-// the full rendered view for a specific task.
+// GetTasks returns a lightweight summary of the tasks filter matches, for listing purposes. The
+// View field is intentionally not populated — callers should use GetTaskRenderInfo to fetch the
+// full rendered view for a specific task.
 //
-// If caseID is non-empty, the result is narrowed to the case's tasks (TaskRecord.CaseID),
-// across every workflow of the case; an empty string returns all tasks.
-func (tm *TaskManager) GetAllTasks(ctx context.Context, caseID string) []TaskView {
-	records := tm.db.GetAllTasks(ctx, caseID)
-	resList := make([]TaskView, 0, len(records))
+// The host fills filter.Roles with the roles the caller holds (taskflow never decides them), and
+// gets the tasks whose task template lists one of them in read.roles. A task whose template lists
+// no roles is never returned: the host decides alone who sees it. filter.CaseID narrows the result
+// to the case's tasks, across every workflow of the case. See store.TaskFilter.
+func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) []TaskView {
+	records := tm.db.GetTasks(ctx, filter)
+	views := make([]TaskView, 0, len(records))
 	for _, r := range records {
-		resList = append(resList, TaskView{
+		views = append(views, TaskView{
 			TaskID:    r.TaskID,
 			TaskType:  r.TaskType,
 			State:     r.State,
@@ -776,7 +778,7 @@ func (tm *TaskManager) GetAllTasks(ctx context.Context, caseID string) []TaskVie
 			UpdatedAt: r.UpdatedAt,
 		})
 	}
-	return resList
+	return views
 }
 
 // withoutSystemVars returns a copy of payload with system variables removed.

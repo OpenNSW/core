@@ -32,15 +32,15 @@ A modular task orchestration engine that sits between a macro business workflow 
 
 ## Sub-packages
 
-| Package | Purpose |
-|---|---|
-| `taskflow/orchestrator` | `TaskManager` — the main API surface |
-| `taskflow/plugins` | Plugin interface, registry, and built-in plugins |
-| `taskflow/store` | `TaskStore` interface and `TaskRecord` |
-| `taskflow/store/gorm` | GORM/PostgreSQL implementation of `TaskStore` |
-| `taskflow/renderer` | `Renderer` interface consumed by the orchestrator |
-| `taskflow/renderer/zoneview` | Zone-based renderer backed by `uiprojector` |
-| `taskflow/types` | `TaskTemplate` and `StepTemplate` config types |
+| Package                      | Purpose                                           |
+|------------------------------|---------------------------------------------------|
+| `taskflow/orchestrator`      | `TaskManager` — the main API surface              |
+| `taskflow/plugins`           | Plugin interface, registry, and built-in plugins  |
+| `taskflow/store`             | `TaskStore` interface and `TaskRecord`            |
+| `taskflow/store/gorm`        | GORM/PostgreSQL implementation of `TaskStore`     |
+| `taskflow/renderer`          | `Renderer` interface consumed by the orchestrator |
+| `taskflow/renderer/zoneview` | Zone-based renderer backed by `uiprojector`       |
+| `taskflow/types`             | `TaskTemplate` and `StepTemplate` config types    |
 
 ## Wiring
 
@@ -96,17 +96,17 @@ if err := workflowRunner.StartWorker(); err != nil {
 
 ## TaskManager API
 
-| Method | Called by | Purpose |
-|---|---|---|
-| `StartTask(payload)` | Parent workflow activity | Create task record, start micro-workflow |
-| `StartTaskStep(payload)` | Micro-workflow node | Activate step, route to plugin |
-| `HandleTaskCompletion(ctx, completion)` | Micro-workflow on exit | Mark complete (guarded), then fire callback to parent |
-| `GetTaskRenderInfo(ctx, taskID)` | Portal HTTP handler | Fetch task + rendered UI |
-| `CompleteTaskStep(ctx, taskID, stepID, payload)` | Portal HTTP handler | Submit form/interaction, resume that step |
-| `CompleteTaskStepByToken(ctx, token, payload)` | External callback handler | Same, addressed by the dispatch's callback token |
-| `GetAllTasks(ctx, parentWorkflowID)` | Portal HTTP handler | List tasks for a workflow instance |
-| `ClaimTask(ctx, taskID, holder)` | Portal HTTP handler | Claim the task for holder (unclaimed, or already theirs) |
-| `ReleaseTask(ctx, taskID, holder)` | Portal HTTP handler | Release holder's claim |
+| Method                                           | Called by                 | Purpose                                                                                     |
+|--------------------------------------------------|---------------------------|---------------------------------------------------------------------------------------------|
+| `StartTask(payload)`                             | Parent workflow activity  | Create task record, start micro-workflow                                                    |
+| `StartTaskStep(payload)`                         | Micro-workflow node       | Activate step, route to plugin                                                              |
+| `HandleTaskCompletion(ctx, completion)`          | Micro-workflow on exit    | Mark complete (guarded), then fire callback to parent                                       |
+| `GetTaskRenderInfo(ctx, taskID)`                 | Portal HTTP handler       | Fetch task + rendered UI                                                                    |
+| `CompleteTaskStep(ctx, taskID, stepID, payload)` | Portal HTTP handler       | Submit form/interaction, resume that step                                                   |
+| `CompleteTaskStepByToken(ctx, token, payload)`   | External callback handler | Same, addressed by the dispatch's callback token                                            |
+| `GetTasks(ctx, store.TaskFilter{CaseID, Roles})` | Portal HTTP handler       | List the tasks whose `read.roles` include one of the caller's roles, optionally in one case |
+| `ClaimTask(ctx, taskID, holder)`                 | Portal HTTP handler       | Claim the task for holder (unclaimed, or already theirs)                                    |
+| `ReleaseTask(ctx, taskID, holder)`               | Portal HTTP handler       | Release holder's claim                                                                      |
 
 ## Writing a plugin
 
@@ -149,11 +149,11 @@ Register it: `pluginRegistry.Register("MY_PLUGIN", &MyPlugin{remoteManager: rm})
 
 **Allowed gateway types inside task workflows:**
 
-| Gateway | Allowed | Notes |
-|---|---|---|
-| `EXCLUSIVE_SPLIT` | ✓ | Conditional branching is fine |
-| `EXCLUSIVE_JOIN` | ✓ | Merging sequential branches is fine |
-| `PARALLEL_SPLIT` | ✗ | Rejected at `StartTask` — would create unreachable steps |
-| `PARALLEL_JOIN` | ✗ | No parallel split means a parallel join can never be reached either |
+| Gateway           | Allowed | Notes                                                               |
+|-------------------|---------|---------------------------------------------------------------------|
+| `EXCLUSIVE_SPLIT` | ✓      | Conditional branching is fine                                       |
+| `EXCLUSIVE_JOIN`  | ✓      | Merging sequential branches is fine                                 |
+| `PARALLEL_SPLIT`  | ✗      | Rejected at `StartTask` — would create unreachable steps            |
+| `PARALLEL_JOIN`   | ✗      | No parallel split means a parallel join can never be reached either |
 
 If you need parallel work inside a task, model each parallel branch as a separate TASK node in the **parent** (macro) workflow — the parent workflow engine supports `PARALLEL_SPLIT` via child workflow fan-out.
