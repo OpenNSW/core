@@ -239,22 +239,6 @@ See [docs/PATTERNS.md](docs/PATTERNS.md) for a catalog of the ID shapes these se
 
 Neither backend registers a `database/sql` driver — they only issue SQL against the `*sql.DB` you hand them, so you import the driver, open the connection, and pass the result in. That keeps the driver choice yours, and avoids an `init` panic in a binary that already registers the same driver name.
 
-### Upgrading the random-value table name
-
-The default random-value table is now `refid_random_values` (previously `refid_random`).
-For an existing installation using the old default, stop reference-ID writers and apply this
-rename through the host's migrations before starting the updated application or calling
-`MigrateRandom`. The statement works for PostgreSQL and SQLite and assumes the old table exists
-and the new name is unused:
-
-```sql
-ALTER TABLE refid_random RENAME TO refid_random_values;
-```
-
-This preserves reserved values and their uniqueness checks. `MigrateRandom` only creates a
-missing table; it does not rename or copy an existing one. Stores using `WithTableName` keep
-their configured names and need no change. The sequence table remains `refid_sequences`.
-
 ### PostgreSQL (`refid/store/postgres`)
 
 `SequenceStore` uses a single table (`refid_sequences` by default) with row-level atomic upsert:

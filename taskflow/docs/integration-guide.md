@@ -80,37 +80,19 @@ type TaskStore interface {
 A GORM implementation is in `store/gorm`. It uses `taskflow_tasks` for task instances and
 `taskflow_task_roles` for their roles.
 
-For an existing PostgreSQL installation using the previous names, apply these renames through
-the host's migrations while workers and API traffic are stopped, before starting the updated
-application. These statements assume the old tables exist and the new names are unused:
+The host manages the schema using `TaskRecordModel` and `TaskRoleModel` as the column and index
+definitions. The task table includes these columns for step tracking, claims, and template lookup:
 
-```sql
-BEGIN;
-ALTER TABLE task_records_v2 RENAME TO taskflow_tasks;
-ALTER TABLE task_roles RENAME TO taskflow_task_roles;
-ALTER INDEX IF EXISTS idx_task_records_v2_task_type RENAME TO idx_taskflow_tasks_task_type;
-ALTER INDEX IF EXISTS idx_task_records_v2_parent_workflow_id RENAME TO idx_taskflow_tasks_parent_workflow_id;
-ALTER INDEX IF EXISTS idx_task_records_v2_task_workflow_id RENAME TO idx_taskflow_tasks_task_workflow_id;
-ALTER INDEX IF EXISTS idx_task_roles_case_role RENAME TO idx_taskflow_task_roles_case_role;
-ALTER INDEX IF EXISTS idx_task_roles_role RENAME TO idx_taskflow_task_roles_role;
-COMMIT;
-```
+| Column | PostgreSQL definition |
+|--------|-----------------------|
+| `active_step_id` | `UUID NULL` |
+| `seq` | `BIGINT NOT NULL DEFAULT 0` |
+| `claimed_by` | `TEXT NULL` |
+| `claimed_at` | `TIMESTAMPTZ NULL` |
+| `task_template_id` | `TEXT NOT NULL DEFAULT ''` |
 
-Renaming preserves the task and role rows. Changing the model's table name or creating a new
-table does not move existing data. Adjust the index renames if the host uses custom names.
-
-The task table needs, beyond the original columns:
-
-```sql
-ALTER TABLE taskflow_tasks ADD COLUMN IF NOT EXISTS active_step_id UUID NULL;
-ALTER TABLE taskflow_tasks ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE taskflow_tasks ADD COLUMN IF NOT EXISTS claimed_by TEXT NULL;
-ALTER TABLE taskflow_tasks ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NULL;
-ALTER TABLE taskflow_tasks ADD COLUMN IF NOT EXISTS task_template_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE taskflow_tasks DROP COLUMN IF EXISTS render_config;
-```
-
-`InitTask` leaves the claim columns out of its insert, so tasks can still be created before they exist. Add them before anything calls `ClaimTask` or `ReleaseTask`.
+`InitTask` leaves the claim columns out of its insert. `ClaimTask` and `ReleaseTask` require
+both claim columns, with NULL representing an unclaimed task.
 
 ### Concurrency
 
