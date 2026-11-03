@@ -50,7 +50,7 @@ func (TaskRecordModel) TableName() string {
 // PRIMARY KEY (task_id, role), and an index on (case_id, role).
 type TaskRoleModel struct {
 	TaskID string `gorm:"primaryKey;column:task_id;type:text"`
-	Role   string `gorm:"primaryKey;column:role;type:text"`
+	Role   string `gorm:"primaryKey;column:role;type:text;index:idx_task_roles_case_role,priority:2"`
 	CaseID string `gorm:"column:case_id;type:text;not null;default:'';index:idx_task_roles_case_role,priority:1"`
 }
 
