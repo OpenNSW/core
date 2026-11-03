@@ -33,7 +33,7 @@ type config struct {
 func defaultSequenceConfig() config { return config{tableName: DefaultSequenceTableName} }
 
 // WithTableName overrides the default table name ("refid_sequences" for
-// NewSequence/MigrateSequence, "refid_random" for NewRandom/MigrateRandom).
+// NewSequence/MigrateSequence, "refid_random_values" for NewRandom/MigrateRandom).
 // An invalid name (must match [a-zA-Z_][a-zA-Z0-9_]*) is recorded and
 // surfaced as an error from the constructor or migrate function — never a
 // panic.
@@ -120,7 +120,7 @@ func (s *sequenceStore) Next(ctx context.Context, scopeKey string, max int64) (i
 }
 
 // DefaultRandomTableName is the default table name used for issued random ID values.
-const DefaultRandomTableName = "refid_random"
+const DefaultRandomTableName = "refid_random_values"
 
 // randomStore is a PostgreSQL-backed implementation of refid.RandomStore. It
 // uses a single conditional insert, so Reserve never holds a transaction or
@@ -132,7 +132,7 @@ type randomStore struct {
 
 // NewRandom returns a refid.RandomStore backed by PostgreSQL. db must already
 // be opened against the pgx driver (see the package doc). By default it
-// targets the "refid_random" table; override with WithTableName. NewRandom
+// targets the "refid_random_values" table; override with WithTableName. NewRandom
 // returns an error (never panics) if an option is invalid.
 func NewRandom(db *sql.DB, opts ...Option) (refid.RandomStore, error) {
 	cfg := config{tableName: DefaultRandomTableName}
