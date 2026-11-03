@@ -34,14 +34,25 @@ func (t *testStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (T
 }
 
 // GetTasks applies the filter's reference rule, TaskFilter.Matches, to the stored tasks.
-func (t *testStore) GetTasks(_ context.Context, filter TaskFilter) []TaskRecord {
+func (t *testStore) GetTasks(_ context.Context, filter TaskFilter) ([]TaskRecord, error) {
 	var list []TaskRecord
 	for _, record := range t.tasks {
 		if filter.Matches(record) {
 			list = append(list, record)
 		}
 	}
-	return list
+	return list, nil
+}
+
+func (t *testStore) FindTask(ctx context.Context, filter TaskFilter) (TaskRef, error) {
+	if filter.CaseID == "" {
+		return TaskRef{}, ErrCaseIDRequired
+	}
+	list, _ := t.GetTasks(ctx, filter)
+	if len(list) == 0 {
+		return TaskRef{}, ErrTaskNotFound
+	}
+	return TaskRef{TaskID: list[0].TaskID, StepID: list[0].ActiveStepID}, nil
 }
 
 func (t *testStore) ClaimStep(context.Context, string, StepClaim) (int64, error) { return 0, nil }
@@ -123,8 +134,30 @@ func TestTaskStoreInterface(t *testing.T) {
 		t.Errorf("Expected TaskID 'test-1', got %s", fetchedTaskWF.TaskID)
 	}
 
-	all := store.GetTasks(ctx, TaskFilter{Roles: []string{"trader"}})
+	all, err := store.GetTasks(ctx, TaskFilter{Roles: []string{"trader"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(all) != 1 {
 		t.Errorf("Expected exactly 1 task record, got %d", len(all))
+	}
+}
+
+// Each new TaskFilter field narrows Matches only when set.
+func TestTaskFilterMatchesStepFields(t *testing.T) {
+	r := TaskRecord{CaseID: "C1", ParentWorkflowID: "C1:export", ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"}
+	for _, tc := range []struct {
+		filter TaskFilter
+		want   bool
+	}{
+		{TaskFilter{}, true},
+		{TaskFilter{CaseID: "C1", ParentWorkflowID: "C1:export", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"}, true},
+		{TaskFilter{ParentWorkflowID: "C1:payment"}, false},
+		{TaskFilter{ActiveTemplateID: "form"}, false},
+		{TaskFilter{State: "PENDING_USER"}, false},
+	} {
+		if got := tc.filter.Matches(r); got != tc.want {
+			t.Errorf("%+v.Matches = %v, want %v", tc.filter, got, tc.want)
+		}
 	}
 }

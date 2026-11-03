@@ -5,6 +5,7 @@ package gorm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -172,17 +173,22 @@ func TestGetTasks(t *testing.T) {
 	s, ctx := newTestStore(t)
 	createRolesTable(t, s)
 	for _, r := range []store.TaskRecord{
-		{TaskID: "c1-trader", CaseID: "C1", ReadRoles: []string{"trader"}},
-		{TaskID: "c1-both", CaseID: "C1", ReadRoles: []string{"trader", "cha"}},
-		{TaskID: "c1-officer", CaseID: "C1", ReadRoles: []string{"officer"}},
-		{TaskID: "c1-none", CaseID: "C1"},
-		{TaskID: "c2-trader", CaseID: "C2", ReadRoles: []string{"trader"}},
+		{TaskID: "c1-trader", CaseID: "C1", ParentWorkflowID: "C1:export", ReadRoles: []string{"trader"}},
+		{TaskID: "c1-both", CaseID: "C1", ParentWorkflowID: "C1:export", ReadRoles: []string{"trader", "cha"}},
+		{TaskID: "c1-officer", CaseID: "C1", ParentWorkflowID: "C1:payment", ReadRoles: []string{"officer"}},
+		{TaskID: "c1-none", CaseID: "C1", ParentWorkflowID: "C1:payment"},
+		{TaskID: "c2-trader", CaseID: "C2", ParentWorkflowID: "C2:export", ReadRoles: []string{"trader"}},
 	} {
 		r.TaskType, r.State, r.Data = "TEST", "STARTING", map[string]any{}
 		if err := s.InitTask(ctx, r); err != nil {
 			t.Fatalf("InitTask %s: %v", r.TaskID, err)
 		}
 	}
+	// c1-officer waits on an external system in its "await" step; c1-trader is at another step.
+	n, err := s.ClaimStep(ctx, "c1-officer", store.StepClaim{StepID: stepA, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{}})
+	wantRows(t, n, err, 1)
+	n, err = s.ClaimStep(ctx, "c1-trader", store.StepClaim{StepID: stepB, Seq: 1, ActiveTaskTemplateID: "form", State: "PENDING_USER", Data: map[string]any{}})
+	wantRows(t, n, err, 1)
 
 	ids := func(records []store.TaskRecord) []string {
 		out := make([]string, 0, len(records))
@@ -205,9 +211,18 @@ func TestGetTasks(t *testing.T) {
 		{"a case without roles", store.TaskFilter{CaseID: "C1"}, []string{"c1-both", "c1-none", "c1-officer", "c1-trader"}},
 		{"an empty roles slice is no role filter", store.TaskFilter{CaseID: "C1", Roles: []string{}}, []string{"c1-both", "c1-none", "c1-officer", "c1-trader"}},
 		{"zero filter", store.TaskFilter{}, []string{"c1-both", "c1-none", "c1-officer", "c1-trader", "c2-trader", task1}}, // task1: seeded by newTestStore
+		{"a parent workflow", store.TaskFilter{ParentWorkflowID: "C1:payment"}, []string{"c1-none", "c1-officer"}},
+		{"an active step template", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await"}, []string{"c1-officer"}},
+		{"a state", store.TaskFilter{CaseID: "C1", State: "STARTING"}, []string{"c1-both", "c1-none"}},
+		{"every field", store.TaskFilter{CaseID: "C1", Roles: []string{"officer"}, ParentWorkflowID: "C1:payment", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"}, []string{"c1-officer"}},
+		{"fields no task matches together", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "PENDING_USER"}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ids(s.GetTasks(ctx, tc.filter)); !reflect.DeepEqual(got, tc.want) {
+			records, err := s.GetTasks(ctx, tc.filter)
+			if err != nil {
+				t.Fatalf("GetTasks(%+v): %v", tc.filter, err)
+			}
+			if got := ids(records); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("GetTasks(%+v) = %v, want %v", tc.filter, got, tc.want)
 			}
 		})
@@ -676,11 +691,95 @@ func TestGetTasksListsACaseAcrossWorkflows(t *testing.T) {
 		}
 	}
 
+	records, err := s.GetTasks(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := map[string]bool{}
-	for _, r := range s.GetTasks(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}}) {
+	for _, r := range records {
 		got[r.TaskID] = true
 	}
 	if len(got) != 2 || !got["export-task"] || !got["payment-task"] {
 		t.Errorf("GetTasks(C1) = %v, want export-task and payment-task", got)
+	}
+}
+
+// GetTasks returns a failed read as an error, not as an empty result.
+func TestGetTasksReturnsTheQueryError(t *testing.T) {
+	s, ctx := newTestStore(t)
+	// No taskflow_task_roles table: a role filter's subquery fails.
+	records, err := s.GetTasks(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}})
+	if err == nil {
+		t.Fatalf("GetTasks without a roles table = (%v, nil), want an error", records)
+	}
+	if records != nil {
+		t.Errorf("GetTasks returned %v with its error, want nil", records)
+	}
+}
+
+// FindTask returns the ID and active step of the task the filter matches, the earliest created
+// when several do, and ErrTaskNotFound when none does.
+func TestFindTask(t *testing.T) {
+	s, ctx := newTestStore(t)
+	createRolesTable(t, s)
+	for _, r := range []store.TaskRecord{
+		{TaskID: "waiting", CaseID: "C1", ParentWorkflowID: "C1:export", CreatedAt: time.Unix(100, 0)},
+		{TaskID: "waiting-later", CaseID: "C1", ParentWorkflowID: "C1:payment", CreatedAt: time.Unix(200, 0)},
+		{TaskID: "form", CaseID: "C1", ParentWorkflowID: "C1:export", CreatedAt: time.Unix(50, 0)},
+		{TaskID: "other-case", CaseID: "C2", ParentWorkflowID: "C2:export", CreatedAt: time.Unix(10, 0)},
+	} {
+		r.TaskType, r.State, r.Data = "TEST", "STARTING", map[string]any{"big": "payload"}
+		if err := s.InitTask(ctx, r); err != nil {
+			t.Fatalf("InitTask %s: %v", r.TaskID, err)
+		}
+	}
+	for id, c := range map[string]store.StepClaim{
+		"waiting":       {StepID: stepA, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"},
+		"waiting-later": {StepID: stepB, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"},
+		"other-case":    {StepID: stepB, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"},
+	} {
+		n, err := s.ClaimStep(ctx, id, c)
+		wantRows(t, n, err, 1)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter store.TaskFilter
+		want   store.TaskRef
+		found  bool
+	}{
+		{"one workflow's waiting task", store.TaskFilter{CaseID: "C1", ParentWorkflowID: "C1:payment", ActiveTemplateID: "await"}, store.TaskRef{TaskID: "waiting-later", StepID: stepB}, true},
+		{"the earliest of several", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"}, store.TaskRef{TaskID: "waiting", StepID: stepA}, true},
+		{"a task with no active step", store.TaskFilter{CaseID: "C1", State: "STARTING"}, store.TaskRef{TaskID: "form"}, true},
+		{"no match", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "PENDING_USER"}, store.TaskRef{}, false},
+		{"another case's task is not found", store.TaskFilter{CaseID: "C3", ActiveTemplateID: "await"}, store.TaskRef{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.FindTask(ctx, tc.filter)
+			if !tc.found {
+				if !errors.Is(err, store.ErrTaskNotFound) {
+					t.Errorf("FindTask(%+v) = (%+v, %v), want ErrTaskNotFound", tc.filter, got, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("FindTask(%+v): %v", tc.filter, err)
+			}
+			if got != tc.want {
+				t.Errorf("FindTask(%+v) = %+v, want %+v", tc.filter, got, tc.want)
+			}
+		})
+	}
+}
+
+// FindTask requires a case, and returns a failed read as an error other than ErrTaskNotFound.
+func TestFindTaskErrors(t *testing.T) {
+	s, ctx := newTestStore(t)
+	if _, err := s.FindTask(ctx, store.TaskFilter{State: "STARTING"}); !errors.Is(err, store.ErrCaseIDRequired) {
+		t.Errorf("FindTask without a case err = %v, want ErrCaseIDRequired", err)
+	}
+	// No taskflow_task_roles table: a role filter's subquery fails.
+	if _, err := s.FindTask(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}}); err == nil || errors.Is(err, store.ErrTaskNotFound) {
+		t.Errorf("FindTask without a roles table err = %v, want an error other than ErrTaskNotFound", err)
 	}
 }

@@ -144,7 +144,7 @@ func (s *safeMockTaskStore) GetTaskByWorkflowID(_ context.Context, workflowID st
 }
 
 // GetTasks applies the filter's reference rule, store.TaskFilter.Matches, to the stored tasks.
-func (s *safeMockTaskStore) GetTasks(_ context.Context, filter store.TaskFilter) []store.TaskRecord {
+func (s *safeMockTaskStore) GetTasks(_ context.Context, filter store.TaskFilter) ([]store.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []store.TaskRecord
@@ -153,7 +153,19 @@ func (s *safeMockTaskStore) GetTasks(_ context.Context, filter store.TaskFilter)
 			out = append(out, r)
 		}
 	}
-	return out
+	return out, nil
+}
+
+// FindTask returns a task filter matches; the orchestrator never calls it.
+func (s *safeMockTaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRef, error) {
+	if filter.CaseID == "" {
+		return store.TaskRef{}, store.ErrCaseIDRequired
+	}
+	records, _ := s.GetTasks(ctx, filter)
+	if len(records) == 0 {
+		return store.TaskRef{}, store.ErrTaskNotFound
+	}
+	return store.TaskRef{TaskID: records[0].TaskID, StepID: records[0].ActiveStepID}, nil
 }
 
 // The guarded step writes mirror the SQL guards of the real stores.
@@ -410,7 +422,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		t.Error("expected task sub-workflow to be started")
 	}
 
-	tasks := storeMock.GetTasks(context.Background(), store.TaskFilter{Roles: []string{"officer"}}) // test_template's read.roles
+	tasks, _ := storeMock.GetTasks(context.Background(), store.TaskFilter{Roles: []string{"officer"}}) // test_template's read.roles
 	if len(tasks) != 1 {
 		t.Fatalf("expected exactly 1 task record, got %d", len(tasks))
 	}
@@ -999,10 +1011,40 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 		t.Errorf("view = (%q, %d), want (step-9, 9)", view.StepID, view.Version)
 	}
 
-	list := tm.GetTasks(context.Background(), store.TaskFilter{Roles: []string{"officer"}})
+	list := mustList(t, tm, context.Background(), store.TaskFilter{Roles: []string{"officer"}})
 	if len(list) != 1 || list[0].StepID != "step-9" || list[0].Version != 9 {
 		t.Errorf("list = %+v", list)
 	}
+}
+
+// mustList calls tm.GetTasks and fails the test on an error.
+func mustList(t *testing.T, tm *TaskManager, ctx context.Context, filter store.TaskFilter) []TaskView {
+	t.Helper()
+	list, err := tm.GetTasks(ctx, filter)
+	if err != nil {
+		t.Fatalf("GetTasks(%+v): %v", filter, err)
+	}
+	return list
+}
+
+// GetTasks returns the store's error rather than an empty list, so a caller can tell a failed
+// read from a filter that matches no task.
+func TestGetTasks_ReturnsTheStoreError(t *testing.T) {
+	boom := errors.New("db down")
+	tm := newTestTaskManager(failingListStore{newSafeMockTaskStore(), boom}, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	if list, err := tm.GetTasks(context.Background(), store.TaskFilter{CaseID: "C1"}); !errors.Is(err, boom) || list != nil {
+		t.Errorf("GetTasks = (%v, %v), want (nil, %v)", list, err, boom)
+	}
+}
+
+// failingListStore is a store whose GetTasks fails with err.
+type failingListStore struct {
+	*safeMockTaskStore
+	err error
+}
+
+func (s failingListStore) GetTasks(context.Context, store.TaskFilter) ([]store.TaskRecord, error) {
+	return nil, s.err
 }
 
 // GetTasks with roles lists only the tasks whose read roles include one of them, and without roles
@@ -1014,12 +1056,12 @@ func TestGetTasks_ListsTheCallersTasks(t *testing.T) {
 	db.InitTask(ctx, store.TaskRecord{TaskID: "task-o", CaseID: "C1", State: "PENDING_USER", ReadRoles: []string{"officer"}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
-	list := tm.GetTasks(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}})
+	list := mustList(t, tm, ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}})
 	if len(list) != 1 || list[0].TaskID != "task-t" || list[0].ClaimedBy != "user-a" {
 		t.Errorf("list = %+v, want only task-t", list)
 	}
 	db.InitTask(ctx, store.TaskRecord{TaskID: "task-n", CaseID: "C1", State: "PENDING_USER"})
-	if list := tm.GetTasks(ctx, store.TaskFilter{CaseID: "C1"}); len(list) != 3 {
+	if list := mustList(t, tm, ctx, store.TaskFilter{CaseID: "C1"}); len(list) != 3 {
 		t.Errorf("no roles: list = %+v, want all three tasks", list)
 	}
 }
@@ -1059,7 +1101,7 @@ func TestTaskViews_CarryTheClaim(t *testing.T) {
 	if view.ClaimedBy != "user-a" || view.ClaimedAt == nil {
 		t.Errorf("view claim = (%q, %v), want (user-a, a time)", view.ClaimedBy, view.ClaimedAt)
 	}
-	list := tm.GetTasks(ctx, store.TaskFilter{Roles: []string{"officer"}})
+	list := mustList(t, tm, ctx, store.TaskFilter{Roles: []string{"officer"}})
 	if len(list) != 1 || list[0].ClaimedBy != "user-a" || list[0].ClaimedAt == nil {
 		t.Errorf("list = %+v", list)
 	}

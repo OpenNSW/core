@@ -88,15 +88,23 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	return model.ToDomain(), true
 }
 
-// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once. Each field
-// adds its condition only when set. Roles match through a taskflow_task_roles subquery rather than
-// a join, so a task listing several of the roles appears once; with a case set too, the case is
-// applied on both sides so the (case_id, role) index serves the match. A query error is logged and
-// returns nil.
-func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []store.TaskRecord {
-	query := s.db.WithContext(ctx)
+// filtered returns a query on taskflow_tasks narrowed by filter (see store.TaskFilter.Matches).
+// Each field adds its condition only when set. Roles match through a taskflow_task_roles subquery
+// rather than a join, so a task listing several of the roles appears once; with a case set too, the
+// case is applied on both sides so the (case_id, role) index serves the match.
+func (s *TaskStore) filtered(ctx context.Context, filter store.TaskFilter) *gorm.DB {
+	query := s.db.WithContext(ctx).Model(&TaskRecordModel{})
 	if filter.CaseID != "" {
 		query = query.Where("case_id = ?", filter.CaseID)
+	}
+	if filter.ParentWorkflowID != "" {
+		query = query.Where("parent_workflow_id = ?", filter.ParentWorkflowID)
+	}
+	if filter.ActiveTemplateID != "" {
+		query = query.Where("active_task_template_id = ?", filter.ActiveTemplateID)
+	}
+	if filter.State != "" {
+		query = query.Where("state = ?", filter.State)
 	}
 	if len(filter.Roles) > 0 {
 		matching := s.db.WithContext(ctx).Model(&TaskRoleModel{}).Select("task_id").Where("role IN ?", filter.Roles)
@@ -105,18 +113,49 @@ func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []sto
 		}
 		query = query.Where("task_id IN (?)", matching)
 	}
+	return query
+}
+
+// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once.
+func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) ([]store.TaskRecord, error) {
 	var models []TaskRecordModel
-	if err := query.Find(&models).Error; err != nil {
-		slog.ErrorContext(ctx, "taskflow gorm store: GetTasks db error",
-			"case_id", filter.CaseID, "roles", filter.Roles, "error", err)
-		return nil
+	if err := s.filtered(ctx, filter).Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("get tasks: %w", err)
 	}
 
 	records := make([]store.TaskRecord, len(models))
 	for i, m := range models {
 		records[i] = m.ToDomain()
 	}
-	return records
+	return records, nil
+}
+
+// FindTask returns the ID and active step of the earliest created task filter matches, reading
+// only those two columns. filter.CaseID is required, so the query is served by the case_id index.
+func (s *TaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRef, error) {
+	if filter.CaseID == "" {
+		return store.TaskRef{}, store.ErrCaseIDRequired
+	}
+	var rows []struct {
+		TaskID       string
+		ActiveStepID *string
+	}
+	err := s.filtered(ctx, filter).
+		Select("task_id", "active_step_id").
+		Order("created_at, task_id").
+		Limit(1).
+		Scan(&rows).Error
+	if err != nil {
+		return store.TaskRef{}, fmt.Errorf("find task: %w", err)
+	}
+	if len(rows) == 0 {
+		return store.TaskRef{}, fmt.Errorf("%w: no task of case %s matches", store.ErrTaskNotFound, filter.CaseID)
+	}
+	ref := store.TaskRef{TaskID: rows[0].TaskID}
+	if rows[0].ActiveStepID != nil {
+		ref.StepID = *rows[0].ActiveStepID
+	}
+	return ref, nil
 }
 
 // jsonData encodes task data for the jsonb column the way FromDomain does.

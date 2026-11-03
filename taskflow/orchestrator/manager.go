@@ -763,8 +763,14 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 // tasks, across every workflow of the case. The zero filter lists every task. Taskflow never decides
 // who may read a task: for a listing shown to a caller, the host passes the roles the caller holds.
 // See store.TaskFilter.
-func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) []TaskView {
-	records := tm.db.GetTasks(ctx, filter)
+//
+// A non-nil error means the tasks could not be read. A filter that matches no task returns an empty
+// list and a nil error, so a caller can tell the two apart.
+func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) ([]TaskView, error) {
+	records, err := tm.db.GetTasks(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	views := make([]TaskView, 0, len(records))
 	for _, r := range records {
 		views = append(views, TaskView{
@@ -779,7 +785,7 @@ func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) []
 			UpdatedAt: r.UpdatedAt,
 		})
 	}
-	return views
+	return views, nil
 }
 
 // withoutSystemVars returns a copy of payload with system variables removed.

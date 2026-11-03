@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -92,7 +93,15 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	return cp
 }
 
-// TaskFilter selects the tasks TaskStore.GetTasks returns. Every field is optional: an empty field
+// ErrTaskNotFound is wrapped by the error a TaskStore method that returns a single task returns
+// when no task matches (see TaskStore.FindTask). Check it with errors.Is: any other error means
+// the tasks could not be read, which a caller must not treat as "no such task".
+var ErrTaskNotFound = errors.New("task not found")
+
+// ErrCaseIDRequired is returned by TaskStore.FindTask for a filter without a CaseID.
+var ErrCaseIDRequired = errors.New("taskflow store: FindTask requires a CaseID")
+
+// TaskFilter selects the tasks TaskStore.GetTasks and TaskStore.FindTask return. Every field is optional: an empty field
 // does not filter, and a set field narrows the result. The zero TaskFilter matches every task.
 //
 // A filter is a query, not an access check. Taskflow never decides who may read a task, here or
@@ -108,11 +117,36 @@ type TaskFilter struct {
 	// caller holds in every case, never a union of roles held in different cases. A role held in
 	// one case goes in a filter with that CaseID.
 	Roles []string
+	// ParentWorkflowID narrows the result to the tasks started by that workflow
+	// (TaskRecord.ParentWorkflowID). Empty: every workflow.
+	ParentWorkflowID string
+	// ActiveTemplateID narrows the result to the tasks whose active step runs that step template
+	// (TaskRecord.ActiveTaskTemplateID). Empty: any step template.
+	ActiveTemplateID string
+	// State narrows the result to the tasks in that state (TaskRecord.State). Empty: any state.
+	State string
 }
 
-// Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks.
+// TaskRef identifies a task and its active step: what a caller needs to complete the step (see
+// TaskManager.CompleteTaskStep). StepID is "" when the task has not claimed a step yet.
+type TaskRef struct {
+	TaskID string
+	StepID string // TaskRecord.ActiveStepID
+}
+
+// Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks
+// and FindTask.
 func (f TaskFilter) Matches(r TaskRecord) bool {
 	if f.CaseID != "" && r.CaseID != f.CaseID {
+		return false
+	}
+	if f.ParentWorkflowID != "" && r.ParentWorkflowID != f.ParentWorkflowID {
+		return false
+	}
+	if f.ActiveTemplateID != "" && r.ActiveTaskTemplateID != f.ActiveTemplateID {
+		return false
+	}
+	if f.State != "" && r.State != f.State {
 		return false
 	}
 	if len(f.Roles) == 0 {
@@ -179,8 +213,18 @@ type TaskStore interface {
 	GetTask(context context.Context, taskID string) (TaskRecord, bool)
 	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
 	// GetTasks returns each task that filter matches (see TaskFilter.Matches) once, in no
-	// particular order.
-	GetTasks(context context.Context, filter TaskFilter) []TaskRecord
+	// particular order. A non-nil error means the tasks could not be read; it is never returned
+	// for a filter that matches no task, which returns an empty result and a nil error.
+	GetTasks(context context.Context, filter TaskFilter) ([]TaskRecord, error)
+	// FindTask returns the TaskRef of a task that filter matches (see TaskFilter.Matches).
+	// filter.CaseID is required: FindTask returns ErrCaseIDRequired without it. When several tasks
+	// match, it returns the earliest created (ties broken by TaskID), so narrow the filter to the
+	// one task wanted. When none matches, the error wraps ErrTaskNotFound; any other error means
+	// the tasks could not be read.
+	//
+	// It is meant for a host resuming a waiting task, for example when an external system calls
+	// back: it reads only the task's ID and active step, not the task's data.
+	FindTask(context context.Context, filter TaskFilter) (TaskRef, error)
 
 	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq and the
 	// state is not StateCancelled, so a retry of the same step matches again, an older step's late
