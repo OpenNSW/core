@@ -66,26 +66,28 @@ func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) error
 	return nil
 }
 
-func (s *TaskStore) GetTask(ctx context.Context, taskID string) (store.TaskRecord, bool) {
+func (s *TaskStore) GetTask(ctx context.Context, taskID string) (store.TaskRecord, error) {
 	var model TaskRecordModel
-	if err := s.db.WithContext(ctx).First(&model, "task_id = ?", taskID).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.ErrorContext(ctx, "taskflow gorm store: GetTask db error", "task_id", taskID, "error", err)
-		}
-		return store.TaskRecord{}, false
+	err := s.db.WithContext(ctx).First(&model, "task_id = ?", taskID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.TaskRecord{}, fmt.Errorf("%w: %s", store.ErrTaskNotFound, taskID)
 	}
-	return model.ToDomain(), true
+	if err != nil {
+		return store.TaskRecord{}, fmt.Errorf("get task %s: %w", taskID, err)
+	}
+	return model.ToDomain(), nil
 }
 
-func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) (store.TaskRecord, bool) {
+func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) (store.TaskRecord, error) {
 	var model TaskRecordModel
-	if err := s.db.WithContext(ctx).First(&model, "task_workflow_id = ?", workflowID).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.ErrorContext(ctx, "taskflow gorm store: GetTaskByWorkflowID db error", "task_workflow_id", workflowID, "error", err)
-		}
-		return store.TaskRecord{}, false
+	err := s.db.WithContext(ctx).First(&model, "task_workflow_id = ?", workflowID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.TaskRecord{}, fmt.Errorf("%w: workflow %s", store.ErrTaskNotFound, workflowID)
 	}
-	return model.ToDomain(), true
+	if err != nil {
+		return store.TaskRecord{}, fmt.Errorf("get task of workflow %s: %w", workflowID, err)
+	}
+	return model.ToDomain(), nil
 }
 
 // filtered returns a query on taskflow_tasks narrowed by filter (see store.TaskFilter.Matches).

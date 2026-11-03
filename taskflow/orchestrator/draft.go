@@ -51,9 +51,9 @@ func (tm *TaskManager) SaveDraft(ctx context.Context, taskID, stepID string, pay
 		return ErrStepIDRequired
 	}
 
-	record, exists := tm.db.GetTask(ctx, taskID)
-	if !exists {
-		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+	record, err := tm.db.GetTask(ctx, taskID)
+	if err != nil {
+		return err
 	}
 	if record.ActiveStepID != stepID {
 		return fmt.Errorf("%w: call was for step %q, active step is %q", ErrStaleStep, stepID, record.ActiveStepID)

@@ -39,9 +39,9 @@ func wakeUpFixture(t *testing.T, db store.TaskStore) (*TaskManager, *mockTempora
 
 func wakeRow(t *testing.T, db store.TaskStore) store.TaskRecord {
 	t.Helper()
-	row, ok := db.GetTask(context.Background(), wakeTaskID)
-	if !ok {
-		t.Fatal("task row missing")
+	row, err := db.GetTask(context.Background(), wakeTaskID)
+	if err != nil {
+		t.Fatalf("task row missing: %v", err)
 	}
 	return row
 }

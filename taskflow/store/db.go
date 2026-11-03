@@ -93,9 +93,10 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	return cp
 }
 
-// ErrTaskNotFound is wrapped by the error a TaskStore method that returns a single task returns
-// when no task matches (see TaskStore.FindTask). Check it with errors.Is: any other error means
-// the tasks could not be read, which a caller must not treat as "no such task".
+// ErrTaskNotFound is wrapped by the error a TaskStore method that returns a single task
+// (GetTask, GetTaskByWorkflowID, FindTask) returns when no task matches. Check it with errors.Is:
+// any other error from them means the task could not be read, which a caller must not treat as
+// "no such task".
 var ErrTaskNotFound = errors.New("task not found")
 
 // ErrCaseIDRequired is returned by TaskStore.FindTask for a filter without a CaseID.
@@ -210,8 +211,12 @@ type TaskStore interface {
 	// InitTask also stores the record's ReadRoles, atomically with the row: a task must never be
 	// readable without its roles, and a retry must not duplicate them.
 	InitTask(context context.Context, record TaskRecord) error
-	GetTask(context context.Context, taskID string) (TaskRecord, bool)
-	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
+	// GetTask returns the task with ID taskID. When there is none, the error wraps
+	// ErrTaskNotFound; any other error means the task could not be read.
+	GetTask(context context.Context, taskID string) (TaskRecord, error)
+	// GetTaskByWorkflowID returns the task whose TaskWorkflowID is workflowID. When there is none,
+	// the error wraps ErrTaskNotFound; any other error means the task could not be read.
+	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, error)
 	// GetTasks returns each task that filter matches (see TaskFilter.Matches) once, in no
 	// particular order. A non-nil error means the tasks could not be read; it is never returned
 	// for a filter that matches no task, which returns an empty result and a nil error.

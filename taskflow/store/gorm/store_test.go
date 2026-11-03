@@ -64,9 +64,9 @@ func newTestStore(t *testing.T) (*TaskStore, context.Context) {
 
 func mustGet(t *testing.T, s *TaskStore, ctx context.Context) store.TaskRecord {
 	t.Helper()
-	got, ok := s.GetTask(ctx, task1)
-	if !ok {
-		t.Fatal("task not found")
+	got, err := s.GetTask(ctx, task1)
+	if err != nil {
+		t.Fatalf("task not found: %v", err)
 	}
 	return got
 }
@@ -161,7 +161,7 @@ func TestInitTask_RolesAreAtomicWithRow(t *testing.T) {
 	if err := s.InitTask(ctx, rec); err == nil {
 		t.Fatal("InitTask succeeded without a taskflow_task_roles table, want an error")
 	}
-	if _, ok := s.GetTask(ctx, "task-2"); ok {
+	if _, err := s.GetTask(ctx, "task-2"); !errors.Is(err, store.ErrTaskNotFound) {
 		t.Error("task row exists although its roles were not stored")
 	}
 }
@@ -781,5 +781,27 @@ func TestFindTaskErrors(t *testing.T) {
 	// No taskflow_task_roles table: a role filter's subquery fails.
 	if _, err := s.FindTask(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}}); err == nil || errors.Is(err, store.ErrTaskNotFound) {
 		t.Errorf("FindTask without a roles table err = %v, want an error other than ErrTaskNotFound", err)
+	}
+}
+
+// GetTask and GetTaskByWorkflowID wrap store.ErrTaskNotFound when there is no such task, and
+// return any other failure as a different error.
+func TestGetTaskErrors(t *testing.T) {
+	s, ctx := newTestStore(t)
+	if _, err := s.GetTask(ctx, "missing"); !errors.Is(err, store.ErrTaskNotFound) {
+		t.Errorf("GetTask(missing) err = %v, want ErrTaskNotFound", err)
+	}
+	if _, err := s.GetTaskByWorkflowID(ctx, "missing-wf"); !errors.Is(err, store.ErrTaskNotFound) {
+		t.Errorf("GetTaskByWorkflowID(missing) err = %v, want ErrTaskNotFound", err)
+	}
+
+	if err := s.db.Exec("DROP TABLE taskflow_tasks").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTask(ctx, task1); err == nil || errors.Is(err, store.ErrTaskNotFound) {
+		t.Errorf("GetTask on a failed read err = %v, want an error other than ErrTaskNotFound", err)
+	}
+	if _, err := s.GetTaskByWorkflowID(ctx, "wf"); err == nil || errors.Is(err, store.ErrTaskNotFound) {
+		t.Errorf("GetTaskByWorkflowID on a failed read err = %v, want an error other than ErrTaskNotFound", err)
 	}
 }

@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -19,18 +20,21 @@ func (t *testStore) InitTask(_ context.Context, record TaskRecord) error {
 	return nil
 }
 
-func (t *testStore) GetTask(_ context.Context, taskID string) (TaskRecord, bool) {
+func (t *testStore) GetTask(_ context.Context, taskID string) (TaskRecord, error) {
 	record, ok := t.tasks[taskID]
-	return record, ok
+	if !ok {
+		return TaskRecord{}, ErrTaskNotFound
+	}
+	return record, nil
 }
 
-func (t *testStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (TaskRecord, bool) {
+func (t *testStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (TaskRecord, error) {
 	for _, record := range t.tasks {
 		if record.TaskWorkflowID == workflowID {
-			return record, true
+			return record, nil
 		}
 	}
-	return TaskRecord{}, false
+	return TaskRecord{}, ErrTaskNotFound
 }
 
 // GetTasks applies the filter's reference rule, TaskFilter.Matches, to the stored tasks.
@@ -117,18 +121,21 @@ func TestTaskStoreInterface(t *testing.T) {
 	ctx := context.Background()
 	store.InitTask(ctx, record)
 
-	fetched, ok := store.GetTask(ctx, "test-1")
-	if !ok {
-		t.Fatal("Expected task to be fetched")
+	fetched, err := store.GetTask(ctx, "test-1")
+	if err != nil {
+		t.Fatalf("Expected task to be fetched: %v", err)
 	}
 
 	if fetched.TaskType != "TEST" {
 		t.Errorf("Expected TaskType 'TEST', got %s", fetched.TaskType)
 	}
 
-	fetchedTaskWF, ok := store.GetTaskByWorkflowID(ctx, "task-wf-1")
-	if !ok {
-		t.Fatal("Expected task to be fetched by Task workflow ID")
+	fetchedTaskWF, err := store.GetTaskByWorkflowID(ctx, "task-wf-1")
+	if err != nil {
+		t.Fatalf("Expected task to be fetched by Task workflow ID: %v", err)
+	}
+	if _, err := store.GetTask(ctx, "missing"); !errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("GetTask(missing) err = %v, want ErrTaskNotFound", err)
 	}
 	if fetchedTaskWF.TaskID != "test-1" {
 		t.Errorf("Expected TaskID 'test-1', got %s", fetchedTaskWF.TaskID)

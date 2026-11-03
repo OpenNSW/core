@@ -76,10 +76,10 @@ func (tm *TaskManager) ClaimTask(ctx context.Context, taskID, holder string) err
 		}
 
 		// The guard did not match: read the row to say why.
-		record, ok := tm.db.GetTask(ctx, taskID)
+		record, err := tm.db.GetTask(ctx, taskID)
 		switch {
-		case !ok:
-			return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+		case err != nil:
+			return err
 		case record.State == store.StateCompleted:
 			return fmt.Errorf("%w: %s", ErrTaskCompleted, taskID)
 		case record.ClaimedBy != "" && record.ClaimedBy != holder:
@@ -107,10 +107,10 @@ func (tm *TaskManager) ReleaseTask(ctx context.Context, taskID, holder string) e
 			return nil
 		}
 
-		record, ok := tm.db.GetTask(ctx, taskID)
+		record, err := tm.db.GetTask(ctx, taskID)
 		switch {
-		case !ok:
-			return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+		case err != nil:
+			return err
 		case record.ClaimedBy == "":
 			return nil
 		case record.ClaimedBy != holder:

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -125,22 +126,25 @@ func (s *safeMockTaskStore) InitTask(_ context.Context, task store.TaskRecord) e
 	return nil
 }
 
-func (s *safeMockTaskStore) GetTask(_ context.Context, taskID string) (store.TaskRecord, bool) {
+func (s *safeMockTaskStore) GetTask(_ context.Context, taskID string) (store.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	task, exists := s.tasks[taskID]
-	return task, exists
+	if !exists {
+		return store.TaskRecord{}, fmt.Errorf("%w: %s", store.ErrTaskNotFound, taskID)
+	}
+	return task, nil
 }
 
-func (s *safeMockTaskStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (store.TaskRecord, bool) {
+func (s *safeMockTaskStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (store.TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, t := range s.tasks {
 		if t.TaskWorkflowID == workflowID {
-			return t, true
+			return t, nil
 		}
 	}
-	return store.TaskRecord{}, false
+	return store.TaskRecord{}, fmt.Errorf("%w: workflow %s", store.ErrTaskNotFound, workflowID)
 }
 
 // GetTasks applies the filter's reference rule, store.TaskFilter.Matches, to the stored tasks.
@@ -611,9 +615,9 @@ func TestStartTask_PassesThroughCaseID(t *testing.T) {
 				t.Fatalf("StartTask failed: %v", err)
 			}
 
-			task, ok := db.GetTask(context.Background(), "step-1")
-			if !ok {
-				t.Fatal("expected task record to be saved")
+			task, err := db.GetTask(context.Background(), "step-1")
+			if err != nil {
+				t.Fatalf("expected task record to be saved: %v", err)
 			}
 			if task.CaseID != tc.caseID {
 				t.Errorf("CaseID = %q, want %q", task.CaseID, tc.caseID)
@@ -638,9 +642,9 @@ func TestStartTask_CopiesReadRolesFromTemplate(t *testing.T) {
 		t.Fatalf("StartTask failed: %v", err)
 	}
 
-	task, ok := db.GetTask(context.Background(), "step-1")
-	if !ok {
-		t.Fatal("expected task record to be saved")
+	task, err := db.GetTask(context.Background(), "step-1")
+	if err != nil {
+		t.Fatalf("expected task record to be saved: %v", err)
 	}
 	if !slices.Equal(task.ReadRoles, []string{"officer"}) {
 		t.Errorf("ReadRoles = %v, want [officer]", task.ReadRoles)

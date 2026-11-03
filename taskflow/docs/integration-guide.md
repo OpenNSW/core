@@ -34,8 +34,8 @@ tm := orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions *
 ```go
 type TaskStore interface {
     InitTask(ctx context.Context, record TaskRecord)
-    GetTask(ctx context.Context, taskID string) (TaskRecord, bool)
-    GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, bool)
+    GetTask(ctx context.Context, taskID string) (TaskRecord, error)
+    GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, error)
     GetTasks(ctx context.Context, filter TaskFilter) ([]TaskRecord, error)
     FindTask(ctx context.Context, filter TaskFilter) (TaskRef, error)
 
@@ -55,8 +55,8 @@ type TaskStore interface {
 **Contracts:**
 
 - **`InitTask` is an upsert** keyed on `record.TaskID`. It creates the row (`StartTask`) and writes the coarse fields. It **must not write `ActiveStepID` or `Seq`**: those belong to the guarded statements, and a stale full-record save would move them backwards. The signature returns no error; if your store can fail, log and surface failures via your own observability.
-- **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). Must return `(zero, false)` when absent, never panic.
-- **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
+- **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). When absent, it must return an error wrapping `store.ErrTaskNotFound` (checked with `errors.Is`), never panic. Any other failure must be returned as a different error: the orchestrator retries it, while it treats `ErrTaskNotFound` as final (a completion or hold for an unknown workflow is ignored, an HTTP read is a 404).
+- **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`. Not-found and failed reads are reported as for `GetTask`.
 - **`GetTasks`** returns each record that `filter.Matches`, once: every field is optional and narrows the result only when set. A non-empty `filter.CaseID` keeps the records of that case; a non-empty `filter.Roles` keeps the records whose `ReadRoles` contain at least one of them, so a record with no `ReadRoles` then never matches. Empty `Roles` (nil or no elements) applies no role filter, and the zero filter returns every record. `filter.ParentWorkflowID`, `filter.ActiveTemplateID` and `filter.State` keep the records whose `ParentWorkflowID`, `ActiveTaskTemplateID` and `State` equal them. Use `TaskFilter.Matches` as the reference for an in-memory store. A failed read **must return an error**, never an empty result: a caller has to tell "no tasks" from "could not read the tasks". Used by the portal listing API.
 - **`FindTask`** returns the `TaskRef` (`TaskID` and `ActiveStepID`, `""` before the first step) of one record that `filter.Matches`; when several match, the earliest created (ties broken by `TaskID`). `filter.CaseID` is required: without it, return `ErrCaseIDRequired`. Read only those two fields, not the task data. No match is an error wrapping `store.ErrTaskNotFound` (check it with `errors.Is`); any other error means the read failed, and must not be treated as "nothing is waiting". A host uses it to resume a task waiting on an external system, for example `FindTask(ctx, TaskFilter{CaseID: caseID, ActiveTemplateID: "await_payment"})`, then `CompleteTaskStep` with the ref.
 - **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
@@ -291,7 +291,7 @@ What your host needs to do:
 
 ## Error semantics
 
-`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrStepNotGuarded` (see [Requiring an authorization extension](#requiring-an-authorization-extension)) maps to 403. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
+`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrStepNotGuarded` (see [Requiring an authorization extension](#requiring-an-authorization-extension)) maps to 403. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo`, `SaveDraft` and the claim methods, maps to 404. It is the same value as `store.ErrTaskNotFound`. Any other error from these methods (the store could not read the task, for example) is not a 404: answer it with 5xx so the client retries. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
 
 The orchestrator uses two sentinel errors to signal "this isn't really an error, the workflow should park":
 

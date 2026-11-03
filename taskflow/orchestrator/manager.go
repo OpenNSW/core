@@ -92,7 +92,10 @@ var ErrTaskNotOpen = errors.New("task is not open: it has completed or does not 
 var ErrStepIDRequired = errors.New("step ID is required")
 
 // ErrTaskNotFound means no task has the given ID. A caller serving HTTP should answer it with 404.
-var ErrTaskNotFound = errors.New("task not found")
+// It is store.ErrTaskNotFound, so errors.Is matches it on an error from the store too. Any other
+// error from a read means the task could not be read, which a caller serving HTTP should answer
+// with 5xx, not 404.
+var ErrTaskNotFound = store.ErrTaskNotFound
 
 // ErrStepNotGuarded is returned by CompleteTaskStep and SaveDraft when the TaskManager was built
 // WithRequiredPreResumeExtensions and the active step's template does not declare one of them in
@@ -286,9 +289,10 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 		return nil, plugins.Permanent(plugins.ErrorTypeInput, fmt.Errorf("[StartTaskStep] payload for workflow %s has no step ID", payload.WorkflowID))
 	}
 
-	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
-	if !exists {
-		return nil, fmt.Errorf("[StartTaskStep] no task record found for workflow %s", payload.WorkflowID)
+	// Retryable either way: a missing row may not be visible yet, and a failed read may succeed.
+	record, err := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
+	if err != nil {
+		return nil, fmt.Errorf("[StartTaskStep] %w", err)
 	}
 
 	// The record's version is the one the task started on; every step uses it.
@@ -388,10 +392,15 @@ func (tm *TaskManager) StartTaskStep(ctx context.Context, payload engine.TaskPay
 // Writing COMPLETED first means it cannot serve as the "already done" marker for step 2; that is
 // why a completed row does not short-circuit a retry.
 func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engine.WorkflowCompletion) error {
-	record, exists := tm.db.GetTaskByWorkflowID(ctx, completion.WorkflowID)
-	if !exists {
+	record, err := tm.db.GetTaskByWorkflowID(ctx, completion.WorkflowID)
+	if errors.Is(err, store.ErrTaskNotFound) {
 		// Not a workflow we own — safe to ignore.
 		return nil
+	}
+	if err != nil {
+		// Returning nil here would drop the completion and leave the parent waiting forever: fail
+		// so the activity is retried.
+		return fmt.Errorf("handle completion of workflow %s: %w", completion.WorkflowID, err)
 	}
 	if record.State == store.StateCancelled {
 		tm.logger.InfoContext(ctx, "dropping completion of a cancelled task", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID)
@@ -405,7 +414,11 @@ func (tm *TaskManager) HandleTaskCompletion(ctx context.Context, completion engi
 		return fmt.Errorf("mark task %s completed: %w", record.TaskID, err)
 	}
 	if rows == 0 {
-		if cur, ok := tm.db.GetTask(ctx, record.TaskID); ok && cur.State == store.StateCancelled {
+		cur, err := tm.db.GetTask(ctx, record.TaskID)
+		if err != nil {
+			return fmt.Errorf("handle completion of task %s: %w", record.TaskID, err)
+		}
+		if cur.State == store.StateCancelled {
 			tm.logger.InfoContext(ctx, "dropping completion of a task cancelled while completing", "task_workflow_id", completion.WorkflowID, "task_id", record.TaskID)
 			return nil
 		}
@@ -467,9 +480,9 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 		return ErrStepIDRequired
 	}
 
-	record, exists := tm.db.GetTask(ctx, taskID)
-	if !exists {
-		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+	record, err := tm.db.GetTask(ctx, taskID)
+	if err != nil {
+		return err
 	}
 	if record.State == store.StateCompleted || record.State == store.StateCancelled {
 		return fmt.Errorf("%w: task %s is %s", ErrStaleStep, taskID, record.State)
@@ -578,15 +591,18 @@ func (tm *TaskManager) CancelTask(ctx context.Context, taskID, reason string) er
 	if !ok {
 		return fmt.Errorf("cancel task %s: the task workflow manager cannot terminate workflows", taskID)
 	}
-	record, exists := tm.db.GetTask(ctx, taskID)
-	if !exists {
+	record, err := tm.db.GetTask(ctx, taskID)
+	if errors.Is(err, store.ErrTaskNotFound) {
 		return fmt.Errorf("%w: task %s not found", ErrTaskNotOpen, taskID)
+	}
+	if err != nil {
+		return fmt.Errorf("cancel task %s: %w", taskID, err)
 	}
 	if record.State == store.StateCompleted {
 		return fmt.Errorf("%w: task %s has completed", ErrTaskNotOpen, taskID)
 	}
 
-	err := terminator.TerminateWorkflow(ctx, record.TaskWorkflowID, "", reason)
+	err = terminator.TerminateWorkflow(ctx, record.TaskWorkflowID, "", reason)
 	if errors.Is(err, engine.ErrWorkflowNotFound) {
 		tm.logger.InfoContext(ctx, "task workflow already closed", "task_id", taskID, "task_workflow_id", record.TaskWorkflowID)
 		err = nil
@@ -615,9 +631,12 @@ func (tm *TaskManager) CancelTask(ctx context.Context, taskID, reason string) er
 // notification that arrives after the park was resolved and a later step claimed the row is
 // dropped.
 func (tm *TaskManager) HoldTask(ctx context.Context, payload engine.AdminParkPayload) error {
-	record, exists := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
-	if !exists {
+	record, err := tm.db.GetTaskByWorkflowID(ctx, payload.WorkflowID)
+	if errors.Is(err, store.ErrTaskNotFound) {
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("hold task of workflow %s: %w", payload.WorkflowID, err)
 	}
 	rows, err := tm.db.HoldTask(ctx, record.TaskID, payload.Seq)
 	if err != nil {
@@ -721,9 +740,9 @@ func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskReco
 // GetTaskRenderInfo retrieves a task record and dynamically decorates it with rich render metadata
 // (like JSON schemas) fetched on-the-fly from its executing plugin.
 func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string) (TaskView, error) {
-	record, exists := tm.db.GetTask(context, taskID)
-	if !exists {
-		return TaskView{}, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+	record, err := tm.db.GetTask(context, taskID)
+	if err != nil {
+		return TaskView{}, err
 	}
 
 	renderConfig, err := renderconfig.Load(context, tm.artifacts, record)
