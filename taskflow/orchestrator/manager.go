@@ -760,17 +760,13 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 //
 // The host fills filter.Roles with the roles the caller holds (taskflow never decides them), and
 // gets the tasks whose task template lists one of them in read.roles. A task whose template lists
-// no roles is never returned: the host decides alone who sees it. filter.CaseID narrows the result to the case's tasks, across every workflow of the case. See
-// store.TaskFilter.
+// no roles is never returned: the host decides alone who sees it. filter.CaseID narrows the result
+// to the case's tasks, across every workflow of the case. See store.TaskFilter.
 func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) []TaskView {
-	return summaries(tm.db.GetTasks(ctx, filter))
-}
-
-// summaries converts records to list views, without the rendered View.
-func summaries(records []store.TaskRecord) []TaskView {
-	resList := make([]TaskView, 0, len(records))
+	records := tm.db.GetTasks(ctx, filter)
+	views := make([]TaskView, 0, len(records))
 	for _, r := range records {
-		resList = append(resList, TaskView{
+		views = append(views, TaskView{
 			TaskID:    r.TaskID,
 			TaskType:  r.TaskType,
 			State:     r.State,
@@ -782,7 +778,7 @@ func summaries(records []store.TaskRecord) []TaskView {
 			UpdatedAt: r.UpdatedAt,
 		})
 	}
-	return resList
+	return views
 }
 
 // withoutSystemVars returns a copy of payload with system variables removed.

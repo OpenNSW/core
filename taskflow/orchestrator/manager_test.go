@@ -143,6 +143,7 @@ func (s *safeMockTaskStore) GetTaskByWorkflowID(_ context.Context, workflowID st
 	return store.TaskRecord{}, false
 }
 
+// GetTasks applies the filter's reference rule, store.TaskFilter.Matches, to the stored tasks.
 func (s *safeMockTaskStore) GetTasks(_ context.Context, filter store.TaskFilter) []store.TaskRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

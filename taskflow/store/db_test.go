@@ -33,6 +33,7 @@ func (t *testStore) GetTaskByWorkflowID(_ context.Context, workflowID string) (T
 	return TaskRecord{}, false
 }
 
+// GetTasks applies the filter's reference rule, TaskFilter.Matches, to the stored tasks.
 func (t *testStore) GetTasks(_ context.Context, filter TaskFilter) []TaskRecord {
 	var list []TaskRecord
 	for _, record := range t.tasks {

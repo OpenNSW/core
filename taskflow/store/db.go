@@ -102,7 +102,10 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 type TaskFilter struct {
 	// CaseID narrows the result to the case's tasks (TaskRecord.CaseID). Empty: every case.
 	CaseID string
-	// Roles are the roles the caller holds, as the host decides them; taskflow never does.
+	// Roles are the roles the caller holds, as the host decides them; taskflow never does. They are
+	// matched by name only, in every case the filter covers: with CaseID empty, pass only roles the
+	// caller holds in every case, never a union of roles held in different cases. A role held in
+	// one case goes in a filter with that CaseID.
 	Roles []string
 }
 

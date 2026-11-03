@@ -88,15 +88,17 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	return model.ToDomain(), true
 }
 
+// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once. With no roles
+// it returns nil without querying. It matches roles through a task_roles subquery rather than a
+// join, so a task listing several of the roles appears once, and applies a case on both sides so
+// the (case_id, role) index serves the match. A query error is logged and returns nil.
 func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []store.TaskRecord {
 	if len(filter.Roles) == 0 {
 		return nil // no role to match: skip the query
 	}
-	// A subquery rather than a join, so a task matching several of the roles is returned once.
 	matching := s.db.WithContext(ctx).Model(&TaskRoleModel{}).Select("task_id").Where("role IN ?", filter.Roles)
 	query := s.db.WithContext(ctx)
 	if filter.CaseID != "" {
-		// On both sides: task_roles carries the case so its (case_id, role) index serves the match.
 		matching = matching.Where("case_id = ?", filter.CaseID)
 		query = query.Where("case_id = ?", filter.CaseID)
 	}
