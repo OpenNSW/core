@@ -48,15 +48,17 @@ func (t *testStore) GetTasks(_ context.Context, filter TaskFilter) ([]TaskRecord
 	return list, nil
 }
 
-func (t *testStore) FindTask(ctx context.Context, filter TaskFilter) (TaskRef, error) {
+func (t *testStore) FindTask(ctx context.Context, filter TaskFilter) (TaskRecord, error) {
 	if filter.CaseID == "" {
-		return TaskRef{}, ErrCaseIDRequired
+		return TaskRecord{}, ErrCaseIDRequired
 	}
 	list, _ := t.GetTasks(ctx, filter)
 	if len(list) == 0 {
-		return TaskRef{}, ErrTaskNotFound
+		return TaskRecord{}, ErrTaskNotFound
 	}
-	return TaskRef{TaskID: list[0].TaskID, StepID: list[0].ActiveStepID}, nil
+	found := list[0]
+	found.Data = nil
+	return found, nil
 }
 
 func (t *testStore) ClaimStep(context.Context, string, StepClaim) (int64, error) { return 0, nil }

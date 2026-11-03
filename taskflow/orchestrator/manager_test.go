@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,16 +161,24 @@ func (s *safeMockTaskStore) GetTasks(_ context.Context, filter store.TaskFilter)
 	return out, nil
 }
 
-// FindTask returns a task filter matches; the orchestrator never calls it.
-func (s *safeMockTaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRef, error) {
+// FindTask returns the earliest created task filter matches (ties broken by TaskID), without its
+// data, as the gorm store does.
+func (s *safeMockTaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRecord, error) {
 	if filter.CaseID == "" {
-		return store.TaskRef{}, store.ErrCaseIDRequired
+		return store.TaskRecord{}, store.ErrCaseIDRequired
 	}
 	records, _ := s.GetTasks(ctx, filter)
 	if len(records) == 0 {
-		return store.TaskRef{}, store.ErrTaskNotFound
+		return store.TaskRecord{}, store.ErrTaskNotFound
 	}
-	return store.TaskRef{TaskID: records[0].TaskID, StepID: records[0].ActiveStepID}, nil
+	found := slices.MinFunc(records, func(a, b store.TaskRecord) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.TaskID, b.TaskID)
+	})
+	found.Data = nil
+	return found, nil
 }
 
 // The guarded step writes mirror the SQL guards of the real stores.
@@ -1049,6 +1058,52 @@ type failingListStore struct {
 
 func (s failingListStore) GetTasks(context.Context, store.TaskFilter) ([]store.TaskRecord, error) {
 	return nil, s.err
+}
+
+// FindTask returns the summary of the task a callback handler resumes: its ID and active step
+// for CompleteTaskStep, and the rest of the listing fields, without the rendered view.
+func TestFindTask_ReturnsTheWaitingTasksSummary(t *testing.T) {
+	db := newSafeMockTaskStore()
+	ctx := context.Background()
+	db.InitTask(ctx, store.TaskRecord{TaskID: "task-form", CaseID: "C1", TaskType: "TEST", State: "PENDING_USER", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{TaskID: "task-await", CaseID: "C1", TaskType: "TEST", State: "STARTING", ClaimedBy: "user-a", Data: map[string]any{"big": "payload"}})
+	if _, err := db.ClaimStep(ctx, "task-await", store.StepClaim{StepID: stepA, Seq: 4, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"}); err != nil {
+		t.Fatal(err)
+	}
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	got, err := tm.FindTask(ctx, store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TaskID != "task-await" || got.StepID != stepA || got.Version != 4 || got.State != "QUEUED_EXTERNALLY" ||
+		got.TaskType != "TEST" || got.ClaimedBy != "user-a" || got.View != nil {
+		t.Errorf("FindTask = %+v, want task-await at step %s, version 4, no view", got, stepA)
+	}
+
+	if _, err := tm.FindTask(ctx, store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "PENDING_USER"}); !errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("FindTask(no match) err = %v, want ErrTaskNotFound", err)
+	}
+	if _, err := tm.FindTask(ctx, store.TaskFilter{ActiveTemplateID: "await"}); !errors.Is(err, store.ErrCaseIDRequired) {
+		t.Errorf("FindTask(no case) err = %v, want store.ErrCaseIDRequired", err)
+	}
+}
+
+// FindTask returns the store's error, never ErrTaskNotFound, when the task cannot be read, so a
+// callback handler fails and the sender retries instead of acknowledging.
+func TestFindTask_ReturnsAFailedReadAsNotNotFound(t *testing.T) {
+	tm := newTestTaskManager(failingFindStore{newSafeMockTaskStore()}, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+	_, err := tm.FindTask(context.Background(), store.TaskFilter{CaseID: "C1"})
+	if !errors.Is(err, errDBDown) || errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("FindTask err = %v, want %v and not ErrTaskNotFound", err, errDBDown)
+	}
+}
+
+// failingFindStore is a store whose FindTask fails as when the database is down.
+type failingFindStore struct{ *safeMockTaskStore }
+
+func (failingFindStore) FindTask(context.Context, store.TaskFilter) (store.TaskRecord, error) {
+	return store.TaskRecord{}, errDBDown
 }
 
 // GetTasks with roles lists only the tasks whose read roles include one of them, and without roles

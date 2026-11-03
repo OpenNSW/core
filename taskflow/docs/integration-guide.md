@@ -31,13 +31,15 @@ tm := orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions *
 
 ## 1. Implementing `TaskStore`
 
+The store is taskflow's persistence port: you provide one to `NewTaskManager` (the gorm store in `store/gorm`, or your own), and only `TaskManager` calls it. Your own code reads and acts on tasks through `TaskManager`, never through the store: the store's writes are guarded steps of the manager's protocol, and its reads expose fields the manager keeps internal.
+
 ```go
 type TaskStore interface {
     InitTask(ctx context.Context, record TaskRecord)
     GetTask(ctx context.Context, taskID string) (TaskRecord, error)
     GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, error)
     GetTasks(ctx context.Context, filter TaskFilter) ([]TaskRecord, error)
-    FindTask(ctx context.Context, filter TaskFilter) (TaskRef, error)
+    FindTask(ctx context.Context, filter TaskFilter) (TaskRecord, error)
 
     // Guarded step writes: one atomic conditional statement each, returning the rows changed.
     ClaimStep(ctx context.Context, taskID string, claim StepClaim) (int64, error)
@@ -58,7 +60,7 @@ type TaskStore interface {
 - **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). When absent, it must return an error wrapping `store.ErrTaskNotFound` (checked with `errors.Is`), never panic. Any other failure must be returned as a different error: the orchestrator retries it, while it treats `ErrTaskNotFound` as final (a completion or hold for an unknown workflow is ignored, an HTTP read is a 404).
 - **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`. Not-found and failed reads are reported as for `GetTask`.
 - **`GetTasks`** returns each record that `filter.Matches`, once: every field is optional and narrows the result only when set. A non-empty `filter.CaseID` keeps the records of that case; a non-empty `filter.Roles` keeps the records whose `ReadRoles` contain at least one of them, so a record with no `ReadRoles` then never matches. Empty `Roles` (nil or no elements) applies no role filter, and the zero filter returns every record. `filter.ParentWorkflowID`, `filter.ActiveTemplateID` and `filter.State` keep the records whose `ParentWorkflowID`, `ActiveTaskTemplateID` and `State` equal them. Use `TaskFilter.Matches` as the reference for an in-memory store. A failed read **must return an error**, never an empty result: a caller has to tell "no tasks" from "could not read the tasks". Used by the portal listing API.
-- **`FindTask`** returns the `TaskRef` (`TaskID` and `ActiveStepID`, `""` before the first step) of one record that `filter.Matches`; when several match, the earliest created (ties broken by `TaskID`). `filter.CaseID` is required: without it, return `ErrCaseIDRequired`. Read only those two fields, not the task data. No match is an error wrapping `store.ErrTaskNotFound` (check it with `errors.Is`); any other error means the read failed, and must not be treated as "nothing is waiting". A host uses it to resume a task waiting on an external system, for example `FindTask(ctx, TaskFilter{CaseID: caseID, ActiveTemplateID: "await_payment"})`, then `CompleteTaskStep` with the ref.
+- **`FindTask`** returns one record that `filter.Matches`, without its data: leave `Data` nil and don't read it, since it is the one field that can be large. When several match, return the earliest created (ties broken by `TaskID`). `filter.CaseID` is required: without it, return `ErrCaseIDRequired`. No match is an error wrapping `store.ErrTaskNotFound`; any other error means the read failed, and must not be reported as `ErrTaskNotFound`. Backs `TaskManager.FindTask`.
 - **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
 
   | Method              | Guard                                                                                          | Sets                                                                                       |
@@ -353,6 +355,22 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 The portal calls this with the `step_id` its task view reported and whatever payload makes sense for the current step. The shape is typed by your step templates and plugins, not by the orchestrator. A nil return means the workflow **accepted** the step; the row shows `ADVANCING` (or the next step) from then on, so clients refetch instead of assuming the state. Map `ErrStepIDRequired` to 400 and `ErrStaleStep` to 409.
 
 An external system that calls back is addressed by the **callback token** the dispatch carried in `X-Task-ID` (see `plugins.CallbackToken`): call `CompleteTaskStepByToken(ctx, token, payload)`. A malformed token returns an error wrapping `callbacktoken.ErrInvalid` (400). The receiver should also use the token as its idempotency key: it is the same on every retry of one step's dispatch and different for every step.
+
+An external system that calls back with its own reference instead of the token (a case or order number, say) is addressed by finding the task that waits on it. Map the reference to its case, find the task with `FindTask`, and complete the step it returns:
+
+```go
+task, err := tm.FindTask(ctx, store.TaskFilter{CaseID: caseID, ActiveTemplateID: "await_payment", State: "QUEUED_EXTERNALLY"})
+switch {
+case errors.Is(err, orchestrator.ErrTaskNotFound):
+    // Nothing is waiting (a duplicate callback, say): acknowledge.
+case err != nil:
+    // The task could not be read: answer 5xx so the sender retries. Never acknowledge here.
+default:
+    err = tm.CompleteTaskStep(ctx, task.TaskID, task.StepID, payload)
+}
+```
+
+`FindTask` returns the task's summary, as `GetTasks` lists it, without its data. Narrow the filter to the one task wanted: when several match, it returns the earliest created.
 
 ### Requiring an authorization extension
 

@@ -132,32 +132,25 @@ func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) ([]st
 	return records, nil
 }
 
-// FindTask returns the ID and active step of the earliest created task filter matches, reading
-// only those two columns. filter.CaseID is required, so the query is served by the case_id index.
-func (s *TaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRef, error) {
+// FindTask returns the earliest created task filter matches, reading every column but data, the
+// one that can be large. filter.CaseID is required, so the query is served by the case_id index.
+func (s *TaskStore) FindTask(ctx context.Context, filter store.TaskFilter) (store.TaskRecord, error) {
 	if filter.CaseID == "" {
-		return store.TaskRef{}, store.ErrCaseIDRequired
+		return store.TaskRecord{}, store.ErrCaseIDRequired
 	}
-	var rows []struct {
-		TaskID       string
-		ActiveStepID *string
-	}
+	var models []TaskRecordModel
 	err := s.filtered(ctx, filter).
-		Select("task_id", "active_step_id").
+		Omit("data").
 		Order("created_at, task_id").
 		Limit(1).
-		Scan(&rows).Error
+		Find(&models).Error
 	if err != nil {
-		return store.TaskRef{}, fmt.Errorf("find task: %w", err)
+		return store.TaskRecord{}, fmt.Errorf("find task: %w", err)
 	}
-	if len(rows) == 0 {
-		return store.TaskRef{}, fmt.Errorf("%w: no task of case %s matches", store.ErrTaskNotFound, filter.CaseID)
+	if len(models) == 0 {
+		return store.TaskRecord{}, fmt.Errorf("%w: no task of case %s matches", store.ErrTaskNotFound, filter.CaseID)
 	}
-	ref := store.TaskRef{TaskID: rows[0].TaskID}
-	if rows[0].ActiveStepID != nil {
-		ref.StepID = *rows[0].ActiveStepID
-	}
-	return ref, nil
+	return models[0].ToDomain(), nil
 }
 
 // jsonData encodes task data for the jsonb column the way FromDomain does.

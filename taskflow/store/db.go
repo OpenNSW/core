@@ -128,13 +128,6 @@ type TaskFilter struct {
 	State string
 }
 
-// TaskRef identifies a task and its active step: what a caller needs to complete the step (see
-// TaskManager.CompleteTaskStep). StepID is "" when the task has not claimed a step yet.
-type TaskRef struct {
-	TaskID string
-	StepID string // TaskRecord.ActiveStepID
-}
-
 // Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks
 // and FindTask.
 func (f TaskFilter) Matches(r TaskRecord) bool {
@@ -221,15 +214,16 @@ type TaskStore interface {
 	// particular order. A non-nil error means the tasks could not be read; it is never returned
 	// for a filter that matches no task, which returns an empty result and a nil error.
 	GetTasks(context context.Context, filter TaskFilter) ([]TaskRecord, error)
-	// FindTask returns the TaskRef of a task that filter matches (see TaskFilter.Matches).
-	// filter.CaseID is required: FindTask returns ErrCaseIDRequired without it. When several tasks
-	// match, it returns the earliest created (ties broken by TaskID), so narrow the filter to the
-	// one task wanted. When none matches, the error wraps ErrTaskNotFound; any other error means
-	// the tasks could not be read.
+	// FindTask returns a task that filter matches (see TaskFilter.Matches), without its Data:
+	// the returned record's Data is nil whatever the task holds, and ReadRoles is empty as for the
+	// other reads. filter.CaseID is required: FindTask returns ErrCaseIDRequired without it. When
+	// several tasks match, it returns the earliest created (ties broken by TaskID), so narrow the
+	// filter to the one task wanted. When none matches, the error wraps ErrTaskNotFound; any other
+	// error means the task could not be read.
 	//
-	// It is meant for a host resuming a waiting task, for example when an external system calls
-	// back: it reads only the task's ID and active step, not the task's data.
-	FindTask(context context.Context, filter TaskFilter) (TaskRef, error)
+	// It backs TaskManager.FindTask, which a host uses to find a task waiting on an external
+	// system, for example when that system calls back without the task's ID.
+	FindTask(context context.Context, filter TaskFilter) (TaskRecord, error)
 
 	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq and the
 	// state is not StateCancelled, so a retry of the same step matches again, an older step's late

@@ -717,8 +717,8 @@ func TestGetTasksReturnsTheQueryError(t *testing.T) {
 	}
 }
 
-// FindTask returns the ID and active step of the task the filter matches, the earliest created
-// when several do, and ErrTaskNotFound when none does.
+// FindTask returns the task the filter matches, the earliest created when several do, and
+// ErrTaskNotFound when none does. It reads every column but data.
 func TestFindTask(t *testing.T) {
 	s, ctx := newTestStore(t)
 	createRolesTable(t, s)
@@ -734,29 +734,33 @@ func TestFindTask(t *testing.T) {
 		}
 	}
 	for id, c := range map[string]store.StepClaim{
-		"waiting":       {StepID: stepA, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"},
-		"waiting-later": {StepID: stepB, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"},
-		"other-case":    {StepID: stepB, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY"},
+		"waiting":       {StepID: stepA, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}},
+		"waiting-later": {StepID: stepB, Seq: 2, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}},
+		"other-case":    {StepID: stepB, Seq: 1, ActiveTaskTemplateID: "await", State: "QUEUED_EXTERNALLY", Data: map[string]any{"big": "payload"}},
 	} {
 		n, err := s.ClaimStep(ctx, id, c)
 		wantRows(t, n, err, 1)
 	}
 
+	// found is the part of the record the cases check; the rest is checked once below.
+	type found struct {
+		TaskID, StepID, State, Template, ParentWorkflowID string
+		Seq                                               int64
+	}
 	for _, tc := range []struct {
 		name   string
 		filter store.TaskFilter
-		want   store.TaskRef
-		found  bool
+		want   *found // nil: no task matches
 	}{
-		{"one workflow's waiting task", store.TaskFilter{CaseID: "C1", ParentWorkflowID: "C1:payment", ActiveTemplateID: "await"}, store.TaskRef{TaskID: "waiting-later", StepID: stepB}, true},
-		{"the earliest of several", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"}, store.TaskRef{TaskID: "waiting", StepID: stepA}, true},
-		{"a task with no active step", store.TaskFilter{CaseID: "C1", State: "STARTING"}, store.TaskRef{TaskID: "form"}, true},
-		{"no match", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "PENDING_USER"}, store.TaskRef{}, false},
-		{"another case's task is not found", store.TaskFilter{CaseID: "C3", ActiveTemplateID: "await"}, store.TaskRef{}, false},
+		{"one workflow's waiting task", store.TaskFilter{CaseID: "C1", ParentWorkflowID: "C1:payment", ActiveTemplateID: "await"}, &found{"waiting-later", stepB, "QUEUED_EXTERNALLY", "await", "C1:payment", 2}},
+		{"the earliest of several", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "QUEUED_EXTERNALLY"}, &found{"waiting", stepA, "QUEUED_EXTERNALLY", "await", "C1:export", 1}},
+		{"a task with no active step", store.TaskFilter{CaseID: "C1", State: "STARTING"}, &found{"form", "", "STARTING", "", "C1:export", 0}},
+		{"no match", store.TaskFilter{CaseID: "C1", ActiveTemplateID: "await", State: "PENDING_USER"}, nil},
+		{"another case's task is not found", store.TaskFilter{CaseID: "C3", ActiveTemplateID: "await"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := s.FindTask(ctx, tc.filter)
-			if !tc.found {
+			if tc.want == nil {
 				if !errors.Is(err, store.ErrTaskNotFound) {
 					t.Errorf("FindTask(%+v) = (%+v, %v), want ErrTaskNotFound", tc.filter, got, err)
 				}
@@ -765,8 +769,14 @@ func TestFindTask(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FindTask(%+v): %v", tc.filter, err)
 			}
-			if got != tc.want {
-				t.Errorf("FindTask(%+v) = %+v, want %+v", tc.filter, got, tc.want)
+			if g := (found{got.TaskID, got.ActiveStepID, got.State, got.ActiveTaskTemplateID, got.ParentWorkflowID, got.Seq}); g != *tc.want {
+				t.Errorf("FindTask(%+v) = %+v, want %+v", tc.filter, g, *tc.want)
+			}
+			if got.Data != nil {
+				t.Errorf("FindTask returned data %v, want none", got.Data)
+			}
+			if got.CaseID != "C1" || got.TaskType != "TEST" || got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+				t.Errorf("FindTask did not read the scalar columns: %+v", got)
 			}
 		})
 	}

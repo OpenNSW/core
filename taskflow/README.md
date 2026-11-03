@@ -105,6 +105,7 @@ if err := workflowRunner.StartWorker(); err != nil {
 | `CompleteTaskStep(ctx, taskID, stepID, payload)` | Portal HTTP handler       | Submit form/interaction, resume that step                                                   |
 | `CompleteTaskStepByToken(ctx, token, payload)`   | External callback handler | Same, addressed by the dispatch's callback token                                            |
 | `GetTasks(ctx, store.TaskFilter{CaseID, Roles})` | Portal HTTP handler       | List tasks, narrowed by each filter field that is set: `Roles` to the tasks whose `read.roles` include one of them, `CaseID` to one case. The zero filter lists every task. Returns an error when the tasks cannot be read |
+| `FindTask(ctx, store.TaskFilter{CaseID, ...})`   | External callback handler | Find the task waiting on a callback that carries no callback token, by its case and step; returns its summary, or `ErrTaskNotFound` |
 | `ClaimTask(ctx, taskID, holder)`                 | Portal HTTP handler       | Claim the task for holder (unclaimed, or already theirs)                                    |
 | `ReleaseTask(ctx, taskID, holder)`               | Portal HTTP handler       | Release holder's claim                                                                      |
 
