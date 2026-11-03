@@ -17,7 +17,7 @@ import (
 )
 
 // TaskStore is a GORM-backed implementation of store.TaskStore, persisting
-// TaskRecords to the "task_records_v2" table.
+// TaskRecords to the "taskflow_tasks" table.
 type TaskStore struct {
 	db *gorm.DB
 }
@@ -89,7 +89,7 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 }
 
 // GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once. With no roles
-// it returns nil without querying. It matches roles through a task_roles subquery rather than a
+// it returns nil without querying. It matches roles through a taskflow_task_roles subquery rather than a
 // join, so a task listing several of the roles appears once, and applies a case on both sides so
 // the (case_id, role) index serves the match. A query error is logged and returns nil.
 func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []store.TaskRecord {

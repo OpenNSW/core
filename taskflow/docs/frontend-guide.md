@@ -32,7 +32,7 @@ The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskMan
 
 `callerRoles` are the roles the caller holds, as the host decides them. `TaskFilter` matches role names only: it does not know in which case the caller holds each role. So pass a role the caller holds in only some cases (a trader on their own case, say) with `CaseID` set to that case, one call per case. An all-case listing must pass only roles the caller holds in every case (an agency officer, say), never one union of the roles the caller holds across different cases, or it lists tasks from cases where the caller lacks the role.
 
-> The demo currently exposes listing and completion. If you need single-task detail, add a handler around `GetTaskRenderInfo`. `GetTaskRenderInfo` does not check read roles: before returning a task's detail, the host must check that the caller holds one of the task's read roles (`TaskRecord.ReadRoles`, stored in `task_roles`) in the task's case. Filtering the listing with `GetTasks` does not replace this check, since a caller can request any task ID directly.
+> The demo currently exposes listing and completion. If you need single-task detail, add a handler around `GetTaskRenderInfo`. `GetTaskRenderInfo` does not check read roles: before returning a task's detail, the host must check that the caller holds one of the task's read roles (`TaskRecord.ReadRoles`, stored in `taskflow_task_roles`) in the task's case. Filtering the listing with `GetTasks` does not replace this check, since a caller can request any task ID directly.
 
 ---
 

@@ -260,10 +260,10 @@ err = postgres.MigrateSequence(ctx, db, postgres.WithTableName("custom_sequences
 
 `db` is a `*sql.DB` you opened yourself — the queries use PostgreSQL's native `$1` placeholders, so any PostgreSQL driver works. The Quickstart above uses pgx.
 
-`RandomStore` uses a similarly shaped table (`refid_random` by default), keyed on `(scope_key, value)` rather than incrementing a counter — every random-segment format shares this one table, distinguished by `scope_key`:
+`RandomStore` uses a similarly shaped table (`refid_random_values` by default), keyed on `(scope_key, value)` rather than incrementing a counter — every random-segment format shares this one table, distinguished by `scope_key`:
 
 ```sql
-CREATE TABLE IF NOT EXISTS refid_random (
+CREATE TABLE IF NOT EXISTS refid_random_values (
     scope_key  TEXT        NOT NULL,
     value      TEXT        NOT NULL,
     issued_at  TIMESTAMPTZ NOT NULL DEFAULT now(),

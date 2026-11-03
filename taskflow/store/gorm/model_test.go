@@ -123,7 +123,7 @@ func TestTaskRoleModel_CaseRoleIndex(t *testing.T) {
 		t.Fatalf("parse schema: %v", err)
 	}
 	for _, idx := range s.ParseIndexes() {
-		if idx.Name != "idx_task_roles_case_role" {
+		if idx.Name != "idx_taskflow_task_roles_case_role" {
 			continue
 		}
 		cols := make([]string, len(idx.Fields))
@@ -131,9 +131,9 @@ func TestTaskRoleModel_CaseRoleIndex(t *testing.T) {
 			cols[i] = f.DBName
 		}
 		if !reflect.DeepEqual(cols, []string{"case_id", "role"}) {
-			t.Fatalf("idx_task_roles_case_role columns = %v, want [case_id role]", cols)
+			t.Fatalf("idx_taskflow_task_roles_case_role columns = %v, want [case_id role]", cols)
 		}
 		return
 	}
-	t.Fatal("idx_task_roles_case_role not declared")
+	t.Fatal("idx_taskflow_task_roles_case_role not declared")
 }

@@ -77,18 +77,22 @@ type TaskStore interface {
 
   Store an unclaimed task as NULL, not `""`, so the guard's `IS NULL` matches it. See [Task claims](#7-task-claims) for what the manager builds on these.
 
-A GORM implementation is in `store/gorm`. Its table needs, beyond the original columns:
+A GORM implementation is in `store/gorm`. It uses `taskflow_tasks` for task instances and
+`taskflow_task_roles` for their roles.
 
-```sql
-ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS active_step_id UUID NULL;
-ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_by TEXT NULL;
-ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NULL;
-ALTER TABLE task_records_v2 ADD COLUMN IF NOT EXISTS task_template_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE task_records_v2 DROP COLUMN IF EXISTS render_config;
-```
+The host manages the schema using `TaskRecordModel` and `TaskRoleModel` as the column and index
+definitions. The task table includes these columns for step tracking, claims, and template lookup:
 
-`InitTask` leaves the claim columns out of its insert, so tasks can still be created before they exist. Add them before anything calls `ClaimTask` or `ReleaseTask`.
+| Column | PostgreSQL definition |
+|--------|-----------------------|
+| `active_step_id` | `UUID NULL` |
+| `seq` | `BIGINT NOT NULL DEFAULT 0` |
+| `claimed_by` | `TEXT NULL` |
+| `claimed_at` | `TIMESTAMPTZ NULL` |
+| `task_template_id` | `TEXT NOT NULL DEFAULT ''` |
+
+`InitTask` leaves the claim columns out of its insert. `ClaimTask` and `ReleaseTask` require
+both claim columns, with NULL representing an unclaimed task.
 
 ### Concurrency
 
