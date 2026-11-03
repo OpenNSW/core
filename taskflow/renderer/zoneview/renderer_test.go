@@ -189,6 +189,52 @@ func TestRender_CarriesTitleAndLegalHandles(t *testing.T) {
 	}
 }
 
+// reviewConfig has one section with two handles, both legal in PENDING_REVIEW.
+const reviewConfig = `{
+  "id": "test:render",
+  "sections": {
+    "review": { "templateId": "t", "title": "Review", "projector": "MARKDOWN",
+                "handles": [{ "command": "approve", "label": "Approve" },
+                            { "command": "reject",  "label": "Reject" }] }
+  },
+  "states": {
+    "PENDING_REVIEW": { "actions": [{ "command": "approve" }, { "command": "reject" }] }
+  }
+}`
+
+// Facts.Commands narrows the handles legal in the state to those the caller may issue. A section
+// left with none still renders, read-only; nil commands filter nothing.
+func TestRender_FiltersHandlesByCallerCommands(t *testing.T) {
+	r := newTestRenderer(t)
+
+	tests := []struct {
+		name     string
+		commands map[string]bool
+		want     []string
+	}{
+		{"nil filters nothing", nil, []string{"approve", "reject"}},
+		{"only allowed commands kept", map[string]bool{"approve": true}, []string{"approve"}},
+		{"false is a deny", map[string]bool{"approve": true, "reject": false}, []string{"approve"}},
+		{"none allowed renders read-only", map[string]bool{}, []string{}},
+		{"an allowed command still needs to be legal", map[string]bool{"approve": true, "escalate": true}, []string{"approve"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := decodeView(t, render(t, r, reviewConfig, tfrenderer.Facts{State: "PENDING_REVIEW", Commands: tt.commands}))
+			if len(view) != 1 || view[0].ID != "review" {
+				t.Fatalf("got sections %v, want [review]", ids(view))
+			}
+			got := make([]string, len(view[0].Handles))
+			for i, h := range view[0].Handles {
+				got[i] = h.Command
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("handles = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // With no render config there is nothing to show: an empty list
 func TestRender_EmptyConfigReturnsEmptyList(t *testing.T) {
 	r := newTestRenderer(t)

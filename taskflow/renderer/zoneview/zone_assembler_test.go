@@ -73,6 +73,35 @@ func pendingRecord() store.TaskRecord {
 	}
 }
 
+// Claims and commands are independent: a caller who may see a section but issue none of its
+// commands gets the section read-only.
+func TestAssemble_CommandsMakeVisibleSectionReadOnly(t *testing.T) {
+	a := newTestAssembler(t, claimGatedConfig)
+	claims := map[string]bool{"role:trader": false, "role:cha": true}
+
+	for name, tc := range map[string]struct {
+		commands    map[string]bool
+		wantHandles int
+	}{
+		"allowed":     {map[string]bool{"submit": true}, 1},
+		"not allowed": {map[string]bool{}, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			zv, err := a.Assemble(context.Background(), pendingRecord(), Caller{Claims: claims, Commands: tc.commands})
+			if err != nil {
+				t.Fatalf("Assemble: %v", err)
+			}
+			view := decodeView(t, zv.View)
+			if len(view) != 1 || view[0].ID != "workspace" {
+				t.Fatalf("got sections %v, want [workspace]", ids(view))
+			}
+			if len(view[0].Handles) != tc.wantHandles {
+				t.Errorf("got %d handles, want %d", len(view[0].Handles), tc.wantHandles)
+			}
+		})
+	}
+}
+
 // A denied claim must hide the section *and* the handles it claims: the handles
 // only reach the wire through a section the projector emitted.
 func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
@@ -100,7 +129,7 @@ func TestAssemble_ClaimGatingSelectsSectionAndHandles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			zv, err := a.Assemble(context.Background(), pendingRecord(), tt.claims)
+			zv, err := a.Assemble(context.Background(), pendingRecord(), Caller{Claims: tt.claims})
 			if err != nil {
 				t.Fatalf("Assemble: %v", err)
 			}
@@ -124,7 +153,7 @@ func TestAssemble_ClaimNotResolvedByCallerErrors(t *testing.T) {
 	a := newTestAssembler(t, claimGatedConfig)
 
 	for _, claims := range []map[string]bool{nil, {"role:cha": true}} {
-		_, err := a.Assemble(context.Background(), pendingRecord(), claims)
+		_, err := a.Assemble(context.Background(), pendingRecord(), Caller{Claims: claims})
 		if err == nil {
 			t.Fatalf("claims %v: want an error, got none", claims)
 		}
@@ -151,7 +180,7 @@ func TestAssemble_NilClaimsWhenNoneReferenced(t *testing.T) {
 	}`
 
 	a := newTestAssembler(t, config)
-	zv, err := a.Assemble(context.Background(), pendingRecord(), nil)
+	zv, err := a.Assemble(context.Background(), pendingRecord(), Caller{})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -172,7 +201,7 @@ func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testi
 
 	pending := pendingRecord()
 	pending.ActiveStepID, pending.Seq = "0a0a0a0a-0000-4000-8000-00000000000a", 4
-	zv, err := a.Assemble(context.Background(), pending, claims)
+	zv, err := a.Assemble(context.Background(), pending, Caller{Claims: claims})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -182,7 +211,7 @@ func TestAssemble_CarriesStepAndVersionAndOffersNoActionsWhileAdvancing(t *testi
 
 	advancing := pending
 	advancing.State, advancing.Seq = store.StateAdvancing, 5
-	zv, err = a.Assemble(context.Background(), advancing, claims)
+	zv, err = a.Assemble(context.Background(), advancing, Caller{Claims: claims})
 	if err != nil {
 		t.Fatalf("Assemble while ADVANCING: %v", err)
 	}
@@ -201,7 +230,7 @@ func TestAssemble_CarriesTheClaim(t *testing.T) {
 	a := newTestAssembler(t, claimGatedConfig)
 	claims := map[string]bool{"role:trader": false, "role:cha": true}
 
-	zv, err := a.Assemble(context.Background(), pendingRecord(), claims)
+	zv, err := a.Assemble(context.Background(), pendingRecord(), Caller{Claims: claims})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -216,7 +245,7 @@ func TestAssemble_CarriesTheClaim(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	claimed := pendingRecord()
 	claimed.ClaimedBy, claimed.ClaimedAt = "user-a", &at
-	zv, err = a.Assemble(context.Background(), claimed, claims)
+	zv, err = a.Assemble(context.Background(), claimed, Caller{Claims: claims})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -243,7 +272,7 @@ func TestAssemble_ResolvesTemplatesThroughTheTasksManifestVersion(t *testing.T) 
 	}
 	record := pendingRecord()
 	record.ManifestVersion = 7
-	if _, err := NewZoneViewAssembler(NewTaskRenderer(asm), testSet(t, claimGatedConfig, 7)).Assemble(context.Background(), record, map[string]bool{"role:trader": true, "role:cha": true}); err != nil {
+	if _, err := NewZoneViewAssembler(NewTaskRenderer(asm), testSet(t, claimGatedConfig, 7)).Assemble(context.Background(), record, Caller{Claims: map[string]bool{"role:trader": true, "role:cha": true}}); err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
 	if len(probe.seen) == 0 {
@@ -260,7 +289,7 @@ func TestAssemble_ResolvesTemplatesThroughTheTasksManifestVersion(t *testing.T) 
 func TestAssemble_RecordWithoutTaskTemplateErrors(t *testing.T) {
 	record := pendingRecord()
 	record.TaskTemplateID = ""
-	if _, err := newTestAssembler(t, claimGatedConfig).Assemble(context.Background(), record, nil); !errors.Is(err, renderconfig.ErrNoTaskTemplate) {
+	if _, err := newTestAssembler(t, claimGatedConfig).Assemble(context.Background(), record, Caller{}); !errors.Is(err, renderconfig.ErrNoTaskTemplate) {
 		t.Fatalf("Assemble err = %v, want %v", err, renderconfig.ErrNoTaskTemplate)
 	}
 }
