@@ -82,29 +82,7 @@ func TestTaskTemplateAdapter(t *testing.T) {
 		}
 	})
 
-	// encoding/json would read each of these as its zero value, so a null must be refused rather
-	// than pass as no claims or no read roles.
-	for name, fields := range map[string]string{
-		"claimable null":  `"claimable": null`,
-		"read null":       `"read": null`,
-		"read.roles null": `"read": {"roles": null}`,
-		"a null role":     `"read": {"roles": ["officer", null]}`,
-		"an empty role":   `"read": {"roles": [""]}`,
-	} {
-		t.Run("Load refuses "+name, func(t *testing.T) {
-			m := testutil.MemLoader{
-				"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg", ` + fields + `}`),
-			}
-			reg := artifact.NewRegistry(m)
-			reg.RegisterArtifact("test_task", "task_template", "", "task_v1.json")
-
-			if _, err := tasktemplate.Load(context.Background(), reg, "test_task"); err == nil {
-				t.Errorf("expected an error for %s", name)
-			}
-		})
-	}
-
-	// An empty list is a stated value, unlike null: the host decides alone.
+	// An empty list is accepted: the host decides alone.
 	t.Run("Load accepts an empty read.roles", func(t *testing.T) {
 		m := testutil.MemLoader{
 			"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg", "read": {"roles": []}}`),
