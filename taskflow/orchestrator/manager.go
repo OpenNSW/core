@@ -758,10 +758,11 @@ func (tm *TaskManager) GetTaskRenderInfo(context context.Context, taskID string)
 // View field is intentionally not populated — callers should use GetTaskRenderInfo to fetch the
 // full rendered view for a specific task.
 //
-// The host fills filter.Roles with the roles the caller holds (taskflow never decides them), and
-// gets the tasks whose task template lists one of them in read.roles. A task whose template lists
-// no roles is never returned: the host decides alone who sees it. filter.CaseID narrows the result
-// to the case's tasks, across every workflow of the case. See store.TaskFilter.
+// Every filter field is optional and narrows the result only when set. filter.Roles narrows it to
+// the tasks whose task template lists one of the roles in read.roles; filter.CaseID to the case's
+// tasks, across every workflow of the case. The zero filter lists every task. Taskflow never decides
+// who may read a task: for a listing shown to a caller, the host passes the roles the caller holds.
+// See store.TaskFilter.
 func (tm *TaskManager) GetTasks(ctx context.Context, filter store.TaskFilter) []TaskView {
 	records := tm.db.GetTasks(ctx, filter)
 	views := make([]TaskView, 0, len(records))
