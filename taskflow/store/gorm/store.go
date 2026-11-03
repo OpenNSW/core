@@ -38,10 +38,26 @@ func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) error
 	// StartTask call (Temporal Activities can be retried) — never a different task. The existing
 	// row is already correct, and by the time a retry lands, guarded writes below (ClaimStep etc.)
 	// may have already moved it forward; overwriting state/data here would silently rewind it.
-	err := s.db.WithContext(ctx).Omit("active_step_id", "seq", "claimed_by", "claimed_at").Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "task_id"}},
-		DoNothing: true,
-	}).Create(&model).Error
+	//
+	// The read roles go in the same transaction, so a task row never exists without them. A retry
+	// re-inserts the same (task_id, role) keys, which the conflict clause skips.
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Omit("active_step_id", "seq", "claimed_by", "claimed_at").Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "task_id"}},
+			DoNothing: true,
+		}).Create(&model).Error
+		if err != nil {
+			return err
+		}
+		roles := roleModels(record)
+		if len(roles) == 0 {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "task_id"}, {Name: "role"}},
+			DoNothing: true,
+		}).Create(&roles).Error
+	})
 	if err != nil {
 		slog.ErrorContext(ctx, "taskflow gorm store: InitTask upsert failed",
 			"task_id", record.TaskID, "error", err)

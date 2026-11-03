@@ -107,6 +107,63 @@ func TestInitTask_IsANoOpOnConflict(t *testing.T) {
 	wantRow(t, got, stepA, 4, "STARTING_STEP") // untouched: the retry changed nothing
 }
 
+// createRolesTable mirrors the production task_roles table (see TaskRoleModel).
+func createRolesTable(t *testing.T, s *TaskStore) {
+	t.Helper()
+	if err := s.db.Exec(`CREATE TABLE task_roles (
+		task_id TEXT NOT NULL, role TEXT NOT NULL, case_id TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (task_id, role))`).Error; err != nil {
+		t.Fatalf("create task_roles: %v", err)
+	}
+}
+
+func roleRows(t *testing.T, s *TaskStore, taskID string) []TaskRoleModel {
+	t.Helper()
+	var rows []TaskRoleModel
+	if err := s.db.Where("task_id = ?", taskID).Order("role").Find(&rows).Error; err != nil {
+		t.Fatalf("read task_roles: %v", err)
+	}
+	return rows
+}
+
+// InitTask writes one task_roles row per read role, carrying the case, and a retry of the same
+// StartTask adds nothing.
+func TestInitTask_WritesReadRoles(t *testing.T) {
+	s, ctx := newTestStore(t)
+	createRolesTable(t, s)
+	rec := store.TaskRecord{TaskID: "task-2", TaskType: "TEST", State: "STARTING", CaseID: "case-1",
+		ReadRoles: []string{"trader", "cha"}, Data: map[string]any{}}
+
+	for range 2 { // the second call is a retry
+		if err := s.InitTask(ctx, rec); err != nil {
+			t.Fatalf("InitTask: %v", err)
+		}
+	}
+
+	want := []TaskRoleModel{
+		{TaskID: "task-2", Role: "cha", CaseID: "case-1"},
+		{TaskID: "task-2", Role: "trader", CaseID: "case-1"},
+	}
+	if got := roleRows(t, s, "task-2"); !reflect.DeepEqual(got, want) {
+		t.Errorf("task_roles = %+v, want %+v", got, want)
+	}
+}
+
+// The roles are written in the task row's transaction: when they cannot be stored, the task row is
+// not created either, so a task is never readable without its roles.
+func TestInitTask_RolesAreAtomicWithRow(t *testing.T) {
+	s, ctx := newTestStore(t) // no task_roles table, so the roles insert fails
+	rec := store.TaskRecord{TaskID: "task-2", TaskType: "TEST", State: "STARTING",
+		ReadRoles: []string{"trader"}, Data: map[string]any{}}
+
+	if err := s.InitTask(ctx, rec); err == nil {
+		t.Fatal("InitTask succeeded without a task_roles table, want an error")
+	}
+	if _, ok := s.GetTask(ctx, "task-2"); ok {
+		t.Error("task row exists although its roles were not stored")
+	}
+}
+
 func TestClaimStep(t *testing.T) {
 	s, ctx := newTestStore(t)
 

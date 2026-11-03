@@ -233,6 +233,7 @@ func (tm *TaskManager) StartTask(ctx context.Context, payload engine.TaskPayload
 		ParentWorkflowID: payload.WorkflowID,
 		ParentStepID:     payload.ActivationID, // the parent's Activity to complete
 		CaseID:           payload.CaseID,       // the same at every level of nesting (see engine.VarCaseID)
+		ReadRoles:        template.Read.Roles,
 		ManifestVersion:  payload.ManifestVersion,
 		TaskWorkflowID:   taskWorkflowID,
 		Data:             initialData,

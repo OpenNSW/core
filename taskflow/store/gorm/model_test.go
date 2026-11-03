@@ -5,8 +5,11 @@ package gorm
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 	"time"
+
+	"gorm.io/gorm/schema"
 
 	"github.com/OpenNSW/core/taskflow/store"
 )
@@ -110,4 +113,27 @@ func TestFromDomain_EmptyActiveStepIDIsNull(t *testing.T) {
 	if got := m.ToDomain().ActiveStepID; got != "" {
 		t.Errorf("round trip ActiveStepID = %q, want empty", got)
 	}
+}
+
+// The documented (case_id, role) index must be declared on both columns, in that order, so a
+// table built from the model serves the host's join on (case_id, role).
+func TestTaskRoleModel_CaseRoleIndex(t *testing.T) {
+	s, err := schema.Parse(&TaskRoleModel{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	for _, idx := range s.ParseIndexes() {
+		if idx.Name != "idx_task_roles_case_role" {
+			continue
+		}
+		cols := make([]string, len(idx.Fields))
+		for i, f := range idx.Fields {
+			cols[i] = f.DBName
+		}
+		if !reflect.DeepEqual(cols, []string{"case_id", "role"}) {
+			t.Fatalf("idx_task_roles_case_role columns = %v, want [case_id role]", cols)
+		}
+		return
+	}
+	t.Fatal("idx_task_roles_case_role not declared")
 }
