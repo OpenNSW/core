@@ -29,6 +29,11 @@ func (l *loadable) Parse(raw []byte) error {
 	if t.ID == "" {
 		return fmt.Errorf("task template: missing id")
 	}
+	for _, role := range t.Read.Roles {
+		if role == "" {
+			return fmt.Errorf("task template %q: read.roles has an empty or null role", t.ID)
+		}
+	}
 	l.TaskTemplate = t
 	return nil
 }

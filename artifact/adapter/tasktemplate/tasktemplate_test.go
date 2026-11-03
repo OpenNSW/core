@@ -82,6 +82,24 @@ func TestTaskTemplateAdapter(t *testing.T) {
 		}
 	})
 
+	// A role is a non-empty name: a null role decodes as "", which no catalog can define.
+	for name, roles := range map[string]string{
+		"a null role":   `["officer", null]`,
+		"an empty role": `[""]`,
+	} {
+		t.Run("Load refuses "+name, func(t *testing.T) {
+			m := testutil.MemLoader{
+				"task_v1.json": []byte(`{"id": "test_task", "type": "APPLICATION", "workflow_id": "test_wf", "render_config_id": "test_cfg", "read": {"roles": ` + roles + `}}`),
+			}
+			reg := artifact.NewRegistry(m)
+			reg.RegisterArtifact("test_task", "task_template", "", "task_v1.json")
+
+			if _, err := tasktemplate.Load(context.Background(), reg, "test_task"); err == nil {
+				t.Errorf("expected an error for %s", name)
+			}
+		})
+	}
+
 	// An empty list is accepted: the host decides alone.
 	t.Run("Load accepts an empty read.roles", func(t *testing.T) {
 		m := testutil.MemLoader{
