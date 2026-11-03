@@ -18,7 +18,7 @@ type TaskRecordModel struct {
 	State                string `gorm:"column:state;type:text"`
 	TaskTemplateID       string `gorm:"column:task_template_id;type:text;not null;default:''"`
 	ParentWorkflowID     string `gorm:"column:parent_workflow_id;type:text;index"`
-	CaseID               string `gorm:"column:case_id;type:text;not null;default:''"`
+	CaseID               string `gorm:"column:case_id;type:text;not null;default:'';index"` // GetTasks by case
 	ManifestVersion      int    `gorm:"column:manifest_version;not null;default:0"`
 	ParentStepID         string `gorm:"column:parent_step_id;type:text"`
 	TaskWorkflowID       string `gorm:"column:task_workflow_id;type:text;index"`

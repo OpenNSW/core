@@ -165,9 +165,9 @@ func TestInitTask_RolesAreAtomicWithRow(t *testing.T) {
 	}
 }
 
-// GetTasks returns the tasks listing any of the caller's roles, each once even when it lists
-// several of them, narrowed to the case when one is given. A task with no read roles never matches,
-// and a filter with no roles matches nothing.
+// GetTasks narrows by each field that is set and by no field that is empty. A role filter returns
+// the tasks listing any of the roles, each once even when it lists several of them, and never a
+// task with no read roles; without one, those tasks are listed too.
 func TestGetTasks(t *testing.T) {
 	s, ctx := newTestStore(t)
 	createRolesTable(t, s)
@@ -202,8 +202,9 @@ func TestGetTasks(t *testing.T) {
 		{"a role across every case", store.TaskFilter{Roles: []string{"trader"}}, []string{"c1-both", "c1-trader", "c2-trader"}},
 		{"a role no task lists", store.TaskFilter{CaseID: "C1", Roles: []string{"auditor"}}, []string{}},
 		{"every role a case's tasks list", store.TaskFilter{CaseID: "C1", Roles: []string{"trader", "cha", "officer"}}, []string{"c1-both", "c1-officer", "c1-trader"}},
-		{"no roles", store.TaskFilter{CaseID: "C1"}, []string{}},
-		{"zero filter", store.TaskFilter{}, []string{}},
+		{"a case without roles", store.TaskFilter{CaseID: "C1"}, []string{"c1-both", "c1-none", "c1-officer", "c1-trader"}},
+		{"an empty roles slice is no role filter", store.TaskFilter{CaseID: "C1", Roles: []string{}}, []string{"c1-both", "c1-none", "c1-officer", "c1-trader"}},
+		{"zero filter", store.TaskFilter{}, []string{"c1-both", "c1-none", "c1-officer", "c1-trader", "c2-trader", task1}}, // task1: seeded by newTestStore
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ids(s.GetTasks(ctx, tc.filter)); !reflect.DeepEqual(got, tc.want) {

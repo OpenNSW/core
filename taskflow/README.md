@@ -104,7 +104,7 @@ if err := workflowRunner.StartWorker(); err != nil {
 | `GetTaskRenderInfo(ctx, taskID)`                 | Portal HTTP handler       | Fetch task + rendered UI                                                                    |
 | `CompleteTaskStep(ctx, taskID, stepID, payload)` | Portal HTTP handler       | Submit form/interaction, resume that step                                                   |
 | `CompleteTaskStepByToken(ctx, token, payload)`   | External callback handler | Same, addressed by the dispatch's callback token                                            |
-| `GetTasks(ctx, store.TaskFilter{CaseID, Roles})` | Portal HTTP handler       | List the tasks whose `read.roles` include one of the caller's roles, optionally in one case |
+| `GetTasks(ctx, store.TaskFilter{CaseID, Roles})` | Portal HTTP handler       | List tasks, narrowed by each filter field that is set: `Roles` to the tasks whose `read.roles` include one of them, `CaseID` to one case. The zero filter lists every task |
 | `ClaimTask(ctx, taskID, holder)`                 | Portal HTTP handler       | Claim the task for holder (unclaimed, or already theirs)                                    |
 | `ReleaseTask(ctx, taskID, holder)`               | Portal HTTP handler       | Release holder's claim                                                                      |
 

@@ -92,18 +92,19 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	return cp
 }
 
-// TaskFilter selects the tasks TaskStore.GetTasks returns. Every field narrows the result.
+// TaskFilter selects the tasks TaskStore.GetTasks returns. Every field is optional: an empty field
+// does not filter, and a set field narrows the result. The zero TaskFilter matches every task.
 //
-// A task is listed only to a caller holding one of its read roles: it matches when its ReadRoles
-// contain at least one of Roles. There is no way to skip that check. A caller that may see more
-// (an admin, say) is one the host gives more roles. So the zero TaskFilter, or one whose Roles came
-// back empty from the host's role lookup, matches no task, and a task whose template lists no read
-// roles is never matched.
+// A filter is a query, not an access check. Taskflow never decides who may read a task, here or
+// anywhere else: a listing shown to a caller must pass the caller's roles, and a host whose role
+// lookup fails must not fall back to an empty Roles, which lists every task.
 type TaskFilter struct {
 	// CaseID narrows the result to the case's tasks (TaskRecord.CaseID). Empty: every case.
 	CaseID string
-	// Roles are the roles the caller holds, as the host decides them; taskflow never does. They are
-	// matched by name only, in every case the filter covers: with CaseID empty, pass only roles the
+	// Roles, when set, narrows the result to the tasks whose ReadRoles contain at least one of
+	// them; a task whose template lists no read roles then never matches. Empty (nil or no
+	// elements): no role filter, so tasks with no read roles are listed too. Roles are the roles
+	// the caller holds, as the host decides them; taskflow never does. They are matched by name only, in every case the filter covers: with CaseID empty, pass only roles the
 	// caller holds in every case, never a union of roles held in different cases. A role held in
 	// one case goes in a filter with that CaseID.
 	Roles []string
@@ -113,6 +114,9 @@ type TaskFilter struct {
 func (f TaskFilter) Matches(r TaskRecord) bool {
 	if f.CaseID != "" && r.CaseID != f.CaseID {
 		return false
+	}
+	if len(f.Roles) == 0 {
+		return true
 	}
 	return slices.ContainsFunc(r.ReadRoles, func(role string) bool { return slices.Contains(f.Roles, role) })
 }

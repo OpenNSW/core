@@ -1005,7 +1005,8 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 	}
 }
 
-// GetTasks lists only the tasks whose read roles include one of the caller's.
+// GetTasks with roles lists only the tasks whose read roles include one of them, and without roles
+// lists every task, including one whose template lists no read roles.
 func TestGetTasks_ListsTheCallersTasks(t *testing.T) {
 	db := newSafeMockTaskStore()
 	ctx := context.Background()
@@ -1017,8 +1018,9 @@ func TestGetTasks_ListsTheCallersTasks(t *testing.T) {
 	if len(list) != 1 || list[0].TaskID != "task-t" || list[0].ClaimedBy != "user-a" {
 		t.Errorf("list = %+v, want only task-t", list)
 	}
-	if list := tm.GetTasks(ctx, store.TaskFilter{CaseID: "C1"}); len(list) != 0 {
-		t.Errorf("no roles: list = %+v, want none", list)
+	db.InitTask(ctx, store.TaskRecord{TaskID: "task-n", CaseID: "C1", State: "PENDING_USER"})
+	if list := tm.GetTasks(ctx, store.TaskFilter{CaseID: "C1"}); len(list) != 3 {
+		t.Errorf("no roles: list = %+v, want all three tasks", list)
 	}
 }
 
