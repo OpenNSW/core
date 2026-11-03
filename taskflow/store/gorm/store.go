@@ -88,14 +88,22 @@ func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) 
 	return model.ToDomain(), true
 }
 
-func (s *TaskStore) GetAllTasks(ctx context.Context, caseID string) []store.TaskRecord {
-	var models []TaskRecordModel
-	query := s.db.WithContext(ctx)
-	if caseID != "" {
-		query = query.Where("case_id = ?", caseID)
+func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []store.TaskRecord {
+	if len(filter.Roles) == 0 {
+		return nil // no role to match: skip the query
 	}
-	if err := query.Find(&models).Error; err != nil {
-		slog.ErrorContext(ctx, "taskflow gorm store: GetAllTasks db error", "case_id", caseID, "error", err)
+	// A subquery rather than a join, so a task matching several of the roles is returned once.
+	matching := s.db.WithContext(ctx).Model(&TaskRoleModel{}).Select("task_id").Where("role IN ?", filter.Roles)
+	query := s.db.WithContext(ctx)
+	if filter.CaseID != "" {
+		// On both sides: task_roles carries the case so its (case_id, role) index serves the match.
+		matching = matching.Where("case_id = ?", filter.CaseID)
+		query = query.Where("case_id = ?", filter.CaseID)
+	}
+	var models []TaskRecordModel
+	if err := query.Where("task_id IN (?)", matching).Find(&models).Error; err != nil {
+		slog.ErrorContext(ctx, "taskflow gorm store: GetTasks db error",
+			"case_id", filter.CaseID, "roles", filter.Roles, "error", err)
 		return nil
 	}
 

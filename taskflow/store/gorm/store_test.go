@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -161,6 +162,54 @@ func TestInitTask_RolesAreAtomicWithRow(t *testing.T) {
 	}
 	if _, ok := s.GetTask(ctx, "task-2"); ok {
 		t.Error("task row exists although its roles were not stored")
+	}
+}
+
+// GetTasks returns the tasks listing any of the caller's roles, each once even when it lists
+// several of them, narrowed to the case when one is given. A task with no read roles never matches,
+// and a filter with no roles matches nothing.
+func TestGetTasks(t *testing.T) {
+	s, ctx := newTestStore(t)
+	createRolesTable(t, s)
+	for _, r := range []store.TaskRecord{
+		{TaskID: "c1-trader", CaseID: "C1", ReadRoles: []string{"trader"}},
+		{TaskID: "c1-both", CaseID: "C1", ReadRoles: []string{"trader", "cha"}},
+		{TaskID: "c1-officer", CaseID: "C1", ReadRoles: []string{"officer"}},
+		{TaskID: "c1-none", CaseID: "C1"},
+		{TaskID: "c2-trader", CaseID: "C2", ReadRoles: []string{"trader"}},
+	} {
+		r.TaskType, r.State, r.Data = "TEST", "STARTING", map[string]any{}
+		if err := s.InitTask(ctx, r); err != nil {
+			t.Fatalf("InitTask %s: %v", r.TaskID, err)
+		}
+	}
+
+	ids := func(records []store.TaskRecord) []string {
+		out := make([]string, 0, len(records))
+		for _, r := range records {
+			out = append(out, r.TaskID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, tc := range []struct {
+		name   string
+		filter store.TaskFilter
+		want   []string
+	}{
+		{"one role in a case", store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}}, []string{"c1-both", "c1-trader"}},
+		{"several roles match a task once", store.TaskFilter{CaseID: "C1", Roles: []string{"trader", "cha"}}, []string{"c1-both", "c1-trader"}},
+		{"a role across every case", store.TaskFilter{Roles: []string{"trader"}}, []string{"c1-both", "c1-trader", "c2-trader"}},
+		{"a role no task lists", store.TaskFilter{CaseID: "C1", Roles: []string{"auditor"}}, []string{}},
+		{"every role a case's tasks list", store.TaskFilter{CaseID: "C1", Roles: []string{"trader", "cha", "officer"}}, []string{"c1-both", "c1-officer", "c1-trader"}},
+		{"no roles", store.TaskFilter{CaseID: "C1"}, []string{}},
+		{"zero filter", store.TaskFilter{}, []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ids(s.GetTasks(ctx, tc.filter)); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("GetTasks(%+v) = %v, want %v", tc.filter, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -610,26 +659,27 @@ func TestStepLifecycle_StaleWritesAreDropped(t *testing.T) {
 	wantRow(t, mustGet(t, s, ctx), stepB, 6, store.StateCompleted)
 }
 
-// GetAllTasks lists a case's tasks across every workflow of the case: a host that runs several
+// GetTasks lists a case's tasks across every workflow of the case: a host that runs several
 // top-level workflows for one case finds all their tasks by the case ID.
-func TestGetAllTasksListsACaseAcrossWorkflows(t *testing.T) {
+func TestGetTasksListsACaseAcrossWorkflows(t *testing.T) {
 	s, ctx := newTestStore(t)
+	createRolesTable(t, s)
 	for _, r := range []store.TaskRecord{
 		{TaskID: "export-task", ParentWorkflowID: "C1:export:u1", CaseID: "C1"},
 		{TaskID: "payment-task", ParentWorkflowID: "C1:payment:u2", CaseID: "C1"},
 		{TaskID: "other-case-task", ParentWorkflowID: "C2:export:u3", CaseID: "C2"},
 	} {
-		r.TaskType, r.State, r.Data = "TEST", "STARTING", map[string]any{}
+		r.TaskType, r.State, r.Data, r.ReadRoles = "TEST", "STARTING", map[string]any{}, []string{"trader"}
 		if err := s.InitTask(ctx, r); err != nil {
 			t.Fatalf("InitTask %s: %v", r.TaskID, err)
 		}
 	}
 
 	got := map[string]bool{}
-	for _, r := range s.GetAllTasks(ctx, "C1") {
+	for _, r := range s.GetTasks(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}}) {
 		got[r.TaskID] = true
 	}
 	if len(got) != 2 || !got["export-task"] || !got["payment-task"] {
-		t.Errorf("GetAllTasks(C1) = %v, want export-task and payment-task", got)
+		t.Errorf("GetTasks(C1) = %v, want export-task and payment-task", got)
 	}
 }

@@ -22,13 +22,13 @@ You never need to know about Temporal, runs, nodes, plugins, or workflows.
 
 The demo (`demo/server.go`) ships a minimal HTTP surface that maps each `TaskManager` method to one route. A real integration can mirror these or rename them — the shapes are what matter.
 
-| Verb / path                                    | Maps to                                    | Purpose                                            |
-|------------------------------------------------|--------------------------------------------|----------------------------------------------------|
-| `GET /api/tasks`                               | `GetAllTasks(ctx, "")`                     | List every task (summary, no render)               |
-| `GET /api/tasks?parent_workflow_id=X`          | `GetAllTasks(ctx, "X")`                    | List tasks under a specific parent workflow        |
-| *(not in demo today)* `GET /api/task/{taskID}` | `GetTaskRenderInfo(ctx, taskID)`           | Fetch one task **with its rendered view**          |
-| `POST /api/task/{taskID}`                      | `CompleteTaskStep(ctx, taskID, stepID, payload)` | Submit interaction data, resume the given step |
-| `POST /api/start`                              | `parentWorkflowManager.StartWorkflow(...)` | Kick off a new parent workflow (demo-specific)     |
+| Verb / path                                    | Maps to                                                            | Purpose                                                         |
+|------------------------------------------------|--------------------------------------------------------------------|-----------------------------------------------------------------|
+| `GET /api/tasks`                               | `GetTasks(ctx, store.TaskFilter{Roles: callerRoles})`              | List the tasks the caller's roles may read (summary, no render) |
+| `GET /api/tasks?case_id=X`                     | `GetTasks(ctx, store.TaskFilter{CaseID: "X", Roles: callerRoles})` | The same, in one case                                           |
+| *(not in demo today)* `GET /api/task/{taskID}` | `GetTaskRenderInfo(ctx, taskID)`                                   | Fetch one task **with its rendered view**                       |
+| `POST /api/task/{taskID}`                      | `CompleteTaskStep(ctx, taskID, stepID, payload)`                   | Submit interaction data, resume the given step                  |
+| `POST /api/start`                              | `parentWorkflowManager.StartWorkflow(...)`                         | Kick off a new parent workflow (demo-specific)                  |
 
 > The demo currently exposes listing and completion. If you need single-task detail, add a thin handler around `GetTaskRenderInfo` — it's a single line.
 
@@ -244,9 +244,9 @@ The demo maps these from `manager.CompleteTaskStep` error text. Expect to see th
 | `STARTING`          | Task workflow is initialising             | Spinner, "Starting your application…"         |
 | `STARTING_STEP`     | A step started; its plugin is running     | Spinner                                       |
 | `ADVANCING`         | Your submission was accepted; moving on   | Spinner, no actions; poll until it changes    |
-| `PENDING_USER`      | A form-style step is waiting for input | Render the form, expose submit                |
+| `PENDING_USER`      | A form-style step is waiting for input    | Render the form, expose submit                |
 | `QUEUED_EXTERNALLY` | Dispatched to an external system, waiting | Status banner, no input                       |
-| `PENDING_PAYMENT`   | Payment step is awaiting confirmation  | Payment widget                                |
+| `PENDING_PAYMENT`   | Payment step is awaiting confirmation     | Payment widget                                |
 | `DISPATCHED`        | Fire-and-forget completed (no resume)     | Status, possibly auto-advance                 |
 | `COMPLETED`         | Task workflow finished                    | Terminal screen, link back to parent workflow |
 

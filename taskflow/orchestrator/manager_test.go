@@ -143,15 +143,14 @@ func (s *safeMockTaskStore) GetTaskByWorkflowID(_ context.Context, workflowID st
 	return store.TaskRecord{}, false
 }
 
-func (s *safeMockTaskStore) GetAllTasks(_ context.Context, parentWorkflowID string) []store.TaskRecord {
+func (s *safeMockTaskStore) GetTasks(_ context.Context, filter store.TaskFilter) []store.TaskRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]store.TaskRecord, 0, len(s.tasks))
+	var out []store.TaskRecord
 	for _, r := range s.tasks {
-		if parentWorkflowID != "" && r.ParentWorkflowID != parentWorkflowID {
-			continue
+		if filter.Matches(r) {
+			out = append(out, r)
 		}
-		out = append(out, r)
 	}
 	return out
 }
@@ -410,7 +409,7 @@ func TestTaskManager_Lifecycle(t *testing.T) {
 		t.Error("expected task sub-workflow to be started")
 	}
 
-	tasks := storeMock.GetAllTasks(context.Background(), "")
+	tasks := storeMock.GetTasks(context.Background(), store.TaskFilter{Roles: []string{"officer"}}) // test_template's read.roles
 	if len(tasks) != 1 {
 		t.Fatalf("expected exactly 1 task record, got %d", len(tasks))
 	}
@@ -988,7 +987,7 @@ func TestTaskManager_ExtensionsPipeline(t *testing.T) {
 // The task view and the list carry the step to act on and the version.
 func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 	db := newSafeMockTaskStore()
-	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", TaskTemplateID: "test_template", State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
+	db.InitTask(context.Background(), store.TaskRecord{ManifestVersion: 1, TaskID: "task-v", TaskType: "TEST", TaskTemplateID: "test_template", ReadRoles: []string{"officer"}, State: "PENDING_USER", ActiveStepID: "step-9", Seq: 9, Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(context.Background(), "task-v")
@@ -999,9 +998,26 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 		t.Errorf("view = (%q, %d), want (step-9, 9)", view.StepID, view.Version)
 	}
 
-	list := tm.GetAllTasks(context.Background(), "")
+	list := tm.GetTasks(context.Background(), store.TaskFilter{Roles: []string{"officer"}})
 	if len(list) != 1 || list[0].StepID != "step-9" || list[0].Version != 9 {
 		t.Errorf("list = %+v", list)
+	}
+}
+
+// GetTasks lists only the tasks whose read roles include one of the caller's.
+func TestGetTasks_ListsTheCallersTasks(t *testing.T) {
+	db := newSafeMockTaskStore()
+	ctx := context.Background()
+	db.InitTask(ctx, store.TaskRecord{TaskID: "task-t", CaseID: "C1", State: "PENDING_USER", ReadRoles: []string{"trader"}, ClaimedBy: "user-a"})
+	db.InitTask(ctx, store.TaskRecord{TaskID: "task-o", CaseID: "C1", State: "PENDING_USER", ReadRoles: []string{"officer"}})
+	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
+
+	list := tm.GetTasks(ctx, store.TaskFilter{CaseID: "C1", Roles: []string{"trader"}})
+	if len(list) != 1 || list[0].TaskID != "task-t" || list[0].ClaimedBy != "user-a" {
+		t.Errorf("list = %+v, want only task-t", list)
+	}
+	if list := tm.GetTasks(ctx, store.TaskFilter{CaseID: "C1"}); len(list) != 0 {
+		t.Errorf("no roles: list = %+v, want none", list)
 	}
 }
 
@@ -1009,7 +1025,7 @@ func TestTaskViews_CarryStepIDAndVersion(t *testing.T) {
 func TestTaskViews_CarryTheClaim(t *testing.T) {
 	db := newSafeMockTaskStore()
 	ctx := context.Background()
-	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: "task-c", TaskType: "TEST", TaskTemplateID: "test_template", State: "PENDING_USER", Data: map[string]any{}})
+	db.InitTask(ctx, store.TaskRecord{ManifestVersion: 1, TaskID: "task-c", TaskType: "TEST", TaskTemplateID: "test_template", ReadRoles: []string{"officer"}, State: "PENDING_USER", Data: map[string]any{}})
 	tm := newTestTaskManager(db, newTestRegistry(), &mockTemporalManager{}, noopCallback)
 
 	view, err := tm.GetTaskRenderInfo(ctx, "task-c")
@@ -1040,7 +1056,7 @@ func TestTaskViews_CarryTheClaim(t *testing.T) {
 	if view.ClaimedBy != "user-a" || view.ClaimedAt == nil {
 		t.Errorf("view claim = (%q, %v), want (user-a, a time)", view.ClaimedBy, view.ClaimedAt)
 	}
-	list := tm.GetAllTasks(ctx, "")
+	list := tm.GetTasks(ctx, store.TaskFilter{Roles: []string{"officer"}})
 	if len(list) != 1 || list[0].ClaimedBy != "user-a" || list[0].ClaimedAt == nil {
 		t.Errorf("list = %+v", list)
 	}

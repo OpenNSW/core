@@ -36,7 +36,7 @@ type TaskStore interface {
     InitTask(ctx context.Context, record TaskRecord)
     GetTask(ctx context.Context, taskID string) (TaskRecord, bool)
     GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, bool)
-    GetAllTasks(ctx context.Context, parentWorkflowID string) []TaskRecord
+    GetTasks(ctx context.Context, filter TaskFilter) []TaskRecord
 
     // Guarded step writes: one atomic conditional statement each, returning the rows changed.
     ClaimStep(ctx context.Context, taskID string, claim StepClaim) (int64, error)
@@ -56,24 +56,24 @@ type TaskStore interface {
 - **`InitTask` is an upsert** keyed on `record.TaskID`. It creates the row (`StartTask`) and writes the coarse fields. It **must not write `ActiveStepID` or `Seq`**: those belong to the guarded statements, and a stale full-record save would move them backwards. The signature returns no error; if your store can fail, log and surface failures via your own observability.
 - **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). Must return `(zero, false)` when absent, never panic.
 - **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
-- **`GetAllTasks`** returns every record if `parentWorkflowID == ""`, otherwise only records where `record.ParentWorkflowID == parentWorkflowID`. Used by the portal listing API.
+- **`GetTasks`** returns each record that `filter.Matches`, once: records of `filter.CaseID` (every case when empty) whose `ReadRoles` contain at least one of `filter.Roles`. A record with no `ReadRoles` never matches, and a filter with no roles (including the zero filter) returns nothing: there is no way to skip the role check. Use `TaskFilter.Matches` as the reference for an in-memory store. Used by the portal listing API.
 - **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
 
-  | Method              | Guard                                | Sets                                                                        |
-  |---------------------|--------------------------------------|-----------------------------------------------------------------------------|
-  | `ClaimStep`         | stored `seq <= claim.Seq`            | `active_step_id`, `seq`, `active_task_template_id`, `state`, `data` (replaced, not merged) |
-  | `WriteRenderState`  | `active_step_id = stepID AND seq = seq` | `state`, `data`                                                          |
-  | `PersistSubmission` | `active_step_id = stepID AND seq = seq` | `data`, `state = ADVANCING`, `seq = seq + 1`                             |
-  | `WriteDraft`        | `active_step_id = stepID AND seq = seq AND state NOT IN (STARTING_STEP, ADVANCING, COMPLETED)` | `data` only                       |
-  | `CompleteTask`      | stored `seq <= seq`                  | `state = COMPLETED`, `seq`                                                  |
+  | Method              | Guard                                                                                          | Sets                                                                                       |
+  |---------------------|------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+  | `ClaimStep`         | stored `seq <= claim.Seq`                                                                      | `active_step_id`, `seq`, `active_task_template_id`, `state`, `data` (replaced, not merged) |
+  | `WriteRenderState`  | `active_step_id = stepID AND seq = seq`                                                        | `state`, `data`                                                                            |
+  | `PersistSubmission` | `active_step_id = stepID AND seq = seq`                                                        | `data`, `state = ADVANCING`, `seq = seq + 1`                                               |
+  | `WriteDraft`        | `active_step_id = stepID AND seq = seq AND state NOT IN (STARTING_STEP, ADVANCING, COMPLETED)` | `data` only                                                                                |
+  | `CompleteTask`      | stored `seq <= seq`                                                                            | `state = COMPLETED`, `seq`                                                                 |
 
   Return the number of rows changed. **0 rows means the write was stale and was dropped; it is not an error.** Return an error only when the store failed.
 - **The two claim methods** are conditional writes of the same kind, on `claimed_by` and `claimed_at` only. They must not change `seq` or the step columns, and the step methods and `InitTask` must not change the claim columns:
 
-  | Method        | Guard                                                              | Sets                                                                         |
-  |---------------|--------------------------------------------------------------------|------------------------------------------------------------------------------|
+  | Method        | Guard                                                             | Sets                                                                            |
+  |---------------|-------------------------------------------------------------------|---------------------------------------------------------------------------------|
   | `ClaimTask`   | (`claimed_by` is NULL or `holder`) and `state` is not `COMPLETED` | `claimed_by = holder`; `claimed_at = at`, unless `holder` already had the claim |
-  | `ReleaseTask` | `claimed_by = holder`                                              | `claimed_by` and `claimed_at` to NULL                                        |
+  | `ReleaseTask` | `claimed_by = holder`                                             | `claimed_by` and `claimed_at` to NULL                                           |
 
   Store an unclaimed task as NULL, not `""`, so the guard's `IS NULL` matches it. See [Task claims](#7-task-claims) for what the manager builds on these.
 
@@ -113,11 +113,11 @@ type TaskTemplateRegistry interface {
 
 This is read-only from the orchestrator's perspective. How definitions get *into* your registry is your call — load from disk at startup (the demo does this with `demo/templates/*.json`), pull from a config service, hard-code them, etc.
 
-| Method               | Resolves                                          | Used in                                                  |
-|----------------------|---------------------------------------------------|----------------------------------------------------------|
-| `GetTaskTemplate`    | `payload.TaskTemplateID` from the parent workflow | `StartTask`                                              |
-| `GetStepTemplate` | `payload.TaskTemplateID` from the child workflow  | `StartTaskStep`                                           |
-| `GetWorkflow`        | `TaskTemplate.WorkflowID`                         | `StartTask`                                              |
+| Method               | Resolves                                          | Used in                                                            |
+|----------------------|---------------------------------------------------|--------------------------------------------------------------------|
+| `GetTaskTemplate`    | `payload.TaskTemplateID` from the parent workflow | `StartTask`                                                        |
+| `GetStepTemplate`    | `payload.TaskTemplateID` from the child workflow  | `StartTaskStep`                                                    |
+| `GetWorkflow`        | `TaskTemplate.WorkflowID`                         | `StartTask`                                                        |
 | `GetGenericTemplate` | `TaskTemplate.RenderConfigID`                     | `StartTask`, and each render (through `TaskRecord.TaskTemplateID`) |
 
 The `TaskRecord` keeps only the render config's **id**. Every render resolves it again through the task's `ManifestVersion` (`renderconfig.Load`), so a task keeps the view of the manifest it started on, whatever is published later. Published artifacts never change, and the artifact `Set` keeps the files it loads, so this costs no fetch after the first.
@@ -271,13 +271,13 @@ What your host needs to do:
 3. **Show the claim in the UI.** `CompleteTaskStep` accepts a call from anyone and does not read `claimed_by`. For this MVP, a claim is guidance so two people can see who is working the task and avoid working it at once. Machine callers such as `CompleteTaskStepByToken` hold no claim and can still complete the step.
 4. **Optionally hide actions in the view.** Pass a fact such as `claim:mine` in the claims you give the renderer, and use it in `visibleWhen.requireClaim` to hide actions from someone who does not hold the claim. That only changes what the view shows. The submit call is still accepted. The renderer rejects a render config that references a fact you did not pass, so pass every claim fact your configs use on every read, with `false` for the ones that don't hold.
 
-| Error                      | Returned by                    | HTTP |
-|----------------------------|--------------------------------|------|
-| `ErrHolderRequired`        | `ClaimTask`, `ReleaseTask`     | 400  |
-| `ErrTaskNotFound`          | `ClaimTask`, `ReleaseTask`     | 404  |
-| `*ClaimHeldError` (matches `ErrClaimHeld`) | `ClaimTask` | 409; its `Holder` says who has the claim |
-| `ErrTaskCompleted`         | `ClaimTask`                    | 409  |
-| `ErrNotClaimHolder`        | `ReleaseTask`                  | 403  |
+| Error                                      | Returned by                | HTTP                                     |
+|--------------------------------------------|----------------------------|------------------------------------------|
+| `ErrHolderRequired`                        | `ClaimTask`, `ReleaseTask` | 400                                      |
+| `ErrTaskNotFound`                          | `ClaimTask`, `ReleaseTask` | 404                                      |
+| `*ClaimHeldError` (matches `ErrClaimHeld`) | `ClaimTask`                | 409; its `Holder` says who has the claim |
+| `ErrTaskCompleted`                         | `ClaimTask`                | 409                                      |
+| `ErrNotClaimHolder`                        | `ReleaseTask`              | 403                                      |
 
 "Claim" here is not `TaskStore.ClaimStep`, which makes a step the task's active step, and not the claims passed to the renderer (`renderer.Facts.Claims`), which are authorization facts such as `role:officer`.
 
@@ -289,10 +289,10 @@ What your host needs to do:
 
 The orchestrator uses two sentinel errors to signal "this isn't really an error, the workflow should park":
 
-| Sentinel                                                         | Returned by                                        | Meaning                                                                                  |
-|------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------|
+| Sentinel                                                         | Returned by                                         | Meaning                                                                                                                                         |
+|------------------------------------------------------------------|-----------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
 | `activity.ErrResultPending` (from `go.temporal.io/sdk/activity`) | `StartTask`, `StartTaskStep` (when plugin suspends) | The step waits for a completion: its activity ends, and its node waits in the workflow, with no timeout, until `CompleteActivation` resumes it. |
-| `plugins.ErrSuspended`                                           | A plugin's `Execute` method                        | "I dispatched the work; don't advance the workflow until something external resumes me." |
+| `plugins.ErrSuspended`                                           | A plugin's `Execute` method                         | "I dispatched the work; don't advance the workflow until something external resumes me."                                                        |
 
 `StartTaskStep` translates `ErrSuspended` from a plugin into `ErrResultPending` for Temporal. Both are normal happy-path values, not failures.
 
