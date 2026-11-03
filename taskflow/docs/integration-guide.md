@@ -31,12 +31,14 @@ tm := orchestrator.NewTaskManager(db, artifacts, pluginsReg, nil /* extensions *
 
 ## 1. Implementing `TaskStore`
 
+The store is taskflow's persistence port: you provide one to `NewTaskManager` (the gorm store in `store/gorm`, or your own), and only `TaskManager` calls it. Your own code reads and acts on tasks through `TaskManager`, never through the store: the store's writes are guarded steps of the manager's protocol, and its reads expose fields the manager keeps internal.
+
 ```go
 type TaskStore interface {
     InitTask(ctx context.Context, record TaskRecord)
-    GetTask(ctx context.Context, taskID string) (TaskRecord, bool)
-    GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, bool)
-    GetTasks(ctx context.Context, filter TaskFilter) []TaskRecord
+    GetTask(ctx context.Context, taskID string) (TaskRecord, error)
+    GetTaskByWorkflowID(ctx context.Context, workflowID string) (TaskRecord, error)
+    GetTasks(ctx context.Context, filter TaskFilter) ([]TaskRecord, error)
 
     // Guarded step writes: one atomic conditional statement each, returning the rows changed.
     ClaimStep(ctx context.Context, taskID string, claim StepClaim) (int64, error)
@@ -54,9 +56,9 @@ type TaskStore interface {
 **Contracts:**
 
 - **`InitTask` is an upsert** keyed on `record.TaskID`. It creates the row (`StartTask`) and writes the coarse fields. It **must not write `ActiveStepID` or `Seq`**: those belong to the guarded statements, and a stale full-record save would move them backwards. The signature returns no error; if your store can fail, log and surface failures via your own observability.
-- **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). Must return `(zero, false)` when absent, never panic.
-- **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`.
-- **`GetTasks`** returns each record that `filter.Matches`, once: every field is optional and narrows the result only when set. A non-empty `filter.CaseID` keeps the records of that case; a non-empty `filter.Roles` keeps the records whose `ReadRoles` contain at least one of them, so a record with no `ReadRoles` then never matches. Empty `Roles` (nil or no elements) applies no role filter, and the zero filter returns every record. Use `TaskFilter.Matches` as the reference for an in-memory store. Used by the portal listing API.
+- **`GetTask`** looks up by `TaskID` (the parent's step ID — see the architecture doc). When absent, it must return an error wrapping `store.ErrTaskNotFound` (checked with `errors.Is`), never panic. Any other failure must be returned as a different error: the orchestrator retries it, while it treats `ErrTaskNotFound` as final (a completion or hold for an unknown workflow is ignored, an HTTP read is a 404).
+- **`GetTaskByWorkflowID`** looks up by `TaskWorkflowID` (the child workflow's Temporal ID). Used internally by `StartTaskStep` and `HandleTaskCompletion`. It must scan or index by that field, not by `TaskID`. Not-found and failed reads are reported as for `GetTask`.
+- **`GetTasks`** returns each record that `filter.Matches`, once: every field is optional and narrows the result only when set. A non-empty `filter.CaseID` keeps the records of that case; a non-empty `filter.Roles` keeps the records whose `ReadRoles` contain at least one of them, so a record with no `ReadRoles` then never matches. Empty `Roles` (nil or no elements) applies no role filter, and the zero filter returns every record. `filter.ParentWorkflowID`, `filter.ActiveTemplateID` and `filter.State` keep the records whose `ParentWorkflowID`, `ActiveTaskTemplateID` and `State` equal them. Use `TaskFilter.Matches` as the reference for an in-memory store. Return the records without their data: leave `Data` nil and don't read it, since it is the one field that can be large and the listing never shows it. A failed read **must return an error**, never an empty result: a caller has to tell "no tasks" from "could not read the tasks". Backs `TaskManager.GetTasks`.
 - **The five step methods** must each be a single atomic conditional write, with the guard inside the statement — not a read followed by a write:
 
   | Method              | Guard                                                                                          | Sets                                                                                       |
@@ -289,7 +291,7 @@ What your host needs to do:
 
 ## Error semantics
 
-`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrStepNotGuarded` (see [Requiring an authorization extension](#requiring-an-authorization-extension)) maps to 403. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo` and the claim methods, maps to 404. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
+`ErrStaleStep` and `ErrStepIDRequired` (see `CompleteTaskStep`) are for your HTTP layer to map to 409 and 400. `ErrStepNotGuarded` (see [Requiring an authorization extension](#requiring-an-authorization-extension)) maps to 403. `ErrTaskNotFound`, from `CompleteTaskStep`, `GetTaskRenderInfo`, `SaveDraft` and the claim methods, maps to 404. It is the same value as `store.ErrTaskNotFound`. Any other error from these methods (the store could not read the task, for example) is not a 404: answer it with 5xx so the client retries. The claim errors are listed in [Task claims](#7-task-claims). `engine.ErrActivationNotPending` is what `CompleteActivation` returns for a step that already completed or never existed.
 
 The orchestrator uses two sentinel errors to signal "this isn't really an error, the workflow should park":
 
@@ -351,6 +353,22 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 The portal calls this with the `step_id` its task view reported and whatever payload makes sense for the current step. The shape is typed by your step templates and plugins, not by the orchestrator. A nil return means the workflow **accepted** the step; the row shows `ADVANCING` (or the next step) from then on, so clients refetch instead of assuming the state. Map `ErrStepIDRequired` to 400 and `ErrStaleStep` to 409.
 
 An external system that calls back is addressed by the **callback token** the dispatch carried in `X-Task-ID` (see `plugins.CallbackToken`): call `CompleteTaskStepByToken(ctx, token, payload)`. A malformed token returns an error wrapping `callbacktoken.ErrInvalid` (400). The receiver should also use the token as its idempotency key: it is the same on every retry of one step's dispatch and different for every step.
+
+An external system that calls back with its own reference instead of the token (a case or order number, say) is addressed by finding the task that waits on it. Map the reference to its case, list the case's task waiting in that step with `GetTasks`, and complete the step it is on:
+
+```go
+tasks, err := tm.GetTasks(ctx, store.TaskFilter{CaseID: caseID, ActiveTemplateID: "await_payment", State: "QUEUED_EXTERNALLY"})
+switch {
+case err != nil:
+    // The tasks could not be read: answer 5xx so the sender retries. Never acknowledge here.
+case len(tasks) == 0:
+    // Nothing is waiting (a duplicate callback, say): acknowledge.
+case len(tasks) > 1:
+    // The filter is ambiguous: fail rather than pick one.
+default:
+    err = tm.CompleteTaskStep(ctx, tasks[0].TaskID, tasks[0].StepID, payload)
+}
+```
 
 ### Requiring an authorization extension
 

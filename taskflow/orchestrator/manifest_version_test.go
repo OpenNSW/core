@@ -73,9 +73,9 @@ func TestStartTask_PinsTheParentsManifestVersion(t *testing.T) {
 	if !errors.Is(err, activity.ErrResultPending) {
 		t.Fatalf("StartTask: %v", err)
 	}
-	rec, ok := db.GetTask(context.Background(), "6f1d2c3b-4a59-4e8d-9c7b-1a2b3c4d5e6f")
-	if !ok {
-		t.Fatal("task record not created")
+	rec, err := db.GetTask(context.Background(), "6f1d2c3b-4a59-4e8d-9c7b-1a2b3c4d5e6f")
+	if err != nil {
+		t.Fatalf("task record not created: %v", err)
 	}
 	if rec.ManifestVersion != 1 {
 		t.Errorf("record ManifestVersion = %d, want 1", rec.ManifestVersion)
@@ -115,7 +115,7 @@ func TestStartTask_WithoutManifestVersionFailsWithoutRetry(t *testing.T) {
 	if !ok || !appErr.NonRetryable() {
 		t.Errorf("expected an unwrapped non-retryable application error, got %T: %v", err, err)
 	}
-	if _, ok := db.GetTask(context.Background(), "7a1d2c3b-4a59-4e8d-9c7b-1a2b3c4d5e6f"); ok {
+	if _, err := db.GetTask(context.Background(), "7a1d2c3b-4a59-4e8d-9c7b-1a2b3c4d5e6f"); !errors.Is(err, store.ErrTaskNotFound) {
 		t.Error("a task record was written")
 	}
 	if startedWorkflow {

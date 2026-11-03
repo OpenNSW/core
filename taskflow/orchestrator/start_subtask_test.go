@@ -76,9 +76,9 @@ func stepPayload(step string, seq int64, inputs map[string]any) engine.TaskPaylo
 
 func mustRow(t *testing.T, db *safeMockTaskStore) store.TaskRecord {
 	t.Helper()
-	row, ok := db.GetTask(context.Background(), "task-1")
-	if !ok {
-		t.Fatal("task row missing")
+	row, err := db.GetTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("task row missing: %v", err)
 	}
 	return row
 }

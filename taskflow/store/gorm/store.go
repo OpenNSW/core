@@ -66,37 +66,48 @@ func (s *TaskStore) InitTask(ctx context.Context, record store.TaskRecord) error
 	return nil
 }
 
-func (s *TaskStore) GetTask(ctx context.Context, taskID string) (store.TaskRecord, bool) {
+func (s *TaskStore) GetTask(ctx context.Context, taskID string) (store.TaskRecord, error) {
 	var model TaskRecordModel
-	if err := s.db.WithContext(ctx).First(&model, "task_id = ?", taskID).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.ErrorContext(ctx, "taskflow gorm store: GetTask db error", "task_id", taskID, "error", err)
-		}
-		return store.TaskRecord{}, false
+	err := s.db.WithContext(ctx).First(&model, "task_id = ?", taskID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.TaskRecord{}, fmt.Errorf("%w: %s", store.ErrTaskNotFound, taskID)
 	}
-	return model.ToDomain(), true
+	if err != nil {
+		return store.TaskRecord{}, fmt.Errorf("get task %s: %w", taskID, err)
+	}
+	return model.ToDomain(), nil
 }
 
-func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) (store.TaskRecord, bool) {
+func (s *TaskStore) GetTaskByWorkflowID(ctx context.Context, workflowID string) (store.TaskRecord, error) {
 	var model TaskRecordModel
-	if err := s.db.WithContext(ctx).First(&model, "task_workflow_id = ?", workflowID).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.ErrorContext(ctx, "taskflow gorm store: GetTaskByWorkflowID db error", "task_workflow_id", workflowID, "error", err)
-		}
-		return store.TaskRecord{}, false
+	err := s.db.WithContext(ctx).First(&model, "task_workflow_id = ?", workflowID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.TaskRecord{}, fmt.Errorf("%w: workflow %s", store.ErrTaskNotFound, workflowID)
 	}
-	return model.ToDomain(), true
+	if err != nil {
+		return store.TaskRecord{}, fmt.Errorf("get task of workflow %s: %w", workflowID, err)
+	}
+	return model.ToDomain(), nil
 }
 
-// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once. Each field
-// adds its condition only when set. Roles match through a taskflow_task_roles subquery rather than
-// a join, so a task listing several of the roles appears once; with a case set too, the case is
-// applied on both sides so the (case_id, role) index serves the match. A query error is logged and
-// returns nil.
-func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []store.TaskRecord {
-	query := s.db.WithContext(ctx)
+// GetTasks returns the tasks filter matches (see store.TaskFilter.Matches), each once, reading
+// every column but data. Each field adds its condition only when set. Roles match through a
+// taskflow_task_roles subquery rather than a join, so a task listing several of the roles appears
+// once; with a case set too, the case is applied on both sides so the (case_id, role) index serves
+// the match.
+func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) ([]store.TaskRecord, error) {
+	query := s.db.WithContext(ctx).Omit("data")
 	if filter.CaseID != "" {
 		query = query.Where("case_id = ?", filter.CaseID)
+	}
+	if filter.ParentWorkflowID != "" {
+		query = query.Where("parent_workflow_id = ?", filter.ParentWorkflowID)
+	}
+	if filter.ActiveTemplateID != "" {
+		query = query.Where("active_task_template_id = ?", filter.ActiveTemplateID)
+	}
+	if filter.State != "" {
+		query = query.Where("state = ?", filter.State)
 	}
 	if len(filter.Roles) > 0 {
 		matching := s.db.WithContext(ctx).Model(&TaskRoleModel{}).Select("task_id").Where("role IN ?", filter.Roles)
@@ -107,16 +118,14 @@ func (s *TaskStore) GetTasks(ctx context.Context, filter store.TaskFilter) []sto
 	}
 	var models []TaskRecordModel
 	if err := query.Find(&models).Error; err != nil {
-		slog.ErrorContext(ctx, "taskflow gorm store: GetTasks db error",
-			"case_id", filter.CaseID, "roles", filter.Roles, "error", err)
-		return nil
+		return nil, fmt.Errorf("get tasks: %w", err)
 	}
 
 	records := make([]store.TaskRecord, len(models))
 	for i, m := range models {
 		records[i] = m.ToDomain()
 	}
-	return records
+	return records, nil
 }
 
 // jsonData encodes task data for the jsonb column the way FromDomain does.

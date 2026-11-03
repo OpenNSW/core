@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -92,6 +93,11 @@ func (r TaskRecord) DeepCopy() TaskRecord {
 	return cp
 }
 
+// ErrTaskNotFound is wrapped by the error TaskStore.GetTask and TaskStore.GetTaskByWorkflowID
+// return when no task has the given ID. Check it with errors.Is: any other error from them means
+// the task could not be read, which a caller must not treat as "no such task".
+var ErrTaskNotFound = errors.New("task not found")
+
 // TaskFilter selects the tasks TaskStore.GetTasks returns. Every field is optional: an empty field
 // does not filter, and a set field narrows the result. The zero TaskFilter matches every task.
 //
@@ -108,11 +114,28 @@ type TaskFilter struct {
 	// caller holds in every case, never a union of roles held in different cases. A role held in
 	// one case goes in a filter with that CaseID.
 	Roles []string
+	// ParentWorkflowID narrows the result to the tasks started by that workflow
+	// (TaskRecord.ParentWorkflowID). Empty: every workflow.
+	ParentWorkflowID string
+	// ActiveTemplateID narrows the result to the tasks whose active step runs that step template
+	// (TaskRecord.ActiveTaskTemplateID). Empty: any step template.
+	ActiveTemplateID string
+	// State narrows the result to the tasks in that state (TaskRecord.State). Empty: any state.
+	State string
 }
 
 // Matches reports whether r is in f's result. It is the reference for every TaskStore's GetTasks.
 func (f TaskFilter) Matches(r TaskRecord) bool {
 	if f.CaseID != "" && r.CaseID != f.CaseID {
+		return false
+	}
+	if f.ParentWorkflowID != "" && r.ParentWorkflowID != f.ParentWorkflowID {
+		return false
+	}
+	if f.ActiveTemplateID != "" && r.ActiveTaskTemplateID != f.ActiveTemplateID {
+		return false
+	}
+	if f.State != "" && r.State != f.State {
 		return false
 	}
 	if len(f.Roles) == 0 {
@@ -176,11 +199,18 @@ type TaskStore interface {
 	// InitTask also stores the record's ReadRoles, atomically with the row: a task must never be
 	// readable without its roles, and a retry must not duplicate them.
 	InitTask(context context.Context, record TaskRecord) error
-	GetTask(context context.Context, taskID string) (TaskRecord, bool)
-	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, bool)
+	// GetTask returns the task with ID taskID. When there is none, the error wraps
+	// ErrTaskNotFound; any other error means the task could not be read.
+	GetTask(context context.Context, taskID string) (TaskRecord, error)
+	// GetTaskByWorkflowID returns the task whose TaskWorkflowID is workflowID. When there is none,
+	// the error wraps ErrTaskNotFound; any other error means the task could not be read.
+	GetTaskByWorkflowID(context context.Context, workflowID string) (TaskRecord, error)
 	// GetTasks returns each task that filter matches (see TaskFilter.Matches) once, in no
-	// particular order.
-	GetTasks(context context.Context, filter TaskFilter) []TaskRecord
+	// particular order, without its data: each record's Data is nil whatever the task holds (it is
+	// the one field that can be large, and a listing never shows it), and ReadRoles is empty as for
+	// the other reads. A non-nil error means the tasks could not be read; it is never returned for
+	// a filter that matches no task, which returns an empty result and a nil error.
+	GetTasks(context context.Context, filter TaskFilter) ([]TaskRecord, error)
 
 	// ClaimStep makes claim.StepID the active step. Guard: the stored seq is <= claim.Seq and the
 	// state is not StateCancelled, so a retry of the same step matches again, an older step's late
