@@ -16,7 +16,7 @@ import (
 // ZoneViewAssembler builds the ZoneView payload served by GET /api/v1/tasks/{id}.
 // TaskRenderer produces the complete view — projected sections merged with
 // their legal handles, in layout order — so the assembler only resolves the
-// task's render config, forwards the caller's claims and wraps the view with the
+// task's render config, forwards the caller's claims and commands and wraps the view with the
 // task's identity and timestamps.
 type ZoneViewAssembler struct {
 	inner     *TaskRenderer
@@ -27,14 +27,24 @@ func NewZoneViewAssembler(inner *TaskRenderer, artifacts *artifact.Set) *ZoneVie
 	return &ZoneViewAssembler{inner: inner, artifacts: artifacts}
 }
 
-// Assemble renders record for one caller. claims are the authorization
-// decisions that caller resolved beforehand (see tfrenderer.Facts.Claims): the
-// assembler forwards them to the projector and makes no policy decision of its
-// own. Pass nil when the render config gates nothing on a claim. Because a
-// hidden section is absent from the projector's output, its handles are dropped
-// with it — the renderer only decorates sections the projector actually emitted.
-// Templates resolve through record.ManifestVersion, which Assemble puts on ctx.
-func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecord, claims map[string]bool) (ZoneView, error) {
+// Caller is what one caller resolved about themselves before a render. The
+// assembler forwards both maps to the renderer and makes no policy decision of
+// its own.
+type Caller struct {
+	// Claims gate sections (see tfrenderer.Facts.Claims). Nil when the render
+	// config gates nothing on a claim.
+	Claims map[string]bool
+	// Commands are the commands the caller may issue (see
+	// tfrenderer.Facts.Commands). A handle whose command is not allowed is
+	// dropped, so its section renders read-only. Nil drops nothing.
+	Commands map[string]bool
+}
+
+// Assemble renders record for caller. Because a hidden section is absent from
+// the projector's output, its handles are dropped with it — the renderer only
+// decorates sections the projector actually emitted. Templates resolve through
+// record.ManifestVersion, which Assemble puts on ctx.
+func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecord, caller Caller) (ZoneView, error) {
 	// The template provider resolves the render config's templates through the task's manifest
 	// version (artifact.ManifestVersionFrom), so a form does not change under an open task.
 	renderConfig, err := renderconfig.Load(ctx, a.artifacts, record)
@@ -43,9 +53,10 @@ func (a *ZoneViewAssembler) Assemble(ctx context.Context, record store.TaskRecor
 	}
 	ctx = artifact.WithManifestVersion(ctx, record.ManifestVersion)
 	view, err := a.inner.Render(ctx, renderConfig, tfrenderer.Facts{
-		State:  record.State,
-		Data:   record.Data,
-		Claims: claims,
+		State:    record.State,
+		Data:     record.Data,
+		Claims:   caller.Claims,
+		Commands: caller.Commands,
 	})
 	if err != nil {
 		return ZoneView{}, fmt.Errorf("zone assembler: render: %w", err)
