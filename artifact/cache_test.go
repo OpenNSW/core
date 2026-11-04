@@ -238,7 +238,7 @@ func TestSetFileCacheLimit(t *testing.T) {
 	})
 }
 
-func TestSetWarmAsync(t *testing.T) {
+func TestSetWarm(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("fetches every distinct file of the manifest into the cache", func(t *testing.T) {
@@ -255,8 +255,8 @@ func TestSetWarmAsync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSet: %v", err)
 		}
-		if err := <-set.WarmAsync(ctx, set.Current()); err != nil {
-			t.Fatalf("WarmAsync: %v", err)
+		if err := set.Warm(ctx, set.Current()); err != nil {
+			t.Fatalf("Warm: %v", err)
 		}
 		if got := src.count("welcome.json"); got != 1 {
 			t.Errorf("welcome.json loaded %d times during warm, want 1", got)
@@ -293,8 +293,8 @@ func TestSetWarmAsync(t *testing.T) {
 		files["manifest_v2.json"] = manifest(row("welcome", "email", "", "welcome_v2.json"))
 		files["welcome_v2.json"] = []byte(`{"subject":"Hello v2"}`)
 
-		if err := <-set.WarmAsync(ctx, 2); err != nil {
-			t.Fatalf("WarmAsync(2): %v", err)
+		if err := set.Warm(ctx, 2); err != nil {
+			t.Fatalf("Warm(2): %v", err)
 		}
 		if got := src.count("welcome_v2.json"); got != 1 {
 			t.Errorf("welcome_v2.json loaded %d times, want 1", got)
@@ -317,8 +317,8 @@ func TestSetWarmAsync(t *testing.T) {
 			t.Fatalf("LoadSet: %v", err)
 		}
 		for _, v := range []int{0, -1, 5} {
-			if err := <-set.WarmAsync(ctx, v); !errors.Is(err, artifact.ErrUnknownManifestVersion) {
-				t.Errorf("WarmAsync(%d): got %v, want ErrUnknownManifestVersion", v, err)
+			if err := set.Warm(ctx, v); !errors.Is(err, artifact.ErrUnknownManifestVersion) {
+				t.Errorf("Warm(%d): got %v, want ErrUnknownManifestVersion", v, err)
 			}
 		}
 	})
@@ -332,8 +332,8 @@ func TestSetWarmAsync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSet(manifest.json): %v", err)
 		}
-		if err := <-set.WarmAsync(ctx, 1); err != nil {
-			t.Fatalf("WarmAsync on manifest.json: %v", err)
+		if err := set.Warm(ctx, 1); err != nil {
+			t.Fatalf("Warm on manifest.json: %v", err)
 		}
 		if got := unversioned.count("welcome.json"); got != 0 {
 			t.Errorf("manifest.json warm loaded welcome.json %d times, want 0", got)
@@ -347,8 +347,8 @@ func TestSetWarmAsync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSet(cache=0): %v", err)
 		}
-		if err := <-setOff.WarmAsync(ctx, 1); err != nil {
-			t.Fatalf("WarmAsync with cache=0: %v", err)
+		if err := setOff.Warm(ctx, 1); err != nil {
+			t.Fatalf("Warm with cache=0: %v", err)
 		}
 		if got := disabled.count("welcome.json"); got != 0 {
 			t.Errorf("cache=0 warm loaded welcome.json %d times, want 0", got)
@@ -368,12 +368,12 @@ func TestSetWarmAsync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSet: %v", err)
 		}
-		err = <-set.WarmAsync(ctx, 1)
+		err = set.Warm(ctx, 1)
 		if !errors.Is(err, artifact.ErrNotFound) {
-			t.Fatalf("WarmAsync err = %v, want ErrNotFound", err)
+			t.Fatalf("Warm err = %v, want ErrNotFound", err)
 		}
 		if !strings.Contains(err.Error(), "missing_a.json") || !strings.Contains(err.Error(), "missing_c.json") {
-			t.Errorf("WarmAsync err = %q, want both missing files named", err.Error())
+			t.Errorf("Warm err = %q, want both missing files named", err.Error())
 		}
 		if got := src.count("present.json"); got != 1 {
 			t.Errorf("present.json loaded %d times, want 1", got)

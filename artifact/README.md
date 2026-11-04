@@ -94,8 +94,12 @@ loader, err := local.New(local.Config{Root: "/etc/configs"})
 set, err := artifact.LoadSet(ctx, loader)                                // highest version
 set, err := artifact.LoadSet(ctx, loader, artifact.WithPinnedVersion(4)) // or a pinned one
 
-// Optional: warm the current version's files in the background (or <-set.WarmAsync(...) to wait).
-set.WarmAsync(ctx, set.Current())
+// Optional: warm the current version's files in the background (or call set.Warm directly to wait).
+go func() {
+	if err := set.Warm(ctx, set.Current()); err != nil {
+		slog.WarnContext(ctx, "artifact file cache warmup failed", "err", err)
+	}
+}()
 ```
 
 A bare `Registry` can still be built by hand, for tests:
@@ -128,7 +132,7 @@ Manifests are `manifest_v1.json`, `manifest_v2.json`, … at the loader's root (
 
 Published files never change, so a `Set`'s registries keep the artifact files they load, by path, up to `artifact.DefaultFileCacheBytes` (64 MiB) of content, evicting the least recently used. `artifact.WithFileCacheBytes(n)` changes the limit, and zero turns the cache off. Failed fetches are not kept. A `manifest.json` source is the exception: it is a working copy that may be edited while the process runs, so its files are fetched every time. Manifests themselves are always fetched from the source.
 
-`LoadSet` checks manifests without fetching the artifact files they list. To avoid first-request loader round trips, call `set.WarmAsync(ctx, set.Current())` at startup (or receive from the returned `<-chan error` to wait and inspect joined load errors). `WarmAsync` fetches distinct paths with bounded concurrency and is a no-op when the file cache is off. When warming from GitHub across multiple replicas, configure a `Token` or `UseRawHost` on the GitHub loader so startup fetches do not exhaust the unauthenticated REST rate limit.
+`LoadSet` checks manifests without fetching the artifact files they list. To avoid first-request loader round trips, call `set.Warm(ctx, set.Current())` at startup, in a goroutine if startup should not wait. It returns the joined load errors once every file has been tried. `Warm` fetches distinct paths with bounded concurrency and is a no-op when the file cache is off. When warming from GitHub across multiple replicas, configure a `Token` or `UseRawHost` on the GitHub loader so startup fetches do not exhaust the unauthenticated REST rate limit.
 
 ```json
 {
