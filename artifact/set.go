@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +18,9 @@ import (
 // before it probes again. A flow pinned to a version that was never published retries its
 // steps; without it, each retry would hold the write lock for a loader round trip.
 const reprobeInterval = 10 * time.Second
+
+// warmConcurrency bounds how many artifact files Warm fetches in parallel.
+const warmConcurrency = 8
 
 // ErrUnknownManifestVersion is returned when a manifest version is not positive or no manifest
 // file exists for it. It does not match ErrNotFound: a flow pinned to a missing manifest is a
@@ -105,7 +109,7 @@ func WithFileCacheBytes(n int) SetOption {
 // fault never silently hides the newer manifests. Without a manifest_v1.json, it loads
 // manifest.json as version 1. Each manifest is checked as RegisterFromConfig checks it, and
 // explicitly versioned rows are checked for a consistent path across manifests. Artifact files
-// themselves are not fetched.
+// themselves are not fetched; call Set.Warm to populate the file cache.
 func LoadSet(ctx context.Context, loader Loader, opts ...SetOption) (*Set, error) {
 	if loader == nil {
 		return nil, errors.New("artifact: nil loader passed to LoadSet")
@@ -348,6 +352,87 @@ func (s *Set) CurrentRegistry() *Registry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.views[s.current]
+}
+
+// Warm fetches every artifact file that manifest version v lists into the Set's file cache, so
+// later lookups are served from memory. A version above the highest loaded one is loaded on
+// demand first, as Registry does. Warm blocks until every file has been tried; to warm in the
+// background, call it from a goroutine with a context that outlives the caller's request.
+//
+// When the file cache is off (a manifest.json source or WithFileCacheBytes(0)), Warm only
+// resolves the manifest version and returns without fetching artifact files.
+//
+// Files are fetched with bounded concurrency. Every distinct path in the manifest is tried even
+// if one fails; any errors are joined via errors.Join and returned. If ctx is cancelled, workers
+// stop claiming new paths and the returned error wraps ctx.Err().
+//
+// Once the files warmed so far exceed the cache size, workers stop claiming new paths too: each
+// further fetch would only evict a file warmed earlier. That is logged as a warning, not returned
+// as an error. Files larger than the whole cache are never kept, so they do not count toward it.
+func (s *Set) Warm(ctx context.Context, v int) error {
+	reg, err := s.Registry(ctx, v)
+	if err != nil {
+		return err
+	}
+	cache, ok := s.files.(*cachingLoader)
+	if !ok {
+		return nil
+	}
+	paths := reg.paths()
+	if len(paths) == 0 {
+		return nil
+	}
+
+	var (
+		next       atomic.Int64
+		totalBytes atomic.Int64
+		warmed     atomic.Int64
+		maxBytes   = int64(cache.maxBytes)
+		errs       = make([]error, len(paths))
+		workers    = min(warmConcurrency, len(paths))
+		wg         sync.WaitGroup
+	)
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			// Fetches already in flight when the cache fills still finish, so the total can
+			// overshoot by up to workers-1 files.
+			for ctx.Err() == nil && totalBytes.Load() <= maxBytes {
+				i := int(next.Add(1) - 1)
+				if i >= len(paths) {
+					return
+				}
+				n, err := cache.warm(ctx, paths[i])
+				if err != nil {
+					errs[i] = fmt.Errorf("load %q: %w", paths[i], err)
+					continue
+				}
+				warmed.Add(1)
+				if int64(n) <= maxBytes { // a larger file is never stored
+					totalBytes.Add(int64(n))
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Report an undersized cache even when some files failed or warmup was cut short: the
+	// files that did load can already have evicted each other.
+	total := totalBytes.Load()
+	overflow := total > maxBytes
+	if overflow {
+		slog.WarnContext(ctx, "artifact manifest exceeds file cache size; warmup stopped early",
+			"version", v, "files", len(paths), "warmed", warmed.Load(), "warmed_bytes", total, "cache_bytes", cache.maxBytes)
+	}
+	if err := errors.Join(ctx.Err(), errors.Join(errs...)); err != nil {
+		return err
+	}
+	if !overflow {
+		slog.InfoContext(ctx, "artifact file cache warmed",
+			"version", v, "files", len(paths), "bytes", total)
+	}
+	return nil
 }
 
 // GetExplicit fetches an explicitly versioned artifact without a manifest version, from

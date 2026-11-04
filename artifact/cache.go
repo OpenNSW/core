@@ -63,6 +63,26 @@ func (c *cachingLoader) Load(ctx context.Context, path string) ([]byte, error) {
 	return raw, nil
 }
 
+// warm ensures path is in the cache, fetching it from next if absent, and returns the size in
+// bytes of the file. Unlike Load, it does not clone the cached bytes for the caller.
+func (c *cachingLoader) warm(ctx context.Context, path string) (int, error) {
+	c.mu.Lock()
+	if el, ok := c.files[path]; ok {
+		c.order.MoveToFront(el)
+		n := len(el.Value.(*cachedFile).raw)
+		c.mu.Unlock()
+		return n, nil
+	}
+	c.mu.Unlock()
+
+	raw, err := c.next.Load(ctx, path)
+	if err != nil {
+		return 0, err
+	}
+	c.store(path, raw)
+	return len(raw), nil
+}
+
 // store keeps a copy of raw under path, evicting the least recently used files to make room.
 func (c *cachingLoader) store(path string, raw []byte) {
 	if len(raw) > c.maxBytes {
