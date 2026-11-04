@@ -365,6 +365,10 @@ func (s *Set) CurrentRegistry() *Registry {
 // Files are fetched with bounded concurrency. Every distinct path in the manifest is tried even
 // if one fails; any errors are joined via errors.Join and returned. If ctx is cancelled, workers
 // stop claiming new paths and the returned error wraps ctx.Err().
+//
+// Once the files warmed so far exceed the cache size, workers stop claiming new paths too: each
+// further fetch would only evict a file warmed earlier. That is logged as a warning, not returned
+// as an error. Files larger than the whole cache are never kept, so they do not count toward it.
 func (s *Set) Warm(ctx context.Context, v int) error {
 	reg, err := s.Registry(ctx, v)
 	if err != nil {
@@ -382,6 +386,8 @@ func (s *Set) Warm(ctx context.Context, v int) error {
 	var (
 		next       atomic.Int64
 		totalBytes atomic.Int64
+		warmed     atomic.Int64
+		maxBytes   = int64(cache.maxBytes)
 		errs       = make([]error, len(paths))
 		workers    = min(warmConcurrency, len(paths))
 		wg         sync.WaitGroup
@@ -390,7 +396,9 @@ func (s *Set) Warm(ctx context.Context, v int) error {
 	for range workers {
 		go func() {
 			defer wg.Done()
-			for ctx.Err() == nil {
+			// Fetches already in flight when the cache fills still finish, so the total can
+			// overshoot by up to workers-1 files.
+			for ctx.Err() == nil && totalBytes.Load() <= maxBytes {
 				i := int(next.Add(1) - 1)
 				if i >= len(paths) {
 					return
@@ -400,7 +408,10 @@ func (s *Set) Warm(ctx context.Context, v int) error {
 					errs[i] = fmt.Errorf("load %q: %w", paths[i], err)
 					continue
 				}
-				totalBytes.Add(int64(n))
+				warmed.Add(1)
+				if int64(n) <= maxBytes { // a larger file is never stored
+					totalBytes.Add(int64(n))
+				}
 			}
 		}()
 	}
@@ -409,10 +420,10 @@ func (s *Set) Warm(ctx context.Context, v int) error {
 	// Report an undersized cache even when some files failed or warmup was cut short: the
 	// files that did load can already have evicted each other.
 	total := totalBytes.Load()
-	overflow := total > int64(cache.maxBytes)
+	overflow := total > maxBytes
 	if overflow {
-		slog.WarnContext(ctx, "artifact manifest exceeds file cache size; some warmed files were evicted",
-			"version", v, "files", len(paths), "manifest_bytes", total, "cache_bytes", cache.maxBytes)
+		slog.WarnContext(ctx, "artifact manifest exceeds file cache size; warmup stopped early",
+			"version", v, "files", len(paths), "warmed", warmed.Load(), "warmed_bytes", total, "cache_bytes", cache.maxBytes)
 	}
 	if err := errors.Join(ctx.Err(), errors.Join(errs...)); err != nil {
 		return err

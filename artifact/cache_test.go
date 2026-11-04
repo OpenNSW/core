@@ -6,6 +6,7 @@ package artifact_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -402,6 +403,70 @@ func TestSetWarm(t *testing.T) {
 		for _, p := range []string{"welcome.json", "farewell.json"} {
 			if got := src.count(p); got != 0 {
 				t.Errorf("%s loaded %d times after cancel, want 0", p, got)
+			}
+		}
+	})
+
+	t.Run("stops claiming files once the cache is full", func(t *testing.T) {
+		const n = 30
+		files := testutil.MemLoader{}
+		rows := make([]string, 0, n)
+		for i := range n {
+			p := fmt.Sprintf("f%02d.json", i)
+			rows = append(rows, row(fmt.Sprintf("f%02d", i), "email", "", p))
+			files[p] = []byte(strings.Repeat("x", 20))
+		}
+		files["manifest_v1.json"] = manifest(rows...)
+		src := counting(files)
+		// Two files overflow the cache, so at most those two plus the fetches already in
+		// flight run before warmup stops: far fewer than all n.
+		set, err := artifact.LoadSet(ctx, src, artifact.WithFileCacheBytes(30))
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		if err := set.Warm(ctx, 1); err != nil {
+			t.Fatalf("Warm: %v", err)
+		}
+		loaded := 0
+		for i := range n {
+			loaded += src.count(fmt.Sprintf("f%02d.json", i))
+		}
+		if loaded < 2 || loaded >= n {
+			t.Errorf("loaded %d of %d files, want warmup to stop early after the cache filled", loaded, n)
+		}
+	})
+
+	t.Run("does not count a file larger than the cache toward it", func(t *testing.T) {
+		const n = 10
+		files := testutil.MemLoader{
+			"a_big.json": []byte(strings.Repeat("x", 500)), // sorts first, never cached
+		}
+		rows := []string{row("big", "email", "", "a_big.json")}
+		for i := range n {
+			p := fmt.Sprintf("s%02d.json", i)
+			rows = append(rows, row(fmt.Sprintf("s%02d", i), "email", "", p))
+			files[p] = []byte(`{"subject":"Hi"}`)
+		}
+		files["manifest_v1.json"] = manifest(rows...)
+		src := counting(files)
+		set, err := artifact.LoadSet(ctx, src, artifact.WithFileCacheBytes(200))
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		if err := set.Warm(ctx, 1); err != nil {
+			t.Fatalf("Warm: %v", err)
+		}
+		reg := set.CurrentRegistry()
+		for i := range n {
+			p, id := fmt.Sprintf("s%02d.json", i), fmt.Sprintf("s%02d", i)
+			if got := src.count(p); got != 1 {
+				t.Errorf("%s loaded %d times during warm, want 1", p, got)
+			}
+			if _, err := artifact.Latest[fakeEmail](ctx, reg, id); err != nil {
+				t.Fatalf("Latest(%s): %v", id, err)
+			}
+			if got := src.count(p); got != 1 {
+				t.Errorf("%s loaded %d times after lookup, want 1 (served from cache)", p, got)
 			}
 		}
 	})
