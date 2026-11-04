@@ -363,7 +363,8 @@ func (s *Set) CurrentRegistry() *Registry {
 // resolves the manifest version and returns without fetching artifact files.
 //
 // Files are fetched with bounded concurrency. Every distinct path in the manifest is tried even
-// if one fails; any errors are joined via errors.Join and returned.
+// if one fails; any errors are joined via errors.Join and returned. If ctx is cancelled, workers
+// stop claiming new paths and the returned error wraps ctx.Err().
 func (s *Set) Warm(ctx context.Context, v int) error {
 	reg, err := s.Registry(ctx, v)
 	if err != nil {
@@ -389,7 +390,7 @@ func (s *Set) Warm(ctx context.Context, v int) error {
 	for range workers {
 		go func() {
 			defer wg.Done()
-			for {
+			for ctx.Err() == nil {
 				i := int(next.Add(1) - 1)
 				if i >= len(paths) {
 					return
@@ -405,14 +406,18 @@ func (s *Set) Warm(ctx context.Context, v int) error {
 	}
 	wg.Wait()
 
-	if err := errors.Join(errs...); err != nil {
-		return err
-	}
+	// Report an undersized cache even when some files failed or warmup was cut short: the
+	// files that did load can already have evicted each other.
 	total := totalBytes.Load()
-	if total > int64(cache.maxBytes) {
+	overflow := total > int64(cache.maxBytes)
+	if overflow {
 		slog.WarnContext(ctx, "artifact manifest exceeds file cache size; some warmed files were evicted",
 			"version", v, "files", len(paths), "manifest_bytes", total, "cache_bytes", cache.maxBytes)
-	} else {
+	}
+	if err := errors.Join(ctx.Err(), errors.Join(errs...)); err != nil {
+		return err
+	}
+	if !overflow {
 		slog.InfoContext(ctx, "artifact file cache warmed",
 			"version", v, "files", len(paths), "bytes", total)
 	}

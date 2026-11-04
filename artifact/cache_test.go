@@ -379,4 +379,30 @@ func TestSetWarm(t *testing.T) {
 			t.Errorf("present.json loaded %d times, want 1", got)
 		}
 	})
+
+	t.Run("stops claiming files once ctx is cancelled", func(t *testing.T) {
+		src := counting(testutil.MemLoader{
+			"manifest_v1.json": manifest(
+				row("welcome", "email", "", "welcome.json"),
+				row("farewell", "email", "", "farewell.json"),
+			),
+			"welcome.json":  []byte(`{"subject":"Hello"}`),
+			"farewell.json": []byte(`{"subject":"Goodbye"}`),
+		})
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+
+		if err := set.Warm(cancelled, 1); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Warm err = %v, want context.Canceled", err)
+		}
+		for _, p := range []string{"welcome.json", "farewell.json"} {
+			if got := src.count(p); got != 0 {
+				t.Errorf("%s loaded %d times after cancel, want 0", p, got)
+			}
+		}
+	})
 }
