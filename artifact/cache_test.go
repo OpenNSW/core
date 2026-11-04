@@ -6,6 +6,7 @@ package artifact_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -233,6 +234,149 @@ func TestSetFileCacheLimit(t *testing.T) {
 		get(t, set, "a")
 		if got := loads.count("a.json"); got != 2 {
 			t.Errorf("a.json loaded %d times, want 2", got)
+		}
+	})
+}
+
+func TestSetWarmAsync(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("fetches every distinct file of the manifest into the cache", func(t *testing.T) {
+		src := counting(testutil.MemLoader{
+			"manifest_v1.json": manifest(
+				row("welcome", "email", "", "welcome.json"),
+				row("welcome", "email", "1", "welcome.json"), // shared path
+				row("farewell", "email", "", "farewell.json"),
+			),
+			"welcome.json":  []byte(`{"subject":"Hello"}`),
+			"farewell.json": []byte(`{"subject":"Goodbye"}`),
+		})
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		if err := <-set.WarmAsync(ctx, set.Current()); err != nil {
+			t.Fatalf("WarmAsync: %v", err)
+		}
+		if got := src.count("welcome.json"); got != 1 {
+			t.Errorf("welcome.json loaded %d times during warm, want 1", got)
+		}
+		if got := src.count("farewell.json"); got != 1 {
+			t.Errorf("farewell.json loaded %d times during warm, want 1", got)
+		}
+
+		// Subsequent lookups are served from memory without touching the loader.
+		reg := set.CurrentRegistry()
+		for _, id := range []string{"welcome", "farewell"} {
+			if _, err := artifact.Latest[fakeEmail](ctx, reg, id); err != nil {
+				t.Fatalf("Latest(%s): %v", id, err)
+			}
+		}
+		if got := src.count("welcome.json"); got != 1 {
+			t.Errorf("welcome.json loaded %d times after lookup, want 1", got)
+		}
+		if got := src.count("farewell.json"); got != 1 {
+			t.Errorf("farewell.json loaded %d times after lookup, want 1", got)
+		}
+	})
+
+	t.Run("loads a newer manifest version on demand before warming its files", func(t *testing.T) {
+		files := testutil.MemLoader{
+			"manifest_v1.json": manifest(row("welcome", "email", "", "welcome.json")),
+			"welcome.json":     []byte(`{"subject":"Hello"}`),
+		}
+		src := counting(files)
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		files["manifest_v2.json"] = manifest(row("welcome", "email", "", "welcome_v2.json"))
+		files["welcome_v2.json"] = []byte(`{"subject":"Hello v2"}`)
+
+		if err := <-set.WarmAsync(ctx, 2); err != nil {
+			t.Fatalf("WarmAsync(2): %v", err)
+		}
+		if got := src.count("welcome_v2.json"); got != 1 {
+			t.Errorf("welcome_v2.json loaded %d times, want 1", got)
+		}
+		if got, err := welcomeIn(t, set, 2); err != nil || got.Subject != "Hello v2" {
+			t.Fatalf("v2 lookup: %+v, %v", got, err)
+		}
+		if got := src.count("welcome_v2.json"); got != 1 {
+			t.Errorf("welcome_v2.json loaded %d times after lookup, want 1", got)
+		}
+	})
+
+	t.Run("rejects an unknown manifest version", func(t *testing.T) {
+		src := counting(testutil.MemLoader{
+			"manifest_v1.json": manifest(row("welcome", "email", "", "welcome.json")),
+			"welcome.json":     []byte(`{"subject":"Hello"}`),
+		})
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		for _, v := range []int{0, -1, 5} {
+			if err := <-set.WarmAsync(ctx, v); !errors.Is(err, artifact.ErrUnknownManifestVersion) {
+				t.Errorf("WarmAsync(%d): got %v, want ErrUnknownManifestVersion", v, err)
+			}
+		}
+	})
+
+	t.Run("is a no-op for artifact files when the cache is off", func(t *testing.T) {
+		unversioned := counting(testutil.MemLoader{
+			"manifest.json": manifest(row("welcome", "email", "", "welcome.json")),
+			"welcome.json":  []byte(`{"subject":"Hello"}`),
+		})
+		set, err := artifact.LoadSet(ctx, unversioned)
+		if err != nil {
+			t.Fatalf("LoadSet(manifest.json): %v", err)
+		}
+		if err := <-set.WarmAsync(ctx, 1); err != nil {
+			t.Fatalf("WarmAsync on manifest.json: %v", err)
+		}
+		if got := unversioned.count("welcome.json"); got != 0 {
+			t.Errorf("manifest.json warm loaded welcome.json %d times, want 0", got)
+		}
+
+		disabled := counting(testutil.MemLoader{
+			"manifest_v1.json": manifest(row("welcome", "email", "", "welcome.json")),
+			"welcome.json":     []byte(`{"subject":"Hello"}`),
+		})
+		setOff, err := artifact.LoadSet(ctx, disabled, artifact.WithFileCacheBytes(0))
+		if err != nil {
+			t.Fatalf("LoadSet(cache=0): %v", err)
+		}
+		if err := <-setOff.WarmAsync(ctx, 1); err != nil {
+			t.Fatalf("WarmAsync with cache=0: %v", err)
+		}
+		if got := disabled.count("welcome.json"); got != 0 {
+			t.Errorf("cache=0 warm loaded welcome.json %d times, want 0", got)
+		}
+	})
+
+	t.Run("tries every file and joins load errors", func(t *testing.T) {
+		src := counting(testutil.MemLoader{
+			"manifest_v1.json": manifest(
+				row("a", "email", "", "missing_a.json"),
+				row("b", "email", "", "present.json"),
+				row("c", "email", "", "missing_c.json"),
+			),
+			"present.json": []byte(`{"subject":"Present"}`),
+		})
+		set, err := artifact.LoadSet(ctx, src)
+		if err != nil {
+			t.Fatalf("LoadSet: %v", err)
+		}
+		err = <-set.WarmAsync(ctx, 1)
+		if !errors.Is(err, artifact.ErrNotFound) {
+			t.Fatalf("WarmAsync err = %v, want ErrNotFound", err)
+		}
+		if !strings.Contains(err.Error(), "missing_a.json") || !strings.Contains(err.Error(), "missing_c.json") {
+			t.Errorf("WarmAsync err = %q, want both missing files named", err.Error())
+		}
+		if got := src.count("present.json"); got != 1 {
+			t.Errorf("present.json loaded %d times, want 1", got)
 		}
 	})
 }

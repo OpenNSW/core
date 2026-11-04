@@ -6,6 +6,7 @@ package artifact
 import (
 	"context"
 	"fmt"
+	"slices"
 )
 
 // Key is an artifact's full identity: id + kind + version.
@@ -89,6 +90,18 @@ func (r *Registry) RegisterArtifact(id string, kind Kind, version, path string) 
 		r.manifest[ik] = versions
 	}
 	versions[version] = entry{path: path}
+}
+
+// paths returns the distinct file paths registered in r, in sorted order.
+func (r *Registry) paths() []string {
+	var ps []string
+	for _, versions := range r.manifest {
+		for _, e := range versions {
+			ps = append(ps, e.path)
+		}
+	}
+	slices.Sort(ps)
+	return slices.Compact(ps)
 }
 
 // Get fetches and parses a specific version of an artifact, as type T. T drives
