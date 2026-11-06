@@ -247,7 +247,9 @@ type Renderer interface {
 
 The renderer turns the task's render config + the task's current `(state, data)` into a `json.RawMessage` (e.g. a map of UI slot → component, a custom layout config, or schema). The library is deliberately agnostic about what your config or UI representation looks like — `Render` receives raw JSON and decides what to do.
 
-`Facts` also carries `Claims map[string]bool` — authorization decisions the *caller* resolved before rendering, which a renderer may use to decide what this particular caller is allowed to see. taskflow makes no policy decision of its own; it only forwards them. Callers supply them per request through `ZoneViewAssembler.Assemble(ctx, record, claims)` and pass `nil` when their render configs gate nothing on a claim.
+`Facts` also carries `Claims map[string]bool` — authorization decisions the *caller* resolved before rendering, which a renderer may use to decide what this particular caller is allowed to see. taskflow makes no policy decision of its own; it only forwards them. `Facts.Commands map[string]bool` is the caller's other half: the commands they may issue, which a host typically resolves from the same rules its `PRE_RESUME` authz extension enforces. The zoneview renderer drops a handle whose command is not set to `true` there, so a section the caller may see but not act on renders read-only. `nil` means the caller resolved no commands and nothing is dropped. Like claims, commands only shape the view; `CompleteTaskStep` and `SaveDraft` are still authorized by the extensions.
+
+Callers supply both per request through `ZoneViewAssembler.Assemble(ctx, record, zoneview.Caller{Claims: claims, Commands: commands})`. Leave `Claims` nil when the render configs gate nothing on a claim.
 
 `demo/renderer.go` is a minimal state-keyed renderer: the config is `{state: {slot: component}}` and it picks the entry matching the current `State` (falling back to a `default` entry). Most real consumers will want something richer — templated payloads, schema lookups, role-based slot selection.
 
