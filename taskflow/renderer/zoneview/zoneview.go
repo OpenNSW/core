@@ -20,15 +20,18 @@ type Action struct {
 // screen element. Command joins this claim to a state-level Action; Label is
 // the user-facing text; Element is a free-form identifier owned by the
 // section's renderer (e.g. "primary_action", "secondary_action" for a FORM
-// projector) — the data layer does not interpret it.
+// projector) — the data layer does not interpret it. Messages is the feedback
+// the consumer shows once the command has been dispatched; its shape is owned
+// by the consumer and it is passed through uninterpreted.
 //
 // "Claim" here means a section laying claim to a command. It is unrelated to
 // the authorization claims in renderer.Facts.Claims, which decide whether a
 // section is rendered at all.
 type HandleClaim struct {
-	Command string `json:"command"`
-	Label   string `json:"label"`
-	Element string `json:"element,omitempty"`
+	Command  string          `json:"command"`
+	Label    string          `json:"label"`
+	Element  string          `json:"element,omitempty"`
+	Messages json.RawMessage `json:"messages,omitempty"`
 }
 
 // SectionView is the per-zone trader-app metadata read from render.json
