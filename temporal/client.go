@@ -22,7 +22,7 @@ func NewClient(cfg Config) (client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	slog.Info("temporal client connected", "host", cfg.Host, "namespace", cfg.Namespace, "tls", cfg.TLS != nil)
+	slog.Info("temporal client connected", "host", cfg.Host, "namespace", cfg.Namespace, "tls", cfg.TLS != nil, "encryption", cfg.Encryption != nil)
 	return c, nil
 }
 
@@ -38,6 +38,14 @@ func optionsFromConfig(cfg Config) (client.Options, error) {
 			return client.Options{}, err
 		}
 		opts.ConnectionOptions.TLS = tlsConfig
+	}
+	if cfg.Encryption != nil {
+		dataConverter, failureConverter, err := encryptingConverters(*cfg.Encryption)
+		if err != nil {
+			return client.Options{}, err
+		}
+		opts.DataConverter = dataConverter
+		opts.FailureConverter = failureConverter
 	}
 	return opts, nil
 }
