@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Lanka Software Foundation
 
-// Package httputil provides shared HTTP response helpers for writing JSON
-// payloads and standardized, correlation-ID-tagged API error bodies.
+// Package httputil provides shared HTTP helpers: reading JSON request bodies
+// with a size limit, and writing JSON payloads and standardized,
+// correlation-ID-tagged API error bodies.
 package httputil
 
 import (
