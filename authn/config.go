@@ -18,18 +18,29 @@ type Config struct {
 	Audience              string `yaml:"audience"`
 	InsecureSkipTLSVerify bool   `yaml:"insecureSkipTLSVerify"`
 
-	// UserClaims declares extra JWT claims (beyond authn's fixed schema, e.g.
-	// "email", "phone_number", "ouId", "ouHandle", "given_name") to extract
-	// for user-principal (authorization_code grant) tokens. ClientClaims is
-	// the client-credential (M2M) analogue. See WithUserClaims /
-	// WithClientClaims. Zero value = no extra claims extracted.
-	UserClaims   ClaimSpec `yaml:"userClaims"`
-	ClientClaims ClaimSpec `yaml:"clientClaims"`
+	// Claims configures the standard identity claims. See WithClaims. Zero
+	// value = every claim optional.
+	Claims ClaimsConfig `yaml:"claims"`
+}
 
-	// RolesClaim overrides which claim carries the principal's roles, for
-	// IdPs that do not emit a top-level "roles" claim. See WithRolesClaim.
-	// Empty = "roles".
-	RolesClaim string `yaml:"rolesClaim"`
+// ClaimsConfig configures each standard identity claim — "email", "ouId" and
+// "ouHandle" — which populate the Principal fields of the same name.
+//
+// ClaimsConfig carries yaml struct tags, so it can be populated generically
+// (e.g. via yaml.Unmarshal) as part of Config.
+type ClaimsConfig struct {
+	Email    ClaimConfig `yaml:"email"`
+	OUID     ClaimConfig `yaml:"ouId"`
+	OUHandle ClaimConfig `yaml:"ouHandle"`
+}
+
+// ClaimConfig configures one standard identity claim.
+type ClaimConfig struct {
+	// Required rejects a token whose claim is absent or blank. The
+	// requirement applies to every token, including client-credentials
+	// tokens issued to systems, which typically carry no email or
+	// organization unit. Default false: the Principal field is "" instead.
+	Required bool `yaml:"required"`
 }
 
 func (c Config) Validate() error {
@@ -48,33 +59,5 @@ func (c Config) Validate() error {
 	if c.Audience == "" {
 		return fmt.Errorf("audience is required")
 	}
-
-	if err := validateRolesClaimName(c.rolesClaim()); err != nil {
-		return err
-	}
-	for _, decl := range []struct {
-		what  string
-		names []string
-	}{
-		{"UserClaims.Optional", c.UserClaims.Optional},
-		{"UserClaims.Required", c.UserClaims.Required},
-		{"ClientClaims.Optional", c.ClientClaims.Optional},
-		{"ClientClaims.Required", c.ClientClaims.Required},
-	} {
-		if err := validateClaimNames(decl.what, decl.names, c.rolesClaim()); err != nil {
-			return err
-		}
-	}
-
 	return nil
-}
-
-// rolesClaim resolves the configured roles claim name, treating an unset field
-// as the default. A whitespace-only value is left as-is so Validate reports it
-// as a typo rather than silently defaulting.
-func (c Config) rolesClaim() string {
-	if c.RolesClaim == "" {
-		return defaultRolesClaim
-	}
-	return c.RolesClaim
 }

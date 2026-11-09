@@ -15,37 +15,22 @@ import (
 // It encapsulates the token extraction and middleware creation,
 // providing a clean interface for the HTTP server to use.
 //
-// This manager pattern keeps auth logic self-contained and optionally delegates user persistence
-// to a UserProfileService (if provided). The manager can work without a user profile service,
-// making it suitable for any authentication use case.
+// The manager only authenticates: it validates the token and injects the
+// resulting Principal. Anything an application does with that principal (e.g.
+// provisioning a user record) belongs in its own middleware chained after it.
 type Manager struct {
-	userProfileService UserProfileService
-	tokenExtractor     *TokenExtractor
-	middleware         func(http.Handler) http.Handler
+	tokenExtractor *TokenExtractor
+	middleware     func(http.Handler) http.Handler
 }
 
 // NewManager creates and initializes a new auth manager.
 // This is the single entry point for all auth initialization in the application.
 //
-// userProfileService is OPTIONAL. If not provided (nil), user creation on first login is disabled.
-// tokenExtractor is REQUIRED and is always initialized by this constructor.
-// This allows the auth package to be used in systems that don't track user profiles
-// while still guaranteeing auth token parsing is available.
+// Usage:
 //
-// Usage examples:
-//
-//	// With user profile service (NSW example)
-//	userProfileService := user.NewService(db)
-//	authManager := auth.NewManager(userProfileService, cfg.Auth)
-//
-//	// Without user profile service (generic auth only)
-//	authManager := auth.NewManager(nil, cfg.Auth)
-//
-//	// With custom user profile service
-//	customService := &MyCustomUserService{}
-//	authManager := auth.NewManager(customService, cfg.Auth)
-func NewManager(userProfileService UserProfileService, authConfig Config) (*Manager, error) {
-	slog.Info("initializing auth manager", "user_profile_service_enabled", userProfileService != nil)
+//	authManager, err := auth.NewManager(cfg.Auth)
+func NewManager(authConfig Config) (*Manager, error) {
+	slog.Info("initializing auth manager")
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if authConfig.InsecureSkipTLSVerify {
@@ -56,7 +41,7 @@ func NewManager(userProfileService UserProfileService, authConfig Config) (*Mana
 
 	tokenExtractor, err := NewTokenExtractorWithClient(
 		authConfig.JWKSURL, authConfig.Issuer, authConfig.Audience, httpClient,
-		buildClaimOptions(authConfig)...,
+		buildOptions(authConfig)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize token extractor: %w", err)
@@ -66,29 +51,16 @@ func NewManager(userProfileService UserProfileService, authConfig Config) (*Mana
 	}
 
 	return &Manager{
-		userProfileService: userProfileService,
-		tokenExtractor:     tokenExtractor,
-		middleware:         Middleware(userProfileService, tokenExtractor),
+		tokenExtractor: tokenExtractor,
+		middleware:     Middleware(tokenExtractor),
 	}, nil
 }
 
-// buildClaimOptions translates Config's claim fields into TokenExtractor
+// buildOptions translates Config's optional fields into TokenExtractor
 // Options, so Config-driven (NewManager) and direct (NewTokenExtractor)
-// callers share identical claim semantics.
-func buildClaimOptions(cfg Config) []Option {
-	var opts []Option
-	if !cfg.UserClaims.isZero() {
-		opts = append(opts, WithUserClaims(cfg.UserClaims))
-	}
-	if !cfg.ClientClaims.isZero() {
-		opts = append(opts, WithClientClaims(cfg.ClientClaims))
-	}
-	// Only when set: WithRolesClaim("") would blank the extractor's default
-	// and be rejected by validateRolesClaimName.
-	if cfg.RolesClaim != "" {
-		opts = append(opts, WithRolesClaim(cfg.RolesClaim))
-	}
-	return opts
+// callers share identical semantics.
+func buildOptions(cfg Config) []Option {
+	return []Option{WithClaims(cfg.Claims)}
 }
 
 // Middleware returns the auth middleware function.
@@ -100,9 +72,8 @@ func buildClaimOptions(cfg Config) []Option {
 //
 // The middleware:
 // 1. Extracts Authorization header
-// 2. Parses token into user or client principal
-// 3. For user principals, creates user record if it's their first login
-// 4. Injects context into request
+// 2. Parses token into a Principal
+// 3. Injects context into request
 func (m *Manager) Middleware() func(http.Handler) http.Handler { return m.middleware }
 
 // RequireAuthMiddleware returns a middleware that requires authentication.
@@ -115,7 +86,7 @@ func (m *Manager) Middleware() func(http.Handler) http.Handler { return m.middle
 //	    authManager.RequireAuthMiddleware()(handler),
 //	)
 func (m *Manager) RequireAuthMiddleware() func(http.Handler) http.Handler {
-	return RequireAuth(m.userProfileService, m.tokenExtractor)
+	return RequireAuth(m.tokenExtractor)
 }
 
 // OptionalAuthMiddleware returns a middleware for endpoints that work with or without auth.
@@ -131,12 +102,11 @@ func (m *Manager) RequireAuthMiddleware() func(http.Handler) http.Handler {
 func (m *Manager) OptionalAuthMiddleware() func(http.Handler) http.Handler { return m.middleware }
 
 // Health checks if the auth system is functioning properly.
-// Since the UserProfileService is optional, this only verifies that the auth
-// system components are initialized correctly.
+// It verifies that the auth system components are initialized correctly.
 //
 // Usage in server startup:
 //
-//	authManager := auth.NewManager(userProfileService, cfg.Auth)
+//	authManager := auth.NewManager(cfg.Auth)
 //	if err := authManager.Health(); err != nil {
 //	    log.Fatalf("auth system health check failed: %v", err)
 //	}
@@ -155,7 +125,7 @@ func (m *Manager) Health() error {
 //
 // Usage:
 //
-//	authManager := auth.NewManager(userService, cfg.Auth)
+//	authManager := auth.NewManager(cfg.Auth)
 //	defer authManager.Close()
 func (m *Manager) Close() error {
 	slog.Debug("auth manager closing")
