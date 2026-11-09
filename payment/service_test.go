@@ -598,6 +598,7 @@ func TestProcessWebhook_SuccessAdvancesTask(t *testing.T) {
 	assert.Equal(t, "TNSW1", tc.calls[0].payload["reference_number"])
 	assert.Equal(t, "1500", tc.calls[0].payload["amount"])
 	assert.Equal(t, "LKR", tc.calls[0].payload["currency"])
+	assert.False(t, repo.txs["TNSW1"].SettledAfterCancel(), "a payment for a live checkout is not flagged")
 }
 
 // ParseWebhook gets a lookup that resolves the gateway's ids for the payee a
@@ -785,6 +786,98 @@ func TestProcessWebhook_VerificationOperationalError_NotClassifiedAsAuthFailure(
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrWebhookVerificationFailed), "an operational verifier failure must not be classified as an authentication rejection")
 	gw.AssertNotCalled(t, "ParseWebhook", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func cancelledTx() *Transaction {
+	tx := pendingTx()
+	tx.Status = StatusCancelled
+	return tx
+}
+
+func TestProcessWebhook_SuccessAfterCancelIsRecordedAndFlagged(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = cancelledTx()
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber:      "TNSW1",
+		Status:               WebhookStatusSuccess,
+		Amount:               decimal.RequireFromString("1500.00"),
+		Currency:             "LKR",
+		GatewayTransactionID: "gw-tx-1",
+		PaymentMethod:        "CC",
+	})
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	resp, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.HTTPStatus, "the gateway gets its normal acknowledgement, so it stops retrying")
+
+	got := repo.txs["TNSW1"]
+	assert.Equal(t, StatusSuccess, got.Status)
+	assert.True(t, got.SettledAfterCancel())
+	assert.Equal(t, "gw-tx-1", got.GatewayMetadata["gateway_transaction_id"])
+	assert.Equal(t, "CC", got.PaymentMethod)
+	assert.Empty(t, tc.calls, "the step the checkout was for is gone, so none is completed")
+}
+
+func TestProcessWebhook_SuccessAfterCancel_RepeatIsIgnored(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = cancelledTx()
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "TNSW1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1500.00"),
+		Currency:        "LKR",
+	})
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	for range 2 {
+		_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, repo.updateCount, "the repeat must not write again")
+	assert.Empty(t, tc.calls)
+}
+
+func TestProcessWebhook_SuccessAfterCancel_AmountMismatchRejected(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = cancelledTx()
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "TNSW1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1.00"),
+		Currency:        "LKR",
+	})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.ErrorIs(t, err, ErrAmountMismatch)
+	got := repo.txs["TNSW1"]
+	assert.Equal(t, StatusCancelled, got.Status)
+	assert.False(t, got.SettledAfterCancel())
+	assert.Zero(t, repo.updateCount)
+}
+
+func TestProcessWebhook_FailedOrPendingAfterCancelIsIgnored(t *testing.T) {
+	for _, status := range []WebhookStatus{WebhookStatusFailed, WebhookStatusPending} {
+		t.Run(string(status), func(t *testing.T) {
+			repo := newMockRepo()
+			repo.txs["TNSW1"] = cancelledTx()
+			gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: status})
+			tc := &mockTaskCompleter{}
+			svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+			svc.SetTaskCompleter(tc)
+
+			_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+			require.NoError(t, err)
+			assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+			assert.Zero(t, repo.updateCount)
+			assert.Empty(t, tc.calls)
+		})
+	}
 }
 
 func TestListAvailableMethods(t *testing.T) {

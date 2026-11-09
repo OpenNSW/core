@@ -47,6 +47,17 @@ type Transaction struct {
 // this type mapped to as PaymentTransaction, so renaming it moved no data.
 func (Transaction) TableName() string { return "payment_transactions" }
 
+// metadataSettledAfterCancel is the GatewayMetadata key, set to "true", on a
+// payment that settled after its checkout was cancelled.
+const metadataSettledAfterCancel = "settled_after_cancel"
+
+// SettledAfterCancel reports whether the payment settled after its checkout
+// was cancelled. Such a payment is recorded as SUCCESS but completed no task
+// step, so it needs reconciling.
+func (t Transaction) SettledAfterCancel() bool {
+	return t.GatewayMetadata[metadataSettledAfterCancel] == "true"
+}
+
 // --------------------------------------------------------
 // Gateway Session API Contracts (Outbound to GovPay)
 // --------------------------------------------------------

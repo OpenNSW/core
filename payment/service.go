@@ -339,14 +339,16 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 	// Claim and apply the status transition atomically. A row-level lock makes
 	// concurrent deliveries serialize on the record, so only the first one past
-	// PENDING updates it and earns the right to advance the workflow.
+	// PENDING updates it and earns the right to advance the workflow. A
+	// settlement for a cancelled checkout is recorded, but advances nothing.
 	var (
-		advance      bool
-		advanceToken string
-		finalStatus  Status
-		refNum       string
-		amount       string
-		currency     string
+		advance        bool
+		advanceToken   string
+		finalStatus    Status
+		refNum         string
+		amount         string
+		currency       string
+		lateSettlement bool
 	)
 
 	err = s.repo.RunInTransaction(ctx, func(repo Repository) error {
@@ -362,6 +364,15 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		// concurrent delivery that committed first) — nothing more to do.
 		if tx.Status == StatusSuccess || tx.Status == StatusFailed {
 			slog.InfoContext(ctx, "webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
+			return nil
+		}
+
+		// Only a payment matters for a cancelled checkout; a failed or pending
+		// notification changes nothing.
+		cancelled := tx.Status == StatusCancelled
+		if cancelled && newStatus != StatusSuccess {
+			slog.InfoContext(ctx, "webhook ignored (checkout cancelled)",
+				"reference", tx.ReferenceNumber, "webhook_status", newStatus)
 			return nil
 		}
 
@@ -382,9 +393,18 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		}
 		tx.GatewayMetadata["gateway_transaction_id"] = gwPayload.GatewayTransactionID
 		tx.GatewayMetadata["webhook_timestamp"] = gwPayload.Timestamp
+		if cancelled {
+			tx.GatewayMetadata[metadataSettledAfterCancel] = "true"
+		}
 
 		if err := repo.Update(ctx, tx); err != nil {
 			return fmt.Errorf("failed to update transaction status: %w", err)
+		}
+
+		// The step this checkout was for is gone, so there is nothing to advance.
+		if cancelled {
+			lateSettlement = true
+			return nil
 		}
 
 		advance = true
@@ -401,6 +421,12 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 	// webhookResp is the gateway-specific acknowledgement parsed alongside the
 	// payload above; relay it on every success path.
+
+	// Logged after the commit, so a rolled-back update is never reported.
+	if lateSettlement {
+		slog.WarnContext(ctx, "payment settled after its checkout was cancelled; no task advanced",
+			"reference", gwPayload.ReferenceNumber)
+	}
 
 	// Already terminal / nothing claimed — don't advance again.
 	if !advance {
