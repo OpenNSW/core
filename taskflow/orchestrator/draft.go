@@ -88,8 +88,8 @@ func (tm *TaskManager) SaveDraft(ctx context.Context, taskID, stepID string, pay
 		extPayload = make(map[string]any)
 	}
 	extPayload[CommandVar] = stepTemplate.Draft.Command
-	preResumeRecord := record.DeepCopy()
-	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, stepTemplate.Extensions, extPayload, true); err != nil {
+	occ := occurrence{taskID: taskID, stepID: stepID, seq: seq}
+	if err := tm.fire(ctx, types.PhasePreResume, occ, record, extPayload, stepTemplate.Extensions); err != nil {
 		return err
 	}
 

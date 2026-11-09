@@ -18,6 +18,16 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithDispatcher overrides how the extensions of notify phases (POST_RESUME) are run; see
+// Dispatcher. Defaults to one goroutine per dispatch when not provided or nil.
+func WithDispatcher(d Dispatcher) Option {
+	return func(tm *TaskManager) {
+		if d != nil {
+			tm.dispatcher = d
+		}
+	}
+}
+
 // WithRequiredPreResumeExtensions makes CompleteTaskStep and SaveDraft refuse, with
 // ErrStepNotGuarded, a step whose template does not declare every one of ids in its PRE_RESUME
 // phase, or any step at all when the TaskManager has no extensions registry to run them.
