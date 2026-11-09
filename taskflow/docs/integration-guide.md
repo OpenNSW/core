@@ -346,7 +346,7 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
     // 3. TemporalManager.CompleteActivation(TaskWorkflowID, stepID, payload). Exactly one caller wins;
     //    a step that is not pending fails with ErrStaleStep and nothing is written
     // 4. PersistSubmission (state ADVANCING, seq+1), guarded; 0 rows is success
-    // 5. Post-resume extensions in the background, best effort
+    // 5. Post-resume extensions handed to the Dispatcher (a goroutine by default), best effort
 }
 ```
 
@@ -380,6 +380,27 @@ tm := orchestrator.NewTaskManager(db, registry, pluginsRegistry, extensionsRegis
 ```
 
 Both methods then refuse, with `ErrStepNotGuarded` and before anything runs or is written, a step whose template does not declare every required id in its `PRE_RESUME` phase, and every step when the extensions registry is nil. A required extension that is declared but not registered is refused too, as any unregistered `PRE_RESUME` extension is. It is off by default. Turn it on once every template that parks declares the extension; any that doesn't can no longer be completed.
+
+### How extensions run
+
+The orchestrator, not the extension, decides how a phase runs:
+
+| Phase | Policy | Errors |
+|---|---|---|
+| `PRE_RESUME` | guard: inline, before the step resumes | refuse the call |
+| `POST_RESUME` | notify: handed to the `Dispatcher` after the submission is accepted | logged |
+
+Every extension gets deep copies of the record and payload. Its context carries an `extensions.Invocation` (read it with `extensions.InvocationFrom(ctx)`) naming the phase and an idempotency key, `<task id>/<step id>/<seq>/<phase>`. Treat a notify phase as at-least-once and dedupe on that key. A guard may run several times under one key, so it must not dedupe.
+
+By default each notify run gets its own goroutine, and a process that stops first loses it. To bound concurrency, recover panics, or run notifications inline in tests, pass your own:
+
+```go
+tm := orchestrator.NewTaskManager(..., orchestrator.WithDispatcher(orchestrator.DispatcherFunc(
+    func(ctx context.Context, run func(context.Context)) { pool.Submit(func() { run(ctx) }) },
+)))
+```
+
+Anything that must happen belongs in a workflow step, not a notify extension.
 
 ## What `HandleTaskCompletion` does
 
