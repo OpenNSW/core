@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/OpenNSW/core/shared/deepcopy"
 	"github.com/OpenNSW/core/shared/maputil"
 )
 
@@ -409,6 +411,11 @@ func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping ma
 // if any required field is missing from result, every missing one is reported (sorted) and nothing
 // is written, so a failed mapping never leaves workflowVars half updated. A nil result is an empty
 // one, so it fails on every required field rather than silently skipping the mapping.
+//
+// Each output replaces the value at its destination (see replaceNestedKey): it is the task's
+// current answer, so a field the task no longer returns, such as one a user cleared before
+// submitting a form again, is gone rather than kept from the last run. Destinations are written
+// in order, so one inside another's object is written after it and both survive.
 func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMapping map[string]string, result map[string]any) error {
 	if len(outputMapping) == 0 {
 		return nil
@@ -435,10 +442,37 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 		return withCategory(ParkCategoryOutputMapping, fmt.Errorf(
 			"output mapping error: required task %s not found in task result", describeVariables(missing)))
 	}
+	// A destination sorts before every destination inside it ("a" < "a.b"), and the sort is stable,
+	// so two outputs to one destination keep their task-key order and the last one wins.
+	slices.SortStableFunc(writes, func(a, b write) int { return strings.Compare(a.globalKey, b.globalKey) })
 	for _, w := range writes {
-		maputil.SetNestedKey(workflowVars, w.globalKey, w.val)
+		replaceNestedKey(workflowVars, w.globalKey, w.val)
 	}
 	return nil
+}
+
+// replaceNestedKey sets the value at a dot-separated path in m to a deep copy of value, creating
+// the objects along the path. Unlike maputil.SetNestedKey, which input mappings use so that "a"
+// and "a.b" mapped into one task input combine, it never merges: an object written where an
+// object already is takes its place whole. The objects along the path are copied before they are
+// changed, as SetNestedKey copies them, so no map shared with another variable is written to.
+func replaceNestedKey(m map[string]any, dotPath string, value any) {
+	if m == nil || dotPath == "" {
+		return
+	}
+	keys := strings.Split(dotPath, ".")
+	cur := m
+	for _, k := range keys[:len(keys)-1] {
+		next, ok := cur[k].(map[string]any)
+		if ok {
+			next = deepcopy.Map(next)
+		} else {
+			next = make(map[string]any)
+		}
+		cur[k] = next
+		cur = next
+	}
+	cur[keys[len(keys)-1]] = deepcopy.Value(value)
 }
 
 // manifestVersion returns the artifact manifest version this execution resolves templates
