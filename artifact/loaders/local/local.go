@@ -17,6 +17,7 @@ import (
 
 type FileLoader struct {
 	Root string
+	root *os.Root
 }
 
 // New validates cfg and constructs a FileLoader. It returns an error if
@@ -25,7 +26,13 @@ func New(cfg Config) (FileLoader, error) {
 	if err := cfg.Validate(); err != nil {
 		return FileLoader{}, err
 	}
-	return FileLoader(cfg), nil
+	// root confines every Load call to cfg.Root at the OS level, backing up
+	// the explicit escape check below.
+	root, err := os.OpenRoot(cfg.Root)
+	if err != nil {
+		return FileLoader{}, fmt.Errorf("local loader: open root %q: %w", cfg.Root, err)
+	}
+	return FileLoader{Root: cfg.Root, root: root}, nil
 }
 
 func (l FileLoader) Load(ctx context.Context, path string) ([]byte, error) {
@@ -34,7 +41,7 @@ func (l FileLoader) Load(ctx context.Context, path string) ([]byte, error) {
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return nil, fmt.Errorf("%w: path %q escapes root %q", artifact.ErrNotFound, path, l.Root)
 	}
-	data, err := os.ReadFile(fullPath)
+	data, err := l.root.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("%w: local file not found at %s", artifact.ErrNotFound, fullPath)
