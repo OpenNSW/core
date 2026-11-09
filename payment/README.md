@@ -221,11 +221,27 @@ Gateways notify the payment service of results. The Service looks up the gateway
 
 Once a payment reaches SUCCESS or FAILED, the Service resumes the workflow step it was created for through its **TaskCompleter**, calling `CompleteTaskStepByToken` with the `CallbackToken` the checkout carried (`CreateCheckoutRequest.CallbackToken`, required). The token is opaque to this package and names one step, so a settlement that arrives after the task has moved on completes nothing. Core taskflow's `*orchestrator.TaskManager` satisfies `TaskCompleter`; build the token with `plugins.CallbackToken` when creating the checkout.
 
+A settlement for a cancelled checkout (see below) completes no step. A successful one passes the same amount and currency check, is recorded as `SUCCESS` and marked so that `Transaction.SettledAfterCancel()` reports true, and logs a warning. A failed or pending notification for a cancelled checkout changes nothing. The gateway gets its normal acknowledgement in every case, so it stops retrying.
+
+### Cancelling a Checkout
+A host that abandons the step a checkout was created for, for example because the payer chose another method, calls `CancelCheckoutsByMetadata` with a metadata key and value that identify the step's checkouts. The host records that key in `CreateCheckoutRequest.Metadata` when it opens the checkout, for example the id of the task it belongs to, so it can cancel without holding the checkout's reference. The call runs in one transaction and locks every matching checkout, as webhook processing does:
+
+- a `PENDING` checkout becomes `CANCELLED`, so `ValidateReference` reports it as not payable;
+- a checkout that is already `CANCELLED` or `FAILED` is left as it is, so repeating the call is safe;
+- when no checkout matches, the call returns `ErrTransactionNotFound`;
+- when a matching checkout has been paid, the call returns `ErrAlreadyPaid` after cancelling the unpaid ones, so the host can let the step the payment completes carry on. A payment that settled after an earlier cancel does not count as paid.
+
+`CancelCheckoutsByMetadata` does not complete the host's task step, and the package exposes no HTTP route for it. A gateway that holds a remote session is not told to close it: the instruction-flow gateways create none.
+
+A payer can still pay between presenting the reference and the cancel. That payment arrives as a webhook for a `CANCELLED` checkout and is recorded as described under Webhook Processing. Such a payment completes no step, so the host should find it with `Transaction.SettledAfterCancel()` and reconcile it, for example by refunding it or applying it to the payer's new checkout.
+
 ## Schema
 
 `Transaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.
 
 A host upgrading an existing table adds both columns as nullable, backfills them (e.g. from each row's stored gateway metadata), then makes them `NOT NULL`. A pending transaction left without them cannot be presented or settled.
+
+`CANCELLED` is a new value of the existing `status` column, and the late-settlement marker is kept in `gateway_metadata`, so there is no schema change. A host that constrains `status` (a `CHECK` or an enum type) must allow `CANCELLED`. A host that reads the marker straight from the database, rather than through `Transaction.SettledAfterCancel()`, finds it under the `settled_after_cancel` key with the value `"true"`.
 
 ## Verification error classification
 
@@ -295,6 +311,8 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ValidationResponse`: Validation response format
 - `InteractionType`: Enum for flow types (REDIRECT, INSTRUCTION)
 - `WebhookStatus`: Canonical webhook status (PENDING, SUCCESS, FAILED)
+- `Status`: Transaction status (PENDING, SUCCESS, FAILED, CANCELLED). Only a host's `CancelCheckoutsByMetadata` produces CANCELLED; `WebhookStatus` has no such value, because a gateway never reports one
+- `Transaction.SettledAfterCancel()`: Reports whether a payment settled after its checkout was cancelled
 
 ### Constructor Functions
 
@@ -313,6 +331,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrUnsupportedWebhookStatus`: Gateway status cannot be normalized
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
+- `ErrAlreadyPaid`: `CancelCheckoutsByMetadata` found a checkout that has been paid
 - `ErrDuplicateReference`: A transaction already holds the reference the `ReferenceGenerator` issued
 - `ErrPayeeNotMapped`: The selected method has no mapping for the checkout's payee
 - `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
