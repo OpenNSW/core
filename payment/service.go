@@ -31,6 +31,11 @@ var ErrAmountMismatch = errors.New("webhook amount/currency mismatch")
 // and retry the checkout.
 var ErrDuplicateReference = errors.New("payment reference already in use")
 
+// ErrAlreadyPaid is returned, wrapped, by CancelCheckoutsByMetadata when a
+// matching checkout has been paid. The payment stands, so the host should let the step it
+// completes carry on.
+var ErrAlreadyPaid = errors.New("payment already received")
+
 // ReferenceGenerator issues the reference a payer pays against for a checkout,
 // in the host's format. It receives the checkout request with a copy of its
 // metadata. Each reference it issues is unique; CreateCheckoutSession returns
@@ -97,6 +102,14 @@ type Service interface {
 	// ProcessWebhook handles asynchronous notifications from payment gateways and
 	// returns the gateway-specific acknowledgement to relay back to the gateway.
 	ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) (*WebhookResponse, error)
+
+	// CancelCheckoutsByMetadata closes every unpaid checkout whose metadata holds key with
+	// value, for a host that knows the task or case a checkout belongs to and not its
+	// reference. It returns ErrTransactionNotFound when no checkout matches, and
+	// ErrAlreadyPaid, after cancelling the unpaid ones, when one has been paid. A payment
+	// that settled after its checkout was cancelled does not count as paid. It does not
+	// complete the host's task step.
+	CancelCheckoutsByMetadata(ctx context.Context, key, value string) error
 
 	// SetTaskCompleter injects the dependency used to advance the workflow when
 	// a payment settles. Wired post-construction to avoid an import cycle with taskv2.
@@ -473,4 +486,41 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}
 
 	return webhookResp, nil
+}
+
+func (s *paymentService) CancelCheckoutsByMetadata(ctx context.Context, key, value string) error {
+	// paid is set inside the transaction but acted on after it commits: returning
+	// ErrAlreadyPaid from inside would roll the cancellations back.
+	var paid bool
+	err := s.repo.RunInTransaction(ctx, func(repo Repository) error {
+		txs, err := repo.GetByMetadataForUpdate(ctx, key, value)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve transactions by metadata: %w", err)
+		}
+		if len(txs) == 0 {
+			return fmt.Errorf("metadata %s=%s: %w", key, value, ErrTransactionNotFound)
+		}
+		for _, tx := range txs {
+			switch {
+			case tx.Status == StatusSuccess && !tx.SettledAfterCancel():
+				// A payment that settled after an earlier cancel is not paid for this
+				// checkout; any other success is.
+				paid = true
+			case tx.Status == StatusPending:
+				tx.Status = StatusCancelled
+				if err := repo.Update(ctx, tx); err != nil {
+					return fmt.Errorf("failed to cancel transaction: %w", err)
+				}
+				slog.InfoContext(ctx, "checkout cancelled", "reference", tx.ReferenceNumber)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if paid {
+		return fmt.Errorf("metadata %s=%s: %w", key, value, ErrAlreadyPaid)
+	}
+	return nil
 }

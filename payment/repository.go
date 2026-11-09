@@ -21,6 +21,10 @@ type Repository interface {
 	// GetByReferenceNumberForUpdate reads a transaction while holding a row-level
 	// write lock (SELECT ... FOR UPDATE). Must be called inside RunInTransaction.
 	GetByReferenceNumberForUpdate(ctx context.Context, referenceNumber string) (*Transaction, error)
+	// GetByMetadataForUpdate reads, with a row-level write lock, every transaction whose
+	// gateway metadata holds key with value, ordered by ID. Must be called inside
+	// RunInTransaction.
+	GetByMetadataForUpdate(ctx context.Context, key, value string) ([]*Transaction, error)
 	Update(ctx context.Context, tx *Transaction) error
 	UpdateStatus(ctx context.Context, referenceNumber string, status Status) error
 	// RunInTransaction runs fn inside a DB transaction, passing a repository bound
@@ -66,6 +70,18 @@ func (r *paymentRepository) GetByReferenceNumberForUpdate(ctx context.Context, r
 		return nil, err
 	}
 	return &ptx, nil
+}
+
+// GetByMetadataForUpdate retrieves the transactions whose gateway metadata holds key
+// with value, while holding a row-level write lock on them.
+func (r *paymentRepository) GetByMetadataForUpdate(ctx context.Context, key, value string) ([]*Transaction, error) {
+	var txs []*Transaction
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("gateway_metadata ->> ? = ?", key, value).
+		Order("id").
+		Find(&txs).Error
+	return txs, err
 }
 
 // Create inserts a new Transaction into the database.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -55,6 +56,21 @@ func (m *mockRepo) GetByReferenceNumber(_ context.Context, ref string) (*Transac
 
 func (m *mockRepo) GetByReferenceNumberForUpdate(ctx context.Context, ref string) (*Transaction, error) {
 	return m.GetByReferenceNumber(ctx, ref)
+}
+
+func (m *mockRepo) GetByMetadataForUpdate(_ context.Context, key, value string) ([]*Transaction, error) {
+	m.getCount++
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	var txs []*Transaction
+	for _, tx := range m.txs {
+		if tx.GatewayMetadata[key] == value {
+			txs = append(txs, tx)
+		}
+	}
+	sort.Slice(txs, func(i, j int) bool { return txs[i].ID < txs[j].ID })
+	return txs, nil
 }
 
 func (m *mockRepo) Update(_ context.Context, tx *Transaction) error {
@@ -878,6 +894,125 @@ func TestProcessWebhook_FailedOrPendingAfterCancelIsIgnored(t *testing.T) {
 			assert.Empty(t, tc.calls)
 		})
 	}
+}
+
+// --- CancelCheckoutsByMetadata ----------------------------------------------
+
+// taskCheckout is a checkout of task-1, the way a host records the task a
+// checkout belongs to.
+func taskCheckout(id string, status Status) *Transaction {
+	tx := pendingTx()
+	tx.ID = id
+	tx.ReferenceNumber = "REF-" + id
+	tx.Status = status
+	tx.GatewayMetadata = map[string]string{"task_id": "task-1"}
+	return tx
+}
+
+func addCheckouts(repo *mockRepo, txs ...*Transaction) {
+	for _, tx := range txs {
+		repo.txs[tx.ReferenceNumber] = tx
+	}
+}
+
+func TestCancelCheckoutsByMetadata_CancelsEveryPendingCheckoutOfTheKey(t *testing.T) {
+	repo := newMockRepo()
+	other := taskCheckout("c", StatusPending)
+	other.GatewayMetadata["task_id"] = "task-2"
+	addCheckouts(repo, taskCheckout("a", StatusPending), taskCheckout("b", StatusPending), other)
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1"))
+
+	assert.Equal(t, StatusCancelled, repo.txs["REF-a"].Status)
+	assert.Equal(t, StatusCancelled, repo.txs["REF-b"].Status)
+	assert.Equal(t, StatusPending, repo.txs["REF-c"].Status, "another task's checkout is left alone")
+	assert.Equal(t, 2, repo.updateCount)
+}
+
+func TestCancelCheckoutsByMetadata_Repeated(t *testing.T) {
+	repo := newMockRepo()
+	addCheckouts(repo, taskCheckout("a", StatusPending))
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1"))
+	require.NoError(t, svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1"))
+	assert.Equal(t, 1, repo.updateCount, "the second call must not write")
+}
+
+// A paid checkout is reported, but the unpaid ones are still closed.
+func TestCancelCheckoutsByMetadata_PaidIsReportedAndTheRestCancelled(t *testing.T) {
+	repo := newMockRepo()
+	addCheckouts(repo, taskCheckout("a", StatusPending), taskCheckout("b", StatusSuccess))
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1")
+
+	require.ErrorIs(t, err, ErrAlreadyPaid)
+	assert.Equal(t, StatusCancelled, repo.txs["REF-a"].Status)
+	assert.Equal(t, StatusSuccess, repo.txs["REF-b"].Status)
+}
+
+// A payment that settled after an earlier cancel belongs to an earlier
+// checkout, so it does not make a later cancel report a payment.
+func TestCancelCheckoutsByMetadata_SettledAfterCancelIsNotPaid(t *testing.T) {
+	repo := newMockRepo()
+	late := taskCheckout("a", StatusSuccess)
+	late.GatewayMetadata[metadataSettledAfterCancel] = "true"
+	addCheckouts(repo, late, taskCheckout("b", StatusPending))
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1"))
+
+	assert.Equal(t, StatusSuccess, repo.txs["REF-a"].Status)
+	assert.Equal(t, StatusCancelled, repo.txs["REF-b"].Status)
+}
+
+func TestCancelCheckoutsByMetadata_LeavesFailedAndCancelledAlone(t *testing.T) {
+	repo := newMockRepo()
+	addCheckouts(repo, taskCheckout("a", StatusFailed), taskCheckout("b", StatusCancelled))
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1"))
+	assert.Zero(t, repo.updateCount)
+}
+
+func TestCancelCheckoutsByMetadata_NoMatch(t *testing.T) {
+	svc := NewService(newMockRepo(), &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1")
+	require.ErrorIs(t, err, ErrTransactionNotFound)
+}
+
+func TestCancelCheckoutsByMetadata_LookupErrorPropagates(t *testing.T) {
+	repo := newMockRepo()
+	repo.getErr = errors.New("db down")
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1")
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrTransactionNotFound), "a lookup failure is not a missing checkout")
+}
+
+func TestCancelCheckoutsByMetadata_UpdateErrorPropagates(t *testing.T) {
+	repo := newMockRepo()
+	addCheckouts(repo, taskCheckout("a", StatusPending))
+	repo.updateErr = errors.New("db down")
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1")
+	require.ErrorIs(t, err, repo.updateErr)
+}
+
+func TestCancelCheckoutsByMetadata_DoesNotCompleteTheTaskStep(t *testing.T) {
+	repo := newMockRepo()
+	addCheckouts(repo, taskCheckout("a", StatusPending))
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	require.NoError(t, svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1"))
+	assert.Empty(t, tc.calls)
 }
 
 func TestListAvailableMethods(t *testing.T) {

@@ -175,6 +175,40 @@ func TestRepository_GetByReferenceNumberForUpdate(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// The lookup matches the metadata key and value as bind parameters, orders the
+// rows so concurrent callers lock them in the same order, and carries the
+// row-level write lock.
+func TestRepository_GetByMetadataForUpdate(t *testing.T) {
+	db, mock := setupTestDB(t)
+	repo := NewRepository(db)
+
+	rows := sqlmock.NewRows([]string{"id", "reference_number", "status"}).
+		AddRow("uuid-1", "TNSW1", StatusPending).
+		AddRow("uuid-2", "TNSW2", StatusCancelled)
+	mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE gateway_metadata ->> \$1 = \$2 ORDER BY id.*FOR UPDATE`).
+		WithArgs("task_id", "task-1").
+		WillReturnRows(rows)
+
+	got, err := repo.GetByMetadataForUpdate(context.Background(), "task_id", "task-1")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "TNSW1", got[0].ReferenceNumber)
+	assert.Equal(t, "TNSW2", got[1].ReferenceNumber)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRepository_GetByMetadataForUpdate_DBError(t *testing.T) {
+	db, mock := setupTestDB(t)
+	repo := NewRepository(db)
+
+	mock.ExpectQuery(`SELECT \* FROM "payment_transactions" WHERE gateway_metadata ->> \$1 = \$2.*FOR UPDATE`).
+		WillReturnError(errors.New("connection reset"))
+
+	_, err := repo.GetByMetadataForUpdate(context.Background(), "task_id", "task-1")
+	require.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestRepository_Update(t *testing.T) {
 	db, mock := setupTestDB(t)
 	repo := NewRepository(db)
