@@ -504,6 +504,28 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 	gw.AssertExpectations(t)
 }
 
+func TestValidateReference_CancelledNotPayable(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = &Transaction{
+		ReferenceNumber: "TNSW1",
+		GatewayID:       "govpay",
+		Status:          StatusCancelled,
+		ExpiryDate:      time.Now().Add(time.Hour),
+	}
+	gw := validateGateway("TNSW1")
+	gw.On("HandleValidateReference", mock.Anything,
+		mock.MatchedBy(func(tx *ValidationTransaction) bool {
+			return tx != nil && tx.Status == string(StatusCancelled)
+		}), // <- one ')' here, then the comma
+		false, mock.Anything).
+		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	gw.AssertExpectations(t)
+}
+
 func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
