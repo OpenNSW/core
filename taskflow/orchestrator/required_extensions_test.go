@@ -64,7 +64,7 @@ func TestCompleteTaskStep_RequiredPreResumeExtensions(t *testing.T) {
 			opts: []Option{WithRequiredPreResumeExtensions("logger")}, wantErr: ErrStepNotGuarded},
 		{name: "two required, one declared", template: "generic_user_input_with_extensions", withRegistry: true,
 			opts: []Option{WithRequiredPreResumeExtensions("validator", "authz")}, wantErr: ErrStepNotGuarded},
-		// With no registry runExtensions would skip every extension, so nothing would check the caller.
+		// With no registry fire would skip every extension, so nothing would check the caller.
 		{name: "required, no registry", template: "generic_user_input_with_extensions",
 			opts: []Option{WithRequiredPreResumeExtensions("validator")}, wantErr: ErrStepNotGuarded},
 		{name: "only empty ids required", template: "generic_user_input", withRegistry: true,
@@ -103,7 +103,7 @@ func TestCompleteTaskStep_RequiredPreResumeExtensions(t *testing.T) {
 }
 
 // A registered but undeclared extension doesn't help, and a declared but unregistered one is
-// refused by runExtensions, so the check fails closed either way.
+// refused by fire, so the check fails closed either way.
 func TestCompleteTaskStep_RequiredExtensionMustBeRegistered(t *testing.T) {
 	tm, db, _, completed := guardFixture(t, "generic_user_input_with_extensions", false,
 		WithRequiredPreResumeExtensions("validator"))
