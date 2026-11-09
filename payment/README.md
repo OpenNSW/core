@@ -235,6 +235,8 @@ A host that abandons the step a checkout was created for, for example because th
 
 A payer can still pay between presenting the reference and the cancel. That payment arrives as a webhook for a `CANCELLED` checkout and is recorded as described under Webhook Processing. Such a payment completes no step, so the host should find it with `Transaction.SettledAfterCancel()` and reconcile it, for example by refunding it or applying it to the payer's new checkout.
 
+The metadata key `settled_after_cancel` is reserved for the service. `CreateCheckoutSession` rejects a request whose metadata sets it, so `Transaction.SettledAfterCancel()` is true only for a payment the service recorded after a cancel.
+
 ## Schema
 
 `Transaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.

@@ -5,6 +5,7 @@ package payment
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -99,6 +100,11 @@ func (r CreateCheckoutRequest) validate(now time.Time) error {
 	}
 	if !r.ExpiresAt.After(now) {
 		return errors.New("expires_at must be in the future")
+	}
+	// Only the service marks a payment that settled after a cancel, so a caller
+	// cannot make an ordinary payment look like one.
+	if _, reserved := r.Metadata[metadataSettledAfterCancel]; reserved {
+		return fmt.Errorf("metadata key %q is reserved", metadataSettledAfterCancel)
 	}
 	return nil
 }

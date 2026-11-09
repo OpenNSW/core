@@ -220,6 +220,9 @@ func TestCreateCheckoutSession_ValidationErrors(t *testing.T) {
 		"empty gateway":          func(r *CreateCheckoutRequest) { r.GatewayID = "" },
 		"missing org_id":         func(r *CreateCheckoutRequest) { r.Payee.OrgID = "" },
 		"blank service_id":       func(r *CreateCheckoutRequest) { r.Payee.ServiceID = "  " },
+		"reserved metadata key": func(r *CreateCheckoutRequest) {
+			r.Metadata = map[string]string{metadataSettledAfterCancel: "true"}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -966,6 +969,33 @@ func TestCancelCheckoutsByMetadata_SettledAfterCancelIsNotPaid(t *testing.T) {
 
 	assert.Equal(t, StatusSuccess, repo.txs["REF-a"].Status)
 	assert.Equal(t, StatusCancelled, repo.txs["REF-b"].Status)
+}
+
+// An ordinary payment is never marked as settled after a cancel, so a later
+// cancel for the same key still reports it as paid.
+func TestCancelCheckoutsByMetadata_OrdinarySettlementCountsAsPaid(t *testing.T) {
+	repo := newMockRepo()
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "REF-1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1500.00"),
+		Currency:        "LKR",
+	})
+	gw.On("CreateSession", mock.Anything, mock.Anything).
+		Return(&SessionResponse{SessionID: "sess-1", Type: FlowTypeInstruction}, nil)
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc.SetTaskCompleter(&mockTaskCompleter{})
+
+	req := validCheckoutReq()
+	req.Metadata = map[string]string{"task_id": "task-1"}
+	_, err := svc.CreateCheckoutSession(context.Background(), req)
+	require.NoError(t, err)
+	_, err = svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	assert.False(t, repo.txs["REF-1"].SettledAfterCancel())
+
+	err = svc.CancelCheckoutsByMetadata(context.Background(), "task_id", "task-1")
+	require.ErrorIs(t, err, ErrAlreadyPaid)
 }
 
 func TestCancelCheckoutsByMetadata_LeavesFailedAndCancelledAlone(t *testing.T) {
