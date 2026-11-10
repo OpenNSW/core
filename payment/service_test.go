@@ -504,6 +504,28 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 	gw.AssertExpectations(t)
 }
 
+func TestValidateReference_CancelledNotPayable(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = &Transaction{
+		ReferenceNumber: "TNSW1",
+		GatewayID:       "govpay",
+		Status:          StatusCancelled,
+		ExpiryDate:      time.Now().Add(time.Hour),
+	}
+	gw := validateGateway("TNSW1")
+	gw.On("HandleValidateReference", mock.Anything,
+		mock.MatchedBy(func(tx *ValidationTransaction) bool {
+			return tx != nil && tx.Status == string(StatusCancelled)
+		}), // <- one ')' here, then the comma
+		false, mock.Anything).
+		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	gw.AssertExpectations(t)
+}
+
 func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
@@ -763,6 +785,125 @@ func TestProcessWebhook_VerificationOperationalError_NotClassifiedAsAuthFailure(
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrWebhookVerificationFailed), "an operational verifier failure must not be classified as an authentication rejection")
 	gw.AssertNotCalled(t, "ParseWebhook", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func cancelledTx() *Transaction {
+	tx := pendingTx()
+	tx.Status = StatusCancelled
+	return tx
+}
+
+// A cancelled checkout stays cancelled whatever status a gateway reports for it:
+// the notification is acknowledged, writes nothing, and completes no step.
+func TestProcessWebhook_CancelledCheckoutIsLeftAsIs(t *testing.T) {
+	for _, status := range []WebhookStatus{WebhookStatusSuccess, WebhookStatusFailed, WebhookStatusPending} {
+		t.Run(string(status), func(t *testing.T) {
+			repo := newMockRepo()
+			repo.txs["TNSW1"] = cancelledTx()
+			gw := webhookGateway(&WebhookPayload{
+				ReferenceNumber: "TNSW1",
+				Status:          status,
+				Amount:          decimal.RequireFromString("1500.00"),
+				Currency:        "LKR",
+			})
+			tc := &mockTaskCompleter{}
+			svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+			svc.SetTaskCompleter(tc)
+
+			resp, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 200, resp.HTTPStatus, "the gateway gets its normal acknowledgement, so it stops retrying")
+			assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+			assert.Zero(t, repo.updateCount)
+			assert.Empty(t, tc.calls)
+		})
+	}
+}
+
+// --- CancelCheckout ---------------------------------------------------------
+
+func TestCancelCheckout_PendingBecomesCancelled(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckout(context.Background(), "TNSW1"))
+	assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+	assert.Equal(t, 1, repo.updateCount)
+}
+
+func TestCancelCheckout_Repeated(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckout(context.Background(), "TNSW1"))
+	require.NoError(t, svc.CancelCheckout(context.Background(), "TNSW1"))
+	assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+	assert.Equal(t, 1, repo.updateCount, "the second cancel must not write")
+}
+
+func TestCancelCheckout_PaidIsRefusedAndUnchanged(t *testing.T) {
+	repo := newMockRepo()
+	tx := pendingTx()
+	tx.Status = StatusSuccess
+	repo.txs["TNSW1"] = tx
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckout(context.Background(), "TNSW1")
+	require.ErrorIs(t, err, ErrAlreadyPaid)
+	assert.Equal(t, StatusSuccess, repo.txs["TNSW1"].Status)
+	assert.Zero(t, repo.updateCount)
+}
+
+func TestCancelCheckout_FailedIsLeftAsIs(t *testing.T) {
+	repo := newMockRepo()
+	tx := pendingTx()
+	tx.Status = StatusFailed
+	repo.txs["TNSW1"] = tx
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckout(context.Background(), "TNSW1"))
+	assert.Equal(t, StatusFailed, repo.txs["TNSW1"].Status)
+	assert.Zero(t, repo.updateCount)
+}
+
+func TestCancelCheckout_UnknownReference(t *testing.T) {
+	svc := NewService(newMockRepo(), &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckout(context.Background(), "NOPE")
+	require.ErrorIs(t, err, ErrTransactionNotFound)
+}
+
+func TestCancelCheckout_LookupErrorPropagates(t *testing.T) {
+	repo := newMockRepo()
+	repo.getErr = errors.New("db down")
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckout(context.Background(), "TNSW1")
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrTransactionNotFound), "a lookup failure is not an unknown reference")
+}
+
+func TestCancelCheckout_UpdateErrorPropagates(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	repo.updateErr = errors.New("db down")
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	err := svc.CancelCheckout(context.Background(), "TNSW1")
+	require.ErrorIs(t, err, repo.updateErr)
+}
+
+func TestCancelCheckout_DoesNotCompleteTheTaskStep(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	require.NoError(t, svc.CancelCheckout(context.Background(), "TNSW1"))
+	assert.Empty(t, tc.calls)
 }
 
 func TestListAvailableMethods(t *testing.T) {
