@@ -29,19 +29,19 @@ func TestMapTaskOutputsReplacesWhatAnEarlierRunWrote(t *testing.T) {
 // Replacing a destination leaves its siblings alone: only the path the mapping names is replaced.
 func TestMapTaskOutputsLeavesSiblingsOfADestination(t *testing.T) {
 	vars := map[string]any{"userform": map[string]any{
-		"cusdec_draft":    map[string]any{"bankCode": "B1", "bankReference": "TYPO"},
-		"blendsheet_data": []any{"row"},
+		"details":     map[string]any{"name": "Acme", "note": "fragile"},
+		"attachments": []any{"file"},
 	}}
 	g := newMappingTestInterpreter(vars)
 
 	require.NoError(t, g.mapTaskOutputs(vars,
-		map[string]string{"cusdec_draft?": "userform.cusdec_draft"},
-		map[string]any{"cusdec_draft": map[string]any{"bankCode": "B1"}},
+		map[string]string{"details?": "userform.details"},
+		map[string]any{"details": map[string]any{"name": "Acme"}},
 	))
 
 	require.Equal(t, map[string]any{"userform": map[string]any{
-		"cusdec_draft":    map[string]any{"bankCode": "B1"},
-		"blendsheet_data": []any{"row"},
+		"details":     map[string]any{"name": "Acme"},
+		"attachments": []any{"file"},
 	}}, vars)
 }
 
@@ -77,7 +77,7 @@ func TestMapTaskOutputsCombinesOverlappingDestinations(t *testing.T) {
 }
 
 // An optional entry whose source is absent writes nothing, so its destination keeps its value. An
-// officer who accepts the trader's date, rather than counter-proposing one, leaves it in place.
+// reviewer who accepts the applicant's date, rather than counter-proposing one, leaves it in place.
 func TestMapTaskOutputsAbsentOptionalKeepsDestination(t *testing.T) {
 	vars := map[string]any{"scheduling": map[string]any{"proposed_date": "2026-11-20"}}
 	g := newMappingTestInterpreter(vars)
@@ -98,37 +98,37 @@ func TestMapTaskOutputsAbsentOptionalKeepsDestination(t *testing.T) {
 // entry writes like any other.
 func TestMapTaskOutputsAbsentClearRemovesDestination(t *testing.T) {
 	vars := map[string]any{"userform": map[string]any{
-		"containerCount": 2,
-		"financial":      map[string]any{"bankCode": "B1", "bankReference": "TYPO"},
-		"traders":        map[string]any{"declarant": "D1"},
+		"itemCount": 2,
+		"details":   map[string]any{"name": "Acme", "note": "fragile"},
+		"contact":   map[string]any{"name": "Nimal"},
 	}}
 	g := newMappingTestInterpreter(vars)
 
 	require.NoError(t, g.mapTaskOutputs(vars,
-		map[string]string{"containerCount?!": "userform.containerCount", "financial?!": "userform.financial"},
-		map[string]any{"financial": map[string]any{"bankCode": "B1"}},
+		map[string]string{"itemCount?!": "userform.itemCount", "details?!": "userform.details"},
+		map[string]any{"details": map[string]any{"name": "Acme"}},
 	))
 
 	require.Equal(t, map[string]any{"userform": map[string]any{
-		"financial": map[string]any{"bankCode": "B1"},
-		"traders":   map[string]any{"declarant": "D1"},
+		"details": map[string]any{"name": "Acme"},
+		"contact": map[string]any{"name": "Nimal"},
 	}}, vars)
 }
 
 // An absent "x?!" entry removes nothing when the mapping fails: a missing required source leaves
 // the workflow variables exactly as they were.
 func TestMapTaskOutputsAbsentClearIsAllOrNothing(t *testing.T) {
-	vars := map[string]any{"userform": map[string]any{"containerCount": 2}}
+	vars := map[string]any{"userform": map[string]any{"itemCount": 2}}
 	g := newMappingTestInterpreter(vars)
 
 	err := g.mapTaskOutputs(vars,
-		map[string]string{"containerCount?!": "userform.containerCount", "outcome": "review.outcome"},
+		map[string]string{"itemCount?!": "userform.itemCount", "outcome": "review.outcome"},
 		map[string]any{},
 	)
 
 	require.Error(t, err)
 	require.Equal(t, ParkCategoryOutputMapping, categoryOf(err))
-	require.Equal(t, map[string]any{"userform": map[string]any{"containerCount": 2}}, vars)
+	require.Equal(t, map[string]any{"userform": map[string]any{"itemCount": 2}}, vars)
 }
 
 // Alternatives mapped to one destination: the one that is present sets it, whichever way the
@@ -161,9 +161,8 @@ func TestMapTaskInputsTreatsClearAsOptional(t *testing.T) {
 	require.Equal(t, map[string]any{"a": "x"}, inputs)
 }
 
-// verifyLoopWorkflowJSON is a form that can be checked before it is submitted, the shape of the
-// CusDec submission: the form starts from what was last submitted, "verify" checks it and comes
-// back to the form, and "submit" ends.
+// verifyLoopWorkflowJSON is a form that can be checked before it is submitted: the form starts
+// from what was last submitted, "verify" checks it and comes back to the form, and "submit" ends.
 //
 //	start -> applicant -> command_gw -- verify --> verify -> applicant
 //	                                 \- submit --> end
@@ -183,7 +182,7 @@ const verifyLoopWorkflowJSON = `
     { "id": "start", "type": "START" },
     { "id": "applicant", "type": "TASK", "task_template_id": "USER_FORM",
       "input_mapping": { "userform?": "userform" },
-      "output_mapping": { "__command": "command", "financial?": "userform.financial", "containerCount?!": "userform.containerCount" } },
+      "output_mapping": { "__command": "command", "details?": "userform.details", "itemCount?!": "userform.itemCount" } },
     { "id": "command_gw", "type": "GATEWAY", "gateway_type": "EXCLUSIVE_SPLIT" },
     { "id": "verify", "type": "TASK", "task_template_id": "VERIFY",
       "input_mapping": { "userform": "payload" },
@@ -194,22 +193,22 @@ const verifyLoopWorkflowJSON = `
 
 // Values the user removes from the form before verifying again are gone: the second verify checks
 // the form without them, and the form the user comes back to does not show them. That holds for a
-// field inside a section ("financial?"), which a merge into what the first verify left kept, and
-// for a field mapped on its own ("containerCount?!"), which an "x?" entry would have kept.
+// field inside a section ("details?"), which a merge into what the first verify left kept, and
+// for a field mapped on its own ("itemCount?!"), which an "x?" entry would have kept.
 func TestFormFieldRemovedBeforeReverifyIsGone(t *testing.T) {
 	results := []map[string]any{
-		{"__command": "verify", "financial": map[string]any{"bankCode": "B1", "bankReference": "TYPO"}, "containerCount": 2},
+		{"__command": "verify", "details": map[string]any{"name": "Acme", "note": "fragile"}, "itemCount": 2},
 		{"verify": map[string]any{"verified": false}},
-		{"__command": "verify", "financial": map[string]any{"bankCode": "B1"}}, // the reference and the count removed
+		{"__command": "verify", "details": map[string]any{"name": "Acme"}}, // the note and the count removed
 		{"verify": map[string]any{"verified": true}},
-		{"__command": "submit", "financial": map[string]any{"bankCode": "B1"}},
+		{"__command": "submit", "details": map[string]any{"name": "Acme"}},
 	}
 	seen, instance, _ := runRecordingSteps(t, verifyLoopWorkflowJSON, func(_ string, call int) map[string]any {
 		return results[call-1]
 	})
 
 	require.Len(t, seen, len(results))
-	corrected := map[string]any{"financial": map[string]any{"bankCode": "B1"}}
+	corrected := map[string]any{"details": map[string]any{"name": "Acme"}}
 
 	require.Equal(t, "VERIFY", seen[3].template)
 	require.Equal(t, corrected, seen[3].inputs["payload"], "the second verify checks the corrected form")

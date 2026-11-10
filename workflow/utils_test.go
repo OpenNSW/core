@@ -110,7 +110,7 @@ func TestParseMappingKey(t *testing.T) {
 		{"user.phone?", "user.phone", mappingKeep},
 		{"user.phone", "user.phone", mappingRequired},
 		{"user.phone?!", "user.phone", mappingClear},
-		{"containerCount?!", "containerCount", mappingClear},
+		{"itemCount?!", "itemCount", mappingClear},
 		{"user.phone!", "user.phone!", mappingRequired}, // "!" alone is not a marker
 		{"?", "", mappingKeep},
 		{"?!", "", mappingClear},

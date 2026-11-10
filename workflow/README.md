@@ -86,7 +86,7 @@ the source is absent:
   * Entries of one mapping whose destinations overlap, such as `user` and `user.ref`, still
     combine.
   * `x?` with an absent source writes nothing. Use it for a value the node only sometimes
-    overrides, such as a date the officer may counter-propose, or for a callback that sends
+    overrides, such as a date a reviewer may counter-propose, or for a callback that sends
     only some fields.
   * `x?!` with an absent source removes its destination. Use it where the result is the whole
     truth about the value, such as the fields of a form that reopens with its previous
@@ -94,15 +94,15 @@ the source is absent:
     writes, so when two sources map to one destination, the present one still sets it.
 
 ```json
-{ "id": "applicant_submission", "type": "TASK", "task_template_id": "cusdec-user-input",
+{ "id": "applicant_submission", "type": "TASK", "task_template_id": "application-form",
   "input_mapping":  { "userform?": "userform" },
-  "output_mapping": { "financial?!": "userform.financial",
-                      "supportingDocuments?!": "userform.supportingDocuments" } }
+  "output_mapping": { "details?!": "userform.details",
+                      "attachments?!": "userform.attachments" } }
 ```
 
-Here `userform.financial` becomes exactly the submitted section, without any field the user
-removed from it. If the user removed `supportingDocuments`, or emptied the whole `financial`
-section, before resubmitting, that destination is removed too. The rest of `userform` is left
+Here `userform.details` becomes exactly the submitted section, without any field the user
+removed from it. If the user removed `attachments`, or emptied the whole `details` section,
+before resubmitting, that destination is removed too. The rest of `userform` is left
 as it was.
 
 Keep `x?` for a destination that a later node reads as a required input, in this workflow or

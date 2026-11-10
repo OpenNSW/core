@@ -421,7 +421,7 @@ func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping ma
 //
 // What an absent optional source does depends on its key. An "x?" entry writes nothing, so its
 // destination keeps its value. Templates rely on that for a value a node only sometimes
-// overrides, such as a date the officer may counter-propose. An "x?!" entry removes its
+// overrides, such as a date a reviewer may counter-propose. An "x?!" entry removes its
 // destination, for a value the result is the whole truth about, such as a field of a form that
 // reopens with its previous submission: a field the user removed is absent from the new one.
 // Removals come before writes, so an entry that is present still sets a destination that an
