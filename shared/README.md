@@ -17,13 +17,16 @@ v := deepcopy.Value(x)  // deep copy of any JSON-shaped value
 
 ## `maputil`
 
-Dot-path get/set helpers for nested `map[string]any` trees. `SetNestedKey`
+Dot-path get/set/delete helpers for nested `map[string]any` trees. `SetNestedKey`
 deep-copies assigned values (via `deepcopy`) and merges maps instead of
-overwriting them.
+overwriting them. `DeleteNestedKey` removes one value and keeps its siblings. To
+replace a value outright rather than merge into it, delete it first. Neither
+changes a nested map in place.
 
 ```go
 v, ok := maputil.GetNestedKey(m, "userform.applicant_name")
 maputil.SetNestedKey(m, "userform.applicant_name", "Acme")
+maputil.DeleteNestedKey(m, "userform.applicant_name")
 ```
 
 ## `validation`

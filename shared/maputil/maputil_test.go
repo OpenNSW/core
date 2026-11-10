@@ -206,3 +206,116 @@ func TestSetNestedKey_MutationSafety(t *testing.T) {
 		t.Errorf("m1 was not updated correctly: %v", m1)
 	}
 }
+
+func TestDeleteNestedKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		initial  map[string]any
+		dotPath  string
+		expected map[string]any
+	}{
+		{
+			name:     "top-level key",
+			initial:  map[string]any{"a": 1, "b": 2},
+			dotPath:  "a",
+			expected: map[string]any{"b": 2},
+		},
+		{
+			name: "nested key keeps its siblings",
+			initial: map[string]any{
+				"userform": map[string]any{"applicant_name": "Acme", "age": 40},
+				"other":    "x",
+			},
+			dotPath: "userform.applicant_name",
+			expected: map[string]any{
+				"userform": map[string]any{"age": 40},
+				"other":    "x",
+			},
+		},
+		{
+			name:     "whole subtree",
+			initial:  map[string]any{"a": map[string]any{"b": map[string]any{"c": 1}}, "d": 2},
+			dotPath:  "a",
+			expected: map[string]any{"d": 2},
+		},
+		{
+			name:     "key holding nil",
+			initial:  map[string]any{"a": nil, "b": 2},
+			dotPath:  "a",
+			expected: map[string]any{"b": 2},
+		},
+		{
+			name:     "emptied map stays in place",
+			initial:  map[string]any{"a": map[string]any{"b": 1}},
+			dotPath:  "a.b",
+			expected: map[string]any{"a": map[string]any{}},
+		},
+		{
+			name:     "missing leaf is a no-op",
+			initial:  map[string]any{"a": map[string]any{"b": 1}},
+			dotPath:  "a.x",
+			expected: map[string]any{"a": map[string]any{"b": 1}},
+		},
+		{
+			name:     "missing intermediate creates nothing",
+			initial:  map[string]any{"a": 1},
+			dotPath:  "x.y.z",
+			expected: map[string]any{"a": 1},
+		},
+		{
+			name:     "non-map intermediate is left alone",
+			initial:  map[string]any{"a": "scalar"},
+			dotPath:  "a.b",
+			expected: map[string]any{"a": "scalar"},
+		},
+		{
+			name:     "empty path is a no-op",
+			initial:  map[string]any{"a": 1},
+			dotPath:  "",
+			expected: map[string]any{"a": 1},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			DeleteNestedKey(test.initial, test.dotPath)
+			if !reflect.DeepEqual(test.initial, test.expected) {
+				t.Errorf("got %v, want %v", test.initial, test.expected)
+			}
+		})
+	}
+}
+
+func TestDeleteNestedKey_NilMap(t *testing.T) {
+	DeleteNestedKey(nil, "a.b") // must not panic
+}
+
+func TestDeleteNestedKey_MutationSafety(t *testing.T) {
+	sharedMap := map[string]any{"city": "Colombo", "street": "Main St"}
+	m1 := map[string]any{"address": sharedMap}
+	m2 := map[string]any{"address": sharedMap}
+
+	DeleteNestedKey(m1, "address.street")
+
+	if sharedMap["street"] != "Main St" {
+		t.Error("sharedMap was mutated in-place")
+	}
+	if m2["address"].(map[string]any)["street"] != "Main St" {
+		t.Error("m2 was mutated via shared nested map reference")
+	}
+	if want := map[string]any{"address": map[string]any{"city": "Colombo"}}; !reflect.DeepEqual(m1, want) {
+		t.Errorf("m1 was not updated correctly: got %v, want %v", m1, want)
+	}
+}
+
+func TestDeleteNestedKey_MissingPathKeepsMapIdentity(t *testing.T) {
+	inner := map[string]any{"b": 1}
+	m := map[string]any{"a": inner}
+
+	DeleteNestedKey(m, "a.x")
+
+	// Nothing was removed, so nothing was copied: m still holds the same nested map.
+	if reflect.ValueOf(m["a"]).Pointer() != reflect.ValueOf(inner).Pointer() {
+		t.Error("a no-op delete replaced the nested map with a copy")
+	}
+}
