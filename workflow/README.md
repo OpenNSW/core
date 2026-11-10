@@ -82,7 +82,10 @@ the source is absent:
   * Each destination is **replaced** by the value from this result, not merged into what was
     there. When a node runs again (a resubmission, a re-verify), a field its new result leaves
     out of an object is gone.
-  * Siblings of a destination are untouched.
+  * Siblings of a destination are untouched, but everything under it is replaced, including
+    keys another node wrote there (`app.review` under `app`). Keep a key another node owns
+    outside the destination (`review` beside `app`), or make sure this node's result carries
+    it, as a round-trip or a VALUE_WRITER copy does.
   * Entries of one mapping whose destinations overlap, such as `user` and `user.ref`, still
     combine.
   * `x?` with an absent source writes nothing. Use it for a value the node only sometimes
@@ -92,6 +95,8 @@ the source is absent:
     truth about the value, such as the fields of a form that reopens with its previous
     submission: a field the user removed is absent from the new one. Removals happen before
     writes, so when two sources map to one destination, the present one still sets it.
+    Removing a destination removes everything under it, so put `x?!` on the field itself
+    (`userform.details`), not on a parent path such as `userform`.
 
 ```json
 { "id": "applicant_submission", "type": "TASK", "task_template_id": "application-form",

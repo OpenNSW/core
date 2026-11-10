@@ -417,7 +417,8 @@ func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping ma
 // old value. So every destination is removed first, and then every value is set. Setting still
 // merges, but only the result's own entries are left to merge. That is how entries whose
 // destinations overlap, such as "user" and "user.ref", still combine, whatever order they are
-// written in. A sibling of a destination is not touched.
+// written in. A sibling of a destination is not touched, but everything under it is replaced,
+// including keys another node wrote there.
 //
 // What an absent optional source does depends on its key. An "x?" entry writes nothing, so its
 // destination keeps its value. Templates rely on that for a value a node only sometimes
