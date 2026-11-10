@@ -20,6 +20,7 @@ import (
 type stepSeen struct {
 	activityID string
 	template   string
+	inputs     map[string]any
 	step       ActivationRef
 }
 
@@ -44,10 +45,10 @@ func runRecordingSteps(t *testing.T, defJSON string, result func(template string
 		seen []stepSeen
 	)
 	env.OnActivity("ExecuteTaskActivity", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(taskOutput(func(ctx context.Context, template string, _ map[string]any, _ string, step ActivationRef) (map[string]any, error) {
+		Return(taskOutput(func(ctx context.Context, template string, inputs map[string]any, _ string, step ActivationRef) (map[string]any, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			seen = append(seen, stepSeen{activityID: activity.GetInfo(ctx).ActivityID, template: template, step: step})
+			seen = append(seen, stepSeen{activityID: activity.GetInfo(ctx).ActivityID, template: template, inputs: inputs, step: step})
 			return result(template, len(seen)), nil
 		}))
 	var completion WorkflowCompletion

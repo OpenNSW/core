@@ -10,15 +10,35 @@ import (
 	"strings"
 )
 
-// parseMappingKey strips a trailing "?" from a mapping key and reports whether
-// the entry should be treated as optional. A trailing "?" marks the entry as
-// optional, meaning the engine will skip the mapping silently when the source
-// key is absent instead of failing the workflow.
-func parseMappingKey(rawKey string) (key string, optional bool) {
-	if strings.HasSuffix(rawKey, "?") {
-		return rawKey[:len(rawKey)-1], true
+// mappingMode is what a mapping entry does when its source is absent, as the suffix of its key
+// says.
+type mappingMode int
+
+const (
+	// mappingRequired ("x"): an absent source parks the node.
+	mappingRequired mappingMode = iota
+	// mappingKeep ("x?"): an absent source is skipped, so the destination keeps whatever it held.
+	mappingKeep
+	// mappingClear ("x?!"): an absent source removes the destination. It is for output_mapping,
+	// whose destination can hold a value from an earlier run, such as a form field the user has
+	// since removed. An input mapping writes into inputs it builds for this run, so there it acts
+	// like mappingKeep.
+	mappingClear
+)
+
+// optional reports whether the entry allows its source to be absent, rather than parking the node.
+func (m mappingMode) optional() bool { return m != mappingRequired }
+
+// parseMappingKey splits a mapping key into its source path and its mode. A trailing "?!" marks
+// mappingClear and a trailing "?" marks mappingKeep. A key with neither is required.
+func parseMappingKey(rawKey string) (key string, mode mappingMode) {
+	if key, ok := strings.CutSuffix(rawKey, "?!"); ok {
+		return key, mappingClear
 	}
-	return rawKey, false
+	if key, ok := strings.CutSuffix(rawKey, "?"); ok {
+		return key, mappingKeep
+	}
+	return rawKey, mappingRequired
 }
 
 // describeVariables renders keys for a "required ... not found" message: "variable 'a'" for one,
