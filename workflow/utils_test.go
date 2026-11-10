@@ -101,23 +101,30 @@ func TestFormatChildWorkflowID(t *testing.T) {
 
 func TestParseMappingKey(t *testing.T) {
 	tests := []struct {
-		raw         string
-		expectedKey string
-		expectedOpt bool
+		raw          string
+		expectedKey  string
+		expectedMode mappingMode
 	}{
-		{"global_user_email", "global_user_email", false},
-		{"global_user_phone?", "global_user_phone", true},
-		{"user.phone?", "user.phone", true},
-		{"user.phone", "user.phone", false},
-		{"?", "", true},
-		{"", "", false},
+		{"global_user_email", "global_user_email", mappingRequired},
+		{"global_user_phone?", "global_user_phone", mappingKeep},
+		{"user.phone?", "user.phone", mappingKeep},
+		{"user.phone", "user.phone", mappingRequired},
+		{"user.phone?!", "user.phone", mappingClear},
+		{"itemCount?!", "itemCount", mappingClear},
+		{"user.phone!", "user.phone!", mappingRequired}, // "!" alone is not a marker
+		{"?", "", mappingKeep},
+		{"?!", "", mappingClear},
+		{"", "", mappingRequired},
 	}
 
 	for _, test := range tests {
-		gotKey, gotOpt := parseMappingKey(test.raw)
-		if gotKey != test.expectedKey || gotOpt != test.expectedOpt {
+		gotKey, gotMode := parseMappingKey(test.raw)
+		if gotKey != test.expectedKey || gotMode != test.expectedMode {
 			t.Errorf("parseMappingKey(%q): got (%q, %v), want (%q, %v)",
-				test.raw, gotKey, gotOpt, test.expectedKey, test.expectedOpt)
+				test.raw, gotKey, gotMode, test.expectedKey, test.expectedMode)
 		}
+	}
+	if mappingRequired.optional() || !mappingKeep.optional() || !mappingClear.optional() {
+		t.Error("only mappingRequired should be non-optional")
 	}
 }

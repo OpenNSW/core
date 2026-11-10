@@ -92,13 +92,13 @@ type AdminResolutionSignal struct {
 	Action AdminResolutionAction `json:"action"`
 	// WorkflowVariablesPatch sets workflow variables before the action takes effect, for
 	// AdminActionRetry and AdminActionComplete. Keys are dotted paths (e.g. "review.outcome"),
-	// applied in sorted order, and each value is written the way a task's output mapping writes
-	// one: a map value is merged into an existing map at that path (fields it doesn't name are
-	// kept), and any other value replaces what is there. It is a patch, not the full variable set
-	// — variables not named here are untouched. It is not an RFC 6902 JSON Patch, and a nil value
-	// sets the path to nil rather than deleting it. To drop a map's other fields, send it as nil
-	// alongside the fields to keep: {"review": nil, "review.outcome": true}. The variables are
-	// workflow-wide and persist, so they affect every later node too.
+	// applied in sorted order. A map value is merged into an existing map at that path (fields it
+	// doesn't name are kept), and any other value replaces what is there. A task's output mapping
+	// differs: it replaces a map outright (see mapTaskOutputs). It is a patch, not the full
+	// variable set — variables not named here are untouched. It is not an RFC 6902 JSON Patch,
+	// and a nil value sets the path to nil rather than deleting it. To drop a map's other fields,
+	// send it as nil alongside the fields to keep: {"review": nil, "review.outcome": true}. The
+	// variables are workflow-wide and persist, so they affect every later node too.
 	WorkflowVariablesPatch map[string]any `json:"workflow_variables_patch,omitempty"`
 	// Reason is a free-text admin justification, appended to the workflow's AuditTrail.
 	Reason string `json:"reason,omitempty"`

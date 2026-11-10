@@ -63,6 +63,56 @@ type Node struct {
 }
 ```
 
+### Input and Output Mapping
+
+Both mappings use dot paths on both sides. The suffix of a source key says what happens when
+the source is absent:
+
+| Key | Source absent |
+|---|---|
+| `x` | Required: the node parks. |
+| `x?` | Optional: the entry is skipped, so the destination keeps its value. |
+| `x?!` | Optional: the destination is removed (output mapping only). |
+
+* **`input_mapping`** (workflow variable → task input) builds a TASK's inputs anew on every
+  run. A SIGNALING EMIT starts from its `payload`, and a BATCH_SPLIT partition starts from the
+  `_` context variables. Since nothing from an earlier run is there, `x?!` acts like `x?`.
+* **`output_mapping`** (task result → workflow variable) is applied all-or-nothing. If a
+  required source is missing, nothing is written or removed. When the mapping applies:
+  * Each destination is **replaced** by the value from this result, not merged into what was
+    there. When a node runs again (a resubmission, a re-verify), a field its new result leaves
+    out of an object is gone.
+  * Siblings of a destination are untouched, but everything under it is replaced, including
+    keys another node wrote there (`app.review` under `app`). Keep a key another node owns
+    outside the destination (`review` beside `app`), or make sure this node's result carries
+    it, as a round-trip or a VALUE_WRITER copy does.
+  * Entries of one mapping whose destinations overlap, such as `user` and `user.ref`, still
+    combine.
+  * `x?` with an absent source writes nothing. Use it for a value the node only sometimes
+    overrides, such as a date a reviewer may counter-propose, or for a callback that sends
+    only some fields.
+  * `x?!` with an absent source removes its destination. Use it where the result is the whole
+    truth about the value, such as the fields of a form that reopens with its previous
+    submission: a field the user removed is absent from the new one. Removals happen before
+    writes, so when two sources map to one destination, the present one still sets it.
+    Removing a destination removes everything under it, so put `x?!` on the field itself
+    (`userform.details`), not on a parent path such as `userform`.
+
+```json
+{ "id": "applicant_submission", "type": "TASK", "task_template_id": "application-form",
+  "input_mapping":  { "userform?": "userform" },
+  "output_mapping": { "details?!": "userform.details",
+                      "attachments?!": "userform.attachments" } }
+```
+
+Here `userform.details` becomes exactly the submitted section, without any field the user
+removed from it. If the user removed `attachments`, or emptied the whole `details` section,
+before resubmitting, that destination is removed too. The rest of `userform` is left
+as it was.
+
+Keep `x?` for a destination that a later node reads as a required input, in this workflow or
+in a parent one it is passed up to. Removing the value would park that node.
+
 ### Batch Gateway Configuration (`BatchGatewayConfig` & `BatchJoinConfig`)
 ```go
 type BatchGatewayConfig struct {

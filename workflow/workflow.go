@@ -388,10 +388,11 @@ func (g *graphInterpreter) mapTaskInputs(inputMapping map[string]string) (map[st
 func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping map[string]string) error {
 	var missing []string
 	for _, rawGlobalKey := range slices.Sorted(maps.Keys(inputMapping)) {
-		globalKey, optional := parseMappingKey(rawGlobalKey)
+		// dst holds only what this run writes, so "?!" has nothing to remove here and acts like "?".
+		globalKey, mode := parseMappingKey(rawGlobalKey)
 		val, exists := maputil.GetNestedKey(g.instance.WorkflowVariables, globalKey)
 		if !exists {
-			if !optional {
+			if !mode.optional() {
 				missing = append(missing, globalKey)
 			}
 			continue
@@ -409,6 +410,23 @@ func (g *graphInterpreter) applyInputMapping(dst map[string]any, inputMapping ma
 // if any required field is missing from result, every missing one is reported (sorted) and nothing
 // is written, so a failed mapping never leaves workflowVars half updated. A nil result is an empty
 // one, so it fails on every required field rather than silently skipping the mapping.
+//
+// Each destination it writes is replaced by the value from this result, not merged into what an
+// earlier run left there. A node that runs again (a resubmission, a re-verify) may return less than
+// before: a form field the user cleared is simply absent from the object, and a merge would keep the
+// old value. So every destination is removed first, and then every value is set. Setting still
+// merges, but only the result's own entries are left to merge. That is how entries whose
+// destinations overlap, such as "user" and "user.ref", still combine, whatever order they are
+// written in. A sibling of a destination is not touched, but everything under it is replaced,
+// including keys another node wrote there.
+//
+// What an absent optional source does depends on its key. An "x?" entry writes nothing, so its
+// destination keeps its value. Templates rely on that for a value a node only sometimes
+// overrides, such as a date a reviewer may counter-propose. An "x?!" entry removes its
+// destination, for a value the result is the whole truth about, such as a field of a form that
+// reopens with its previous submission: a field the user removed is absent from the new one.
+// Removals come before writes, so an entry that is present still sets a destination that an
+// absent "x?!" entry shares with it.
 func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMapping map[string]string, result map[string]any) error {
 	if len(outputMapping) == 0 {
 		return nil
@@ -419,13 +437,16 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 		val       any
 	}
 	var writes []write
-	var missing []string
+	var clears, missing []string
 	for _, rawTaskKey := range slices.Sorted(maps.Keys(outputMapping)) {
-		taskKey, optional := parseMappingKey(rawTaskKey)
+		taskKey, mode := parseMappingKey(rawTaskKey)
 		val, exists := maputil.GetNestedKey(result, taskKey)
 		if !exists {
-			if !optional {
+			switch mode {
+			case mappingRequired:
 				missing = append(missing, taskKey)
+			case mappingClear:
+				clears = append(clears, outputMapping[rawTaskKey])
 			}
 			continue
 		}
@@ -434,6 +455,12 @@ func (g *graphInterpreter) mapTaskOutputs(workflowVars map[string]any, outputMap
 	if len(missing) > 0 {
 		return withCategory(ParkCategoryOutputMapping, fmt.Errorf(
 			"output mapping error: required task %s not found in task result", describeVariables(missing)))
+	}
+	for _, globalKey := range clears {
+		maputil.DeleteNestedKey(workflowVars, globalKey)
+	}
+	for _, w := range writes {
+		maputil.DeleteNestedKey(workflowVars, w.globalKey)
 	}
 	for _, w := range writes {
 		maputil.SetNestedKey(workflowVars, w.globalKey, w.val)
