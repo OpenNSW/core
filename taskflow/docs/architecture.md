@@ -100,6 +100,8 @@ A node ID in a workflow definition names the *definition*. A node that a loop vi
 
 Completing a step is `CompleteActivation(workflowID, activationID, …)`. Temporal completes an Activity exactly once, so of any number of racing or repeated calls one wins, and a call for a step that is no longer pending (an earlier pass of a loop, an already-completed step) fails with `engine.ErrActivationNotPending` and changes nothing. That is the authority on whether a step is active; the database is only ever a read model of it.
 
+The workflow receives the caller's payload, system keys included, and what the step's plugin stored under its `output_namespace` before it waited. So a step that waits, such as a payment with the reference it generated, hands its own output to `output_mapping` as a step that finishes at once does. A step that takes drafts is left as it is, because its namespace holds the draft.
+
 ## The `TaskRecord`: one row, the render state
 
 A single `store.TaskRecord` holds what is needed to render a task, plus the coordinates of its parent:
