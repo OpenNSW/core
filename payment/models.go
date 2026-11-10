@@ -13,9 +13,10 @@ import (
 type Status string
 
 const (
-	StatusPending Status = "PENDING"
-	StatusSuccess Status = "SUCCESS"
-	StatusFailed  Status = "FAILED"
+	StatusPending   Status = "PENDING"
+	StatusSuccess   Status = "SUCCESS"
+	StatusFailed    Status = "FAILED"
+	StatusCancelled Status = "CANCELLED"
 )
 
 // Transaction represents the internal state of a payment
@@ -34,7 +35,7 @@ type Transaction struct {
 	SessionID       string            `json:"session_id"` // Gateway-specific session identifier
 	Amount          decimal.Decimal   `json:"amount"`
 	Currency        string            `json:"currency"`       // "LKR" or foreign currency
-	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, EXPIRED
+	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, CANCELLED
 	PaymentMethod   string            `json:"payment_method"` // CC, BANK_TRANSFER (populated on webhook)
 	ExpiryDate      time.Time         `json:"expiry_date"`
 	GatewayMetadata map[string]string `json:"gateway_metadata" gorm:"serializer:json"`

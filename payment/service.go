@@ -31,6 +31,11 @@ var ErrAmountMismatch = errors.New("webhook amount/currency mismatch")
 // and retry the checkout.
 var ErrDuplicateReference = errors.New("payment reference already in use")
 
+// ErrAlreadyPaid is returned, wrapped, by CancelCheckout for a checkout that
+// has been paid. The payment stands, so the host should let the step it
+// completes carry on.
+var ErrAlreadyPaid = errors.New("payment already received")
+
 // ReferenceGenerator issues the reference a payer pays against for a checkout,
 // in the host's format. It receives the checkout request with a copy of its
 // metadata. Each reference it issues is unique; CreateCheckoutSession returns
@@ -97,6 +102,13 @@ type Service interface {
 	// ProcessWebhook handles asynchronous notifications from payment gateways and
 	// returns the gateway-specific acknowledgement to relay back to the gateway.
 	ProcessWebhook(ctx context.Context, gatewayID string, body []byte, headers map[string][]string) (*WebhookResponse, error)
+
+	// CancelCheckout closes a checkout that has not been paid, so that its
+	// reference can no longer be paid. A cancelled or failed checkout is left
+	// as it is. It returns ErrTransactionNotFound for an unknown reference and
+	// ErrAlreadyPaid for a paid one, which it leaves unchanged. It does not
+	// complete the host's task step.
+	CancelCheckout(ctx context.Context, referenceNumber string) error
 
 	// SetTaskCompleter injects the dependency used to advance the workflow when
 	// a payment settles. Wired post-construction to avoid an import cycle with taskv2.
@@ -359,8 +371,9 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 		}
 
 		// Idempotency: a terminal status is already recorded (possibly by a
-		// concurrent delivery that committed first) — nothing more to do.
-		if tx.Status == StatusSuccess || tx.Status == StatusFailed {
+		// concurrent delivery that committed first, or by CancelCheckout) —
+		// nothing more to do. A cancelled checkout stays cancelled.
+		if tx.Status == StatusSuccess || tx.Status == StatusFailed || tx.Status == StatusCancelled {
 			slog.InfoContext(ctx, "webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
 			return nil
 		}
@@ -447,4 +460,33 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 	}
 
 	return webhookResp, nil
+}
+
+func (s *paymentService) CancelCheckout(ctx context.Context, referenceNumber string) error {
+	// The row lock serialises this with ProcessWebhook, so a payment cannot
+	// settle between the status check and the update.
+	return s.repo.RunInTransaction(ctx, func(repo Repository) error {
+		tx, err := repo.GetByReferenceNumberForUpdate(ctx, referenceNumber)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve transaction by reference: %w", err)
+		}
+		if tx == nil {
+			return fmt.Errorf("reference %s: %w", referenceNumber, ErrTransactionNotFound)
+		}
+		if tx.Status == StatusSuccess {
+			return fmt.Errorf("reference %s: %w", referenceNumber, ErrAlreadyPaid)
+		}
+		if tx.Status != StatusPending {
+			// Already cancelled or failed: it is not payable, which is all a
+			// cancel asks for.
+			return nil
+		}
+
+		tx.Status = StatusCancelled
+		if err := repo.Update(ctx, tx); err != nil {
+			return fmt.Errorf("failed to cancel transaction: %w", err)
+		}
+		slog.InfoContext(ctx, "checkout cancelled", "reference", referenceNumber)
+		return nil
+	})
 }

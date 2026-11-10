@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -522,13 +523,14 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 
 	// This is the arbiter. Temporal completes an Activity exactly once, so of several racing or
 	// repeated calls for the step only one gets past here, and only it writes below. The workflow
-	// receives the full payload, system keys included.
+	// receives the full payload, system keys included, and the step's own output (see
+	// completionResult).
 	err = tm.taskWorkflowManager.CompleteActivation(
 		ctx,
 		record.TaskWorkflowID,
 		"", // the workflow's current run: a step ID is unique within the workflow
 		stepID,
-		payload,
+		completionResult(record, stepTemplate, payload),
 	)
 	if errors.Is(err, engine.ErrActivationNotPending) {
 		return fmt.Errorf("%w: step %q is not pending", ErrStaleStep, stepID)
@@ -672,6 +674,29 @@ func (tm *TaskManager) submissionData(ctx context.Context, record store.TaskReco
 	}
 	data[stepTemplate.OutputNamespace] = withoutSystemVars(payload)
 	return data
+}
+
+// completionResult is what the workflow receives when a step completes: the submission, and what the
+// step stored under its output namespace before it started waiting. A step that waits for a
+// completion, such as a payment with the reference it generated, then hands its own output to the
+// workflow as a step that finishes at once does, for output_mapping to read as
+// "<namespace>.<field>". The same goes for inputs mapped into the namespace.
+//
+// The stored value replaces a submitted key of the same name, so a caller cannot put data of its own
+// in the step's place. A step that takes drafts is left as it is: its namespace holds the draft, not
+// the step's output. The payload is not changed.
+func completionResult(record store.TaskRecord, step types.StepTemplate, payload map[string]any) map[string]any {
+	if step.OutputNamespace == "" || step.Draft != nil {
+		return payload
+	}
+	own, ok := record.Data[step.OutputNamespace]
+	if !ok {
+		return payload
+	}
+	result := make(map[string]any, len(payload)+1)
+	maps.Copy(result, payload)
+	result[step.OutputNamespace] = own
+	return result
 }
 
 // checkRequiredPreResume returns ErrStepNotGuarded unless step declares, in its PRE_RESUME phase,

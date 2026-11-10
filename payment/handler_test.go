@@ -38,7 +38,8 @@ func (m *mockService) ValidateReference(context.Context, string, json.RawMessage
 func (m *mockService) ProcessWebhook(context.Context, string, []byte, map[string][]string) (*WebhookResponse, error) {
 	return m.webhookResp, m.webhookErr
 }
-func (m *mockService) SetTaskCompleter(TaskCompleter) {}
+func (m *mockService) CancelCheckout(context.Context, string) error { return nil }
+func (m *mockService) SetTaskCompleter(TaskCompleter)               {}
 
 // serve routes a webhook POST through a mux so PathValue("gatewayId") resolves.
 func serveWebhook(svc Service) *httptest.ResponseRecorder {
