@@ -4,6 +4,8 @@
 package maputil
 
 import (
+	"strings"
+
 	"github.com/OpenNSW/core/shared/deepcopy"
 )
 
@@ -81,6 +83,31 @@ func SetNestedKey(m map[string]any, dotPath string, value any) {
 
 	// Otherwise, overwrite/set the deep-copied value.
 	m[dotPath] = deepcopy.Value(value)
+}
+
+// DeleteNestedKey removes the value at a dot-separated path, leaving its siblings in place.
+// e.g. DeleteNestedKey(m, "userform.applicant_name") removes m["userform"]["applicant_name"]
+// It does nothing when the path is not there: a key is missing, or a value on the way is not a
+// map[string]any. It never creates a map, and it leaves a map that the removal emptied in place.
+// Like SetNestedKey, it does not change a nested map in place: each map on the path below m is
+// copied before it is changed, so a nested map that m shares with another holder is left as it was.
+func DeleteNestedKey(m map[string]any, dotPath string) {
+	if _, exists := GetNestedKey(m, dotPath); !exists {
+		return
+	}
+	deleteNestedKey(m, dotPath)
+}
+
+// deleteNestedKey removes the value at dotPath, which must exist in m.
+func deleteNestedKey(m map[string]any, dotPath string) {
+	key, rest, nested := strings.Cut(dotPath, ".")
+	if !nested {
+		delete(m, key)
+		return
+	}
+	sub := deepcopy.Map(m[key].(map[string]any))
+	deleteNestedKey(sub, rest)
+	m[key] = sub
 }
 
 // mergeMaps recursively merges src into dst. Values from src are deep-copied.
