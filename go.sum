@@ -1,7 +1,7 @@
 github.com/OpenNSW/core/remote v0.9.0 h1:vwmzRZTvYqDkHW4hDX641TD6nNvLjykpWe6v5Xe0coU=
 github.com/OpenNSW/core/remote v0.9.0/go.mod h1:ldtY4TRSPVX5L9BGEB7c4cIgpyJSSEVDit7fiTh4Qzs=
-github.com/OpenNSW/core/shared v0.3.0 h1:HcWcXyMdwzMfsVvo1HG2OTBYaQTRipTpLI0AFx/5Wgs=
-github.com/OpenNSW/core/shared v0.3.0/go.mod h1:Lgh13h6agGl6WFR9i1W0iaUUky7wC0uLJrVc+FRRtMU=
+github.com/OpenNSW/core/shared v0.4.0 h1:jk+nuMkp6EVk/mKPwpNZJZyMcbT8wzxhi4leQHlUuKk=
+github.com/OpenNSW/core/shared v0.4.0/go.mod h1:Lgh13h6agGl6WFR9i1W0iaUUky7wC0uLJrVc+FRRtMU=
 github.com/OpenNSW/core/uiprojector v0.3.0 h1:TRp0+TCcq+9eGMU0KPf0a2idHVE/xjVoFgy5Nf/pqZM=
 github.com/OpenNSW/core/uiprojector v0.3.0/go.mod h1:wWmdAkD71gPcDwaPyH/9BY0IbbqWFXoR/UkgssSxwh0=
 github.com/aws/aws-sdk-go-v2 v1.47.5 h1:5yA+A+BiXbDq1ZLbYwPViwhEGDMdR0MEhL8Jh2LnLS4=

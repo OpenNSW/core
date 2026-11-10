@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/OpenNSW/core/remote v0.9.0
-	github.com/OpenNSW/core/shared v0.3.0
+	github.com/OpenNSW/core/shared v0.4.0
 	github.com/OpenNSW/core/uiprojector v0.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.5
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
