@@ -1,8 +1,31 @@
 # httputil
 
-Shared HTTP response helpers for writing JSON payloads and standardized, correlation-ID-tagged API error bodies. It has no dependencies — correlation ID extraction is an optional hook a consumer wires in, not a hard-coded package.
+Shared HTTP helpers for reading JSON request bodies with a size limit, and for writing JSON payloads and standardized, correlation-ID-tagged API error bodies. It has no dependencies — correlation ID extraction is an optional hook a consumer wires in, not a hard-coded package.
 
 ## Usage
+
+### Reading JSON request bodies
+
+`DecodeJSON` reads the request body as exactly one JSON value into a destination, reading at most `limit` bytes. It refuses a field the destination does not declare and anything after the value, so a misspelt key is reported instead of silently dropped. A map or `json.RawMessage` field still takes any keys.
+
+It writes nothing itself. `WriteDecodeError` answers its error with `Error`: 413 `request body too large` for a body over the limit, otherwise 400 `invalid request body`, naming the field when it is an unknown one.
+
+```go
+type createItemRequest struct {
+    Name string `json:"name"`
+}
+
+func handleCreate(w http.ResponseWriter, r *http.Request) {
+    var req createItemRequest
+    if err := httputil.DecodeJSON(w, r, 1<<10, &req); err != nil {
+        httputil.WriteDecodeError(w, r, err)
+        return
+    }
+    // ...
+}
+```
+
+To answer a decode error yourself, for example to audit it, match it with `errors.Is` against `ErrBodyTooLarge`, `ErrBodyEmpty` (an empty body, for routes where the body is optional) and `ErrBodyInvalid` (malformed JSON, a wrong type, trailing data, or an `*UnknownFieldError`), and respond with `MsgBodyTooLarge` or `MsgInvalidBody` so every endpoint describes a bad body alike.
 
 ### Writing JSON responses
 
