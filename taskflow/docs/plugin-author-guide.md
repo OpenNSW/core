@@ -45,6 +45,8 @@ type PluginContext struct {
 
 **`ctx.Inputs`** is the (already namespaced) inputs map for this step invocation. Convenience for plugins that need raw inputs without reaching into `Record.Data`.
 
+A plugin whose suspended step must act on the call that resumes it also implements the optional `plugins.Resumer` interface. See [Acting when the step resumes](#acting-when-the-step-resumes-resumer).
+
 ---
 
 ## The two return modes
@@ -209,6 +211,51 @@ pluginsReg.Register("ORDER_SPLIT", plugins.NewComputePlugin(splitOrder))
 ```
 
 Rerunning such a step on the same data fails the same way, so the wrapper marks any error the function returns `Permanent(ErrorTypeInput, …)`, and the step parks for an admin at once instead of retrying. An error the function already marked with `plugins.Permanent` keeps its own type. A step that calls another service needs its own plugin, so that a failure that may pass, such as a timeout, is retried.
+
+---
+
+## Acting when the step resumes: `Resumer`
+
+`Execute` runs when the step starts. A suspended step is resumed later by `CompleteTaskStep`, which by default never calls the plugin again: the caller's payload becomes the step's result as is. A plugin that must act on that call, or decide the step's result itself, also implements `plugins.Resumer`:
+
+```go
+type Resumer interface {
+    Resume(ctx PluginContext, config json.RawMessage, payload map[string]any) (map[string]any, error)
+}
+```
+
+A payment plugin, for example, cancels its checkout when the payer leaves the step, and completes the step with an outcome the server builds rather than one the client sends:
+
+```go
+func (p *PaymentPlugin) Resume(ctx plugins.PluginContext, _ json.RawMessage, payload map[string]any) (map[string]any, error) {
+    if payload[orchestrator.CommandVar] != "cancel" {
+        return payload, nil // the webhook's submit passes through
+    }
+    ref := ctx.Record.Data[ctx.OutputNamespace].(map[string]any)["reference_number"].(string)
+    if err := p.payments.Cancel(ctx.Context, ref); err != nil {
+        return nil, err // e.g. already paid: nothing completes and the caller gets the error
+    }
+    return map[string]any{"payment_status": "cancelled", "reference_number": ref}, nil
+}
+```
+
+The orchestrator detects the interface with a type assertion, so a plugin without `Resume` behaves exactly as before.
+
+When it runs, in `CompleteTaskStep`:
+
+1. The pre-check (the step is the active one) and the `PRE_RESUME` extensions, such as authz, run first. A rejected call never reaches `Resume`.
+2. `Resume` gets **copies** of the record and the payload, the step's `plugin_properties` as `config`, and its `OutputNamespace`. `Inputs` is nil: read what you need from `Record.Data`.
+3. The payload it returns is what the workflow receives and what is persisted under the step's namespace.
+4. The step is completed.
+
+`SaveDraft` never calls it.
+
+The contract:
+
+- **The command is not yours to change.** The orchestrator puts the call's `__command` back on the payload you return, or removes one you add when the call had none, so the workflow acts on the command the extensions approved.
+- **Return an error to refuse the call.** Nothing is completed or written, and the caller gets your error wrapped, so the host can map it with `errors.Is` (a 409, for example).
+- **Be idempotent, and leave nothing wrong when the step is not completed.** `Resume` runs before the step is completed, so a call can run it and then lose: the step was completed by someone else, or the workflow was unreachable. The caller may retry. Arrange your side effects so that a repeat is harmless, and so that a call that never completes the step leaves the system in a state the next call can finish.
+- **Don't change the record.** Your copy is discarded; return the payload instead.
 
 ---
 
