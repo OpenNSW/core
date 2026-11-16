@@ -216,7 +216,12 @@ func (p *PaymentPlugin) Resume(ctx plugins.PluginContext, _ json.RawMessage, pay
     if payload[orchestrator.CommandVar] != "cancel" {
         return payload, nil // the webhook's submit passes through
     }
-    ref := ctx.Record.Data[ctx.OutputNamespace].(map[string]any)["reference_number"].(string)
+    // What Execute stored when it opened the checkout, under the step's output namespace.
+    stepData, _ := ctx.Record.Data[ctx.OutputNamespace].(map[string]any)
+    ref, _ := stepData["reference_number"].(string)
+    if ref == "" {
+        return nil, errors.New("payment: the step holds no reference to cancel")
+    }
     if err := p.payments.Cancel(ctx.Context, ref); err != nil {
         return nil, err // e.g. already paid: nothing completes and the caller gets the error
     }
