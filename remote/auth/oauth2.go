@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -354,6 +355,23 @@ func (a *OAuth2) tokenHost() string {
 	return u.Host
 }
 
+// redactURL removes the query string and fragment from a transport error's URL.
+// http.Client.Do wraps every failure in *url.Error, whose message carries the full
+// URL; net/http strips only the password, but the query may carry credentials too.
+// The error keeps its type, Op and cause, so errors.As and errors.Is still work.
+func redactURL(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	safe := ""
+	if u, perr := url.Parse(ue.URL); perr == nil {
+		u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment, u.User = "", false, "", "", nil
+		safe = u.String()
+	}
+	return &url.Error{Op: ue.Op, URL: safe, Err: ue.Err}
+}
+
 func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 	if a.httpClient == nil {
 		a.httpClient = &http.Client{Timeout: 10 * time.Second}
@@ -392,7 +410,7 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("token request failed: %w", err)
+		return "", time.Time{}, fmt.Errorf("token request failed: %w", redactURL(err))
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {

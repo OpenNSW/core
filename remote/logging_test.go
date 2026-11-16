@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -124,6 +126,74 @@ func TestClient_FailedRequestIsLoggedAtDebug(t *testing.T) {
 	for _, rec := range capture.records(t) {
 		assert.NotEqual(t, "ERROR", rec["level"], "a returned error must not also be logged as an error")
 	}
+}
+
+func TestClient_FailedRequestWithRetries_DoesNotLeakQueryString(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	serverURL := server.URL
+	server.Close() // connection refused: http.Client.Do returns a *url.Error carrying the full URL
+
+	capture, logger := newLogCapture()
+	client := NewClient(serverURL, WithLogger(logger))
+
+	err := client.Request(context.Background(), Request{
+		Method: http.MethodGet,
+		Path:   "/down?token=path-secret",
+		Query:  url.Values{"key": {"query-secret"}},
+		Retry: &RetryConfig{
+			MaxRetries:     1,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+		},
+	}, nil)
+	require.ErrorIs(t, err, ErrRequestFailed)
+
+	require.Len(t, capture.find(t, "remote: request failed"), 2)
+	retries := capture.find(t, "remote: retrying request")
+	require.Len(t, retries, 1)
+	assert.NotEmpty(t, retries[0]["error"], "the cause must still be logged, just without the URL")
+
+	assert.NotContains(t, capture.raw(), "secret", "neither the debug nor the retry record may carry the query string")
+	assert.NotContains(t, err.Error(), "secret", "the returned error is logged by the caller, so it must not carry the query string either")
+
+	// The URL is redacted, not dropped: the error keeps its type, host and path.
+	var ue *url.Error
+	require.ErrorAs(t, err, &ue)
+	assert.Equal(t, serverURL+"/down", ue.URL)
+	assert.Contains(t, retries[0]["error"], serverURL+"/down")
+}
+
+func TestRedactURL(t *testing.T) {
+	cause := errors.New("connection refused")
+
+	tests := []struct {
+		name    string
+		url     string
+		wantURL string
+	}{
+		{"query", "https://api.example.com/v1/items?token=secret", "https://api.example.com/v1/items"},
+		{"empty query", "https://api.example.com/v1/items?", "https://api.example.com/v1/items"},
+		{"fragment", "https://api.example.com/v1/items#secret", "https://api.example.com/v1/items"},
+		{"userinfo", "https://user:secret@api.example.com/v1", "https://api.example.com/v1"},
+		{"no query", "https://api.example.com/v1/items", "https://api.example.com/v1/items"},
+		{"unparseable", "https://api.example.com/%zz?token=secret", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := redactURL(fmt.Errorf("wrapped: %w", &url.Error{Op: "Get", URL: tt.url, Err: cause}))
+
+			var ue *url.Error
+			require.ErrorAs(t, err, &ue)
+			assert.Equal(t, "Get", ue.Op)
+			assert.Equal(t, tt.wantURL, ue.URL)
+			assert.ErrorIs(t, err, cause)
+			assert.NotContains(t, err.Error(), "secret")
+		})
+	}
+
+	t.Run("non-URL error passes through", func(t *testing.T) {
+		assert.Same(t, cause, redactURL(cause))
+	})
 }
 
 func TestClient_RetryIsLoggedAtInfoWithResendCount(t *testing.T) {
