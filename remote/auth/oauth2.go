@@ -398,7 +398,9 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to create token request: %w", err)
+		// A malformed token URL fails here with a *url.Error whose message is the
+		// full URL, query string included, so it is redacted like a transport error.
+		return "", time.Time{}, fmt.Errorf("failed to create token request: %w", redactURL(err))
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

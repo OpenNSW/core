@@ -546,6 +546,22 @@ func TestOAuth2_WithOAuth2Logger(t *testing.T) {
 		assert.Equal(t, strings.TrimSuffix(tokenURL, "?tenant=query-secret"), ue.URL)
 	})
 
+	t.Run("malformed token URL does not leak its query", func(t *testing.T) {
+		// The invalid escape makes http.NewRequestWithContext fail with a *url.Error
+		// whose message is the whole URL.
+		buf, logger := newLogger()
+		authn := NewOAuth2("https://idp.example/tok%zz?tenant=query-secret", "id", "client-secret", nil, WithOAuth2Logger(logger))
+		req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+		err := authn.Apply(req)
+		require.Error(t, err)
+
+		out := buf.String()
+		assert.Contains(t, out, "remote/auth: oauth2 token fetch failed")
+		assert.Contains(t, out, "invalid URL escape", "the cause must still be logged, just without the URL")
+		assert.NotContains(t, out, "query-secret")
+		assert.NotContains(t, err.Error(), "query-secret", "the returned error must not carry the query string either")
+	})
+
 	t.Run("Build passes the logger to oauth2", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
