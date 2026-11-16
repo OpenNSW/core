@@ -27,7 +27,9 @@ func WithTimeout(timeout time.Duration) Option {
 // error. The query string, bodies and headers are never logged.
 func WithLogger(logger *slog.Logger) Option {
 	return func(c *Client) {
-		c.logger = logger
+		if logger != nil {
+			c.logger = logger
+		}
 	}
 }
 
