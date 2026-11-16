@@ -275,7 +275,7 @@ func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, fina
 		log.DebugContext(ctx, "remote: request failed",
 			"duration", duration,
 			attrErrorType, errorType,
-			"error", err,
+			"error", mapped,
 		)
 		return nil, mapped
 	}
@@ -357,10 +357,28 @@ func (c *Client) RawRequest(ctx context.Context, req Request) (*RawResponse, err
 }
 
 func (c *Client) mapNetworkError(err error) error {
+	err = redactURL(err)
 	if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
 		return ErrTimeout
 	}
-	return fmt.Errorf("%w: %v", ErrRequestFailed, err)
+	return fmt.Errorf("%w: %w", ErrRequestFailed, err)
+}
+
+// redactURL removes the query string and fragment from a transport error's URL.
+// http.Client.Do wraps every failure in *url.Error, whose message carries the full
+// URL; net/http strips only the password, but the query may carry credentials too.
+// The error keeps its type, Op and cause, so errors.As and errors.Is still work.
+func redactURL(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	safe := ""
+	if u, perr := url.Parse(ue.URL); perr == nil {
+		u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment, u.User = "", false, "", "", nil
+		safe = u.String()
+	}
+	return &url.Error{Op: ue.Op, URL: safe, Err: ue.Err}
 }
 
 func (c *Client) handleErrorResponse(resp *http.Response) error {

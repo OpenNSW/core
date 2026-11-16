@@ -523,6 +523,29 @@ func TestOAuth2_WithOAuth2Logger(t *testing.T) {
 		assert.Contains(t, out, "remote/auth: oauth2 token fetch failed")
 	})
 
+	t.Run("transport failure does not leak the token URL query", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		tokenURL := ts.URL + "?tenant=query-secret"
+		ts.Close() // connection refused: http.Client.Do returns a *url.Error carrying the full URL
+
+		buf, logger := newLogger()
+		authn := NewOAuth2(tokenURL, "id", "client-secret", nil, WithOAuth2Logger(logger))
+		req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+		err := authn.Apply(req)
+		require.Error(t, err)
+
+		out := buf.String()
+		assert.Contains(t, out, "remote/auth: oauth2 token fetch failed")
+		assert.Contains(t, out, "connection refused", "the cause must still be logged, just without the URL")
+		assert.NotContains(t, out, "query-secret")
+		assert.NotContains(t, err.Error(), "query-secret", "the returned error must not carry the query string either")
+
+		// The URL is redacted, not dropped: the error keeps its type and host.
+		var ue *url.Error
+		require.ErrorAs(t, err, &ue)
+		assert.Equal(t, strings.TrimSuffix(tokenURL, "?tenant=query-secret"), ue.URL)
+	})
+
 	t.Run("Build passes the logger to oauth2", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
