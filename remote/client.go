@@ -71,6 +71,7 @@ func NewClient(baseURL string, opts ...Option) *Client {
 			Timeout: 30 * time.Second,
 		},
 		baseURL: strings.TrimSuffix(baseURL, "/"),
+		logger:  slog.Default(),
 	}
 
 	for _, opt := range opts {
@@ -78,14 +79,6 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	}
 
 	return c
-}
-
-// log returns the configured logger, or slog.Default() when none was set.
-func (c *Client) log() *slog.Logger {
-	if c.logger != nil {
-		return c.logger
-	}
-	return slog.Default()
 }
 
 // execute resolves the request URL (query string included) and the body/
@@ -110,7 +103,7 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 	}
 	// Only the host and path are logged: the query string can carry credentials
 	// or personal data.
-	log := c.log().With(
+	log := c.logger.With(
 		attrMethod, req.Method,
 		attrServerAddress, parsedURL.Host,
 		attrURLPath, parsedURL.Path,
@@ -306,7 +299,7 @@ func (c *Client) Request(ctx context.Context, req Request, response any) error {
 
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			c.log().WarnContext(ctx, "remote: failed to close response body", "error", err)
+			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
 		}
 	}()
 
@@ -347,7 +340,7 @@ func (c *Client) RawRequest(ctx context.Context, req Request) (*RawResponse, err
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			c.log().WarnContext(ctx, "remote: failed to close response body", "error", err)
+			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
 		}
 	}()
 

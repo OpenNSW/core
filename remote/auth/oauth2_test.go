@@ -74,19 +74,16 @@ func TestOAuth2_getToken_Caching(t *testing.T) {
 }
 
 func TestOAuth2_ExpiryBuffer(t *testing.T) {
-	// Set an expired token
-	auth := &OAuth2{
-		accessToken: "old-token",
-		expiry:      time.Now().Add(-10 * time.Minute),
-	}
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"access_token": "new-token", "expires_in": 3600}`))
 	}))
 	defer ts.Close()
 
-	auth.tokenURL = ts.URL
+	// Set an expired token
+	auth := NewOAuth2(ts.URL, "", "", nil)
+	auth.accessToken = "old-token"
+	auth.expiry = time.Now().Add(-10 * time.Minute)
 
 	t1, err := auth.getToken(context.Background())
 	require.NoError(t, err)

@@ -183,7 +183,7 @@ The package logs through `log/slog`. Give the manager a logger with `WithManager
 manager := remote.NewManager(remote.WithManagerLogger(logger))
 ```
 
-A standalone client takes `remote.WithLogger(logger)`, and an authenticator built with `auth.Build` takes `auth.WithLogger(logger)`.
+A standalone client takes `remote.WithLogger(logger)`, and an authenticator built with `auth.Build` takes `auth.WithLogger(logger)`. The `slog.Default()` fallback is read when the manager, client or authenticator is created, so call `slog.SetDefault` before building them — or pass a logger explicitly.
 
 | Event                                       | Level |
 |---------------------------------------------|-------|
