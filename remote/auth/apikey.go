@@ -13,7 +13,7 @@ type APIKeyConfig struct {
 }
 
 // build constructs the authenticator.
-func (c APIKeyConfig) build() (Authenticator, error) {
+func (c APIKeyConfig) build(buildOptions) (Authenticator, error) {
 	return NewAPIKey(c.Key, c.Value), nil
 }
 

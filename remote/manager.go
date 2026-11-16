@@ -39,14 +39,43 @@ type Manager struct {
 	configs        map[string]ServiceConfig
 	clients        map[string]*Client
 	authenticators map[string]auth.Authenticator
+
+	// logger is set once by NewManager and never changed, so it is read without mu.
+	logger *slog.Logger
 }
 
-func NewManager() *Manager {
-	return &Manager{
+// ManagerOption configures a Manager.
+type ManagerOption func(*Manager)
+
+// WithManagerLogger sets the logger the manager, its clients and their
+// authenticators write to. Each client and authenticator logs with a
+// remote.service attribute naming its service. Without it, or with a nil
+// logger, slog.Default() is used — resolved when each client or authenticator
+// is built, not when the manager is created.
+func WithManagerLogger(logger *slog.Logger) ManagerOption {
+	return func(m *Manager) {
+		m.logger = logger
+	}
+}
+
+func NewManager(opts ...ManagerOption) *Manager {
+	m := &Manager{
 		configs:        make(map[string]ServiceConfig),
 		clients:        make(map[string]*Client),
 		authenticators: make(map[string]auth.Authenticator),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// log returns the configured logger, or slog.Default() when none was set.
+func (m *Manager) log() *slog.Logger {
+	if m.logger != nil {
+		return m.logger
+	}
+	return slog.Default()
 }
 
 // SetServices validates services and replaces the manager's registry with them.
@@ -66,7 +95,8 @@ func (m *Manager) SetServices(services ...ServiceConfig) error {
 		// type, missing settings, reserved endpoint params) fails loud at
 		// startup rather than on the first request.
 		if cfg.Auth != nil {
-			authenticator, err := auth.Build(*cfg.Auth)
+			authenticator, err := auth.Build(*cfg.Auth,
+				auth.WithLogger(m.log().With(attrService, cfg.ID)))
 			if err != nil {
 				return fmt.Errorf("remote: failed to configure auth for service %q: %w", cfg.ID, err)
 			}
@@ -89,7 +119,7 @@ func (m *Manager) SetServices(services ...ServiceConfig) error {
 	m.configs = configs
 	m.authenticators = authenticators
 
-	slog.Info("remote: services loaded", "count", len(configs))
+	m.log().Info("remote: services loaded", "count", len(configs))
 	return nil
 }
 
@@ -135,7 +165,7 @@ func (m *Manager) GetClient(id string) (*Client, error) {
 		return nil, fmt.Errorf("remote: service %q not found in registry", id)
 	}
 
-	var opts []Option
+	opts := []Option{WithLogger(m.log().With(attrService, id))}
 
 	if cfg.Timeout != "" {
 		d, err := time.ParseDuration(cfg.Timeout)
