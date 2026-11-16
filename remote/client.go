@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -70,7 +71,6 @@ func NewClient(baseURL string, opts ...Option) *Client {
 			Timeout: 30 * time.Second,
 		},
 		baseURL: strings.TrimSuffix(baseURL, "/"),
-		logger:  slog.Default(),
 	}
 
 	for _, opt := range opts {
@@ -80,7 +80,15 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	return c
 }
 
-// execute builds the full path (query string included) and the body/
+// log returns the configured logger, or slog.Default() when none was set.
+func (c *Client) log() *slog.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return slog.Default()
+}
+
+// execute resolves the request URL (query string included) and the body/
 // Content-Type pair from req.Body, then sends the request with retries.
 func (c *Client) execute(ctx context.Context, req Request) (*http.Response, error) {
 	fullPath := req.Path
@@ -91,6 +99,22 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 			fullPath += "?" + req.Query.Encode()
 		}
 	}
+
+	finalURL, err := c.resolveURL(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	parsedURL, err := url.Parse(finalURL)
+	if err != nil {
+		return nil, fmt.Errorf("remote: failed to create request: %w", err)
+	}
+	// Only the host and path are logged: the query string can carry credentials
+	// or personal data.
+	log := c.log().With(
+		attrMethod, req.Method,
+		attrServerAddress, parsedURL.Host,
+		attrURLPath, parsedURL.Path,
+	)
 
 	var data []byte
 	var contentType string
@@ -120,12 +144,40 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 		headers["Content-Type"] = contentType
 	}
 
-	return c.executeWithRetry(ctx, req.Method, fullPath, data, headers, req.Retry)
+	return c.executeWithRetry(ctx, log, req.Method, finalURL, data, headers, req.Retry)
 }
 
-func (c *Client) executeWithRetry(ctx context.Context, method, path string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
+// resolveURL joins a relative path to the base URL, or checks that an absolute
+// one points at the configured service. It runs once per request, not per
+// attempt, since a bad URL is not worth retrying.
+func (c *Client) resolveURL(path string) (string, error) {
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
+		base := strings.TrimSuffix(c.baseURL, "/")
+		p := strings.TrimPrefix(path, "/")
+		return base + "/" + p, nil
+	}
+
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", fmt.Errorf("remote: invalid base URL: %w", err)
+	}
+
+	provided, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("remote: invalid absolute URL: %w", err)
+	}
+
+	// Ensure Scheme and Host match to prevent SSRF or credential leakage
+	if base.Scheme != provided.Scheme || base.Host != provided.Host {
+		return "", fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", provided.Host, base.Host)
+	}
+	return path, nil
+}
+
+func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
 	if retry == nil {
-		return c.executeOnce(ctx, method, path, body, headers)
+		return c.executeOnce(ctx, log, method, finalURL, body, headers, 0)
 	}
 
 	var lastResp *http.Response
@@ -137,7 +189,7 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 			return nil, err
 		}
 
-		lastResp, lastErr = c.executeOnce(ctx, method, path, body, headers)
+		lastResp, lastErr = c.executeOnce(ctx, log, method, finalURL, body, headers, attempt)
 
 		shouldRetry := false
 		if lastErr != nil {
@@ -153,17 +205,18 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 			return lastResp, lastErr
 		}
 
+		retryAttrs := []any{attrResendCount, attempt + 1, "wait", backoff}
+		if lastErr != nil {
+			retryAttrs = append(retryAttrs, "error", lastErr)
+		} else {
+			retryAttrs = append(retryAttrs, attrStatusCode, lastResp.StatusCode)
+		}
+
 		if lastResp != nil {
 			_ = lastResp.Body.Close()
 		}
 
-		c.logger.InfoContext(ctx, "remote: retrying request",
-			"method", method,
-			"path", path,
-			"attempt", attempt+1,
-			"wait", backoff,
-			"error", lastErr,
-		)
+		log.InfoContext(ctx, "remote: retrying request", retryAttrs...)
 
 		timer := time.NewTimer(backoff)
 		select {
@@ -182,34 +235,11 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 	return lastResp, lastErr
 }
 
-func (c *Client) executeOnce(ctx context.Context, method, path string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
-	finalURL := path
-
-	// Handle URL construction and verification
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		// Absolute URL validation
-		if c.baseURL != "" {
-			base, err := url.Parse(c.baseURL)
-			if err != nil {
-				return nil, fmt.Errorf("remote: invalid base URL: %w", err)
-			}
-
-			provided, err := url.Parse(path)
-			if err != nil {
-				return nil, fmt.Errorf("remote: invalid absolute URL: %w", err)
-			}
-
-			// Ensure Scheme and Host match to prevent SSRF or credential leakage
-			if base.Scheme != provided.Scheme || base.Host != provided.Host {
-				return nil, fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", provided.Host, base.Host)
-			}
-		}
-	} else {
-		// Relative path handling
-		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
-		base := strings.TrimSuffix(c.baseURL, "/")
-		p := strings.TrimPrefix(path, "/")
-		finalURL = base + "/" + p
+// executeOnce sends one attempt. attempt is 0 for the first try; retries carry
+// it as http.request.resend_count.
+func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, extraHeaders map[string]string, attempt int) (*http.Response, error) {
+	if attempt > 0 {
+		log = log.With(attrResendCount, attempt)
 	}
 
 	var bodyReader io.Reader
@@ -235,18 +265,32 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		}
 	}
 
-	c.logger.DebugContext(ctx, "remote: outbound request starting", "method", method, "url", finalURL)
+	log.DebugContext(ctx, "remote: request started")
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(start)
 
 	if err != nil {
-		c.logger.ErrorContext(ctx, "remote: outbound request failed", "method", method, "url", finalURL, "duration", duration, "error", err)
-		return nil, c.mapNetworkError(err)
+		mapped := c.mapNetworkError(err)
+		errorType := "_OTHER"
+		if errors.Is(mapped, ErrTimeout) {
+			errorType = "timeout"
+		}
+		// Debug, not Error: the error is returned to the caller, which decides
+		// whether it matters and logs it at the level it chooses.
+		log.DebugContext(ctx, "remote: request failed",
+			"duration", duration,
+			attrErrorType, errorType,
+			"error", err,
+		)
+		return nil, mapped
 	}
 
-	c.logger.DebugContext(ctx, "remote: outbound request completed", "method", method, "url", finalURL, "status", resp.StatusCode, "duration", duration)
+	log.DebugContext(ctx, "remote: request completed",
+		attrStatusCode, resp.StatusCode,
+		"duration", duration,
+	)
 
 	return resp, nil
 }
@@ -262,7 +306,7 @@ func (c *Client) Request(ctx context.Context, req Request, response any) error {
 
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
+			c.log().WarnContext(ctx, "remote: failed to close response body", "error", err)
 		}
 	}()
 
@@ -303,7 +347,7 @@ func (c *Client) RawRequest(ctx context.Context, req Request) (*RawResponse, err
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			c.logger.WarnContext(ctx, "remote: failed to close response body", "error", err)
+			c.log().WarnContext(ctx, "remote: failed to close response body", "error", err)
 		}
 	}()
 

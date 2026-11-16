@@ -40,6 +40,14 @@ There are two ways to build an authenticator:
    auth.NewOAuth2("https://identity.example.com/oauth2/token", "my-client-id", "my-client-secret", []string{"read", "write"})
    ```
 
+### Logging
+
+The OAuth2 authenticator logs a token fetch at Debug and a failed fetch at Warn,
+reporting the token endpoint's host only — never the token, the credentials or the
+token URL's query string. Pass a logger with `auth.WithLogger(logger)` to `Build`, or
+`auth.WithOAuth2Logger(logger)` to `NewOAuth2`; without one, `slog.Default()` is used.
+The API key and bearer strategies do not log.
+
 `auth.Config` and the per-strategy settings structs carry `json` and `yaml` tags with
 the same camelCase keys, so they decode from either format; the package itself reads
 no files.

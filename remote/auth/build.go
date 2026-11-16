@@ -6,6 +6,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // Type names a built-in authentication strategy.
@@ -34,18 +35,38 @@ type Config struct {
 // authConfig is implemented by each strategy's settings struct. build validates the
 // settings and constructs the authenticator.
 type authConfig interface {
-	build() (Authenticator, error)
+	build(opts buildOptions) (Authenticator, error)
+}
+
+// buildOptions carries the settings Build applies to whichever strategy it builds.
+type buildOptions struct {
+	logger *slog.Logger
+}
+
+// BuildOption configures Build.
+type BuildOption func(*buildOptions)
+
+// WithLogger sets the logger an authenticator that logs (oauth2) writes to. Without
+// it, slog.Default() is used. Strategies that never log ignore it.
+func WithLogger(logger *slog.Logger) BuildOption {
+	return func(o *buildOptions) {
+		o.logger = logger
+	}
 }
 
 // Build constructs the authenticator cfg describes. It is the single entry point
 // callers (e.g. the remote Manager) use, so they need not know about individual
 // strategies.
-func Build(cfg Config) (Authenticator, error) {
+func Build(cfg Config, opts ...BuildOption) (Authenticator, error) {
 	strategy, err := cfg.strategy()
 	if err != nil {
 		return nil, err
 	}
-	return strategy.build()
+	var o buildOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return strategy.build(o)
 }
 
 // strategy returns the settings block named by Type, rejecting a missing block or

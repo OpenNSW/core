@@ -174,14 +174,15 @@ type OAuth2Config struct {
 }
 
 // build validates the settings and constructs the authenticator.
-func (c OAuth2Config) build() (Authenticator, error) {
+func (c OAuth2Config) build(opts buildOptions) (Authenticator, error) {
 	// Validated here, not just at token-request time, so a bad configuration fails when
 	// services are loaded rather than on the first outbound call.
 	if err := c.EndpointParams.validate(); err != nil {
 		return nil, fmt.Errorf("oauth2: %w", err)
 	}
 	auth := NewOAuth2(c.TokenURL, c.ClientID, c.ClientSecret, c.Scopes,
-		WithEndpointParams(url.Values(c.EndpointParams)))
+		WithEndpointParams(url.Values(c.EndpointParams)),
+		WithOAuth2Logger(opts.logger))
 	auth.SetInsecureSkipTLSVerify(c.InsecureSkipTLSVerify)
 	return auth, nil
 }
@@ -193,6 +194,7 @@ type OAuth2 struct {
 	scopes                []string
 	endpointParams        url.Values
 	insecureSkipTLSVerify bool
+	logger                *slog.Logger
 
 	// Internal client for fetching tokens
 	httpClient *http.Client
@@ -211,6 +213,16 @@ func WithEndpointParams(params url.Values) OAuth2Option {
 	return func(a *OAuth2) {
 		if len(params) > 0 {
 			a.endpointParams = params
+		}
+	}
+}
+
+// WithOAuth2Logger sets the logger token fetches are reported to. A nil logger
+// leaves the default, slog.Default().
+func WithOAuth2Logger(logger *slog.Logger) OAuth2Option {
+	return func(a *OAuth2) {
+		if logger != nil {
+			a.logger = logger
 		}
 	}
 }
@@ -311,13 +323,42 @@ func (a *OAuth2) getToken(ctx context.Context) (string, error) {
 	// Fetch new token
 	token, expiry, err := a.refreshToken(ctx)
 	if err != nil {
+		// Logged here as well as returned: the error surfaces on whichever request
+		// happened to trigger the fetch, but the failure affects every call to the
+		// service until a fetch succeeds.
+		a.log().WarnContext(ctx, "remote/auth: oauth2 token fetch failed",
+			"server.address", a.tokenHost(),
+			"error", err,
+		)
 		return "", err
 	}
 
 	a.accessToken = token
 	a.expiry = expiry
+	a.log().DebugContext(ctx, "remote/auth: oauth2 token fetched",
+		"server.address", a.tokenHost(),
+		"expires_in", time.Until(expiry).Round(time.Second),
+	)
 
 	return a.accessToken, nil
+}
+
+// log returns the configured logger, or slog.Default() when none was set.
+func (a *OAuth2) log() *slog.Logger {
+	if a.logger != nil {
+		return a.logger
+	}
+	return slog.Default()
+}
+
+// tokenHost is the token endpoint's host, for logging. The full URL is never logged,
+// since its query string may carry credentials.
+func (a *OAuth2) tokenHost() string {
+	u, err := url.Parse(a.tokenURL)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }
 
 func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
@@ -362,7 +403,7 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.WarnContext(ctx, "failed to close response body", "error", err)
+			a.log().WarnContext(ctx, "remote/auth: failed to close token response body", "error", err)
 		}
 	}()
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -483,4 +484,63 @@ func sortedKeys(v url.Values) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func TestOAuth2_WithOAuth2Logger(t *testing.T) {
+	newLogger := func() (*strings.Builder, *slog.Logger) {
+		var buf strings.Builder
+		return &buf, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+
+	t.Run("successful fetch is logged at debug without the token", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"access_token": "very-secret-token", "expires_in": 3600}`))
+		}))
+		defer ts.Close()
+
+		buf, logger := newLogger()
+		authn := NewOAuth2(ts.URL+"?tenant=query-secret", "id", "client-secret", nil, WithOAuth2Logger(logger))
+		req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+		require.NoError(t, authn.Apply(req))
+
+		out := buf.String()
+		assert.Contains(t, out, `"level":"DEBUG"`)
+		assert.Contains(t, out, "remote/auth: oauth2 token fetched")
+		assert.Contains(t, out, `"server.address":"`+strings.TrimPrefix(ts.URL, "http://")+`"`)
+		assert.NotContains(t, out, "secret", "tokens, credentials and the token URL query must never be logged")
+	})
+
+	t.Run("failed fetch is logged at warn", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer ts.Close()
+
+		buf, logger := newLogger()
+		authn := NewOAuth2(ts.URL, "id", "client-secret", nil, WithOAuth2Logger(logger))
+		req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+		require.Error(t, authn.Apply(req))
+
+		out := buf.String()
+		assert.Contains(t, out, `"level":"WARN"`)
+		assert.Contains(t, out, "remote/auth: oauth2 token fetch failed")
+	})
+
+	t.Run("Build passes the logger to oauth2", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer ts.Close()
+
+		buf, logger := newLogger()
+		authn, err := Build(Config{
+			Type:   TypeOAuth2,
+			OAuth2: &OAuth2Config{TokenURL: ts.URL, ClientID: "id", ClientSecret: "client-secret"},
+		}, WithLogger(logger))
+		require.NoError(t, err)
+
+		req, _ := http.NewRequest(http.MethodGet, "http://local", nil)
+		require.Error(t, authn.Apply(req))
+		assert.Contains(t, buf.String(), "remote/auth: oauth2 token fetch failed")
+	})
 }

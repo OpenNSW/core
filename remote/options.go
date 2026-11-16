@@ -6,6 +6,7 @@ package remote
 import (
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -17,6 +18,16 @@ type Option func(*Client)
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
 		c.httpClient.Timeout = timeout
+	}
+}
+
+// WithLogger sets the logger the client writes to. Without it, or with a nil
+// logger, slog.Default() is used. Requests are logged at Debug and retries at
+// Info; a failed request is returned to the caller rather than logged as an
+// error. The query string, bodies and headers are never logged.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *Client) {
+		c.logger = logger
 	}
 }
 
