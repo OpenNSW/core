@@ -7,8 +7,8 @@ import (
 	"context"
 	"testing"
 
+	nswaudit "github.com/OpenNSW/core/platform/audit"
 	sharedaudit "github.com/OpenNSW/core/shared/audit"
-	nswaudit "github.com/OpenNSW/nsw-srilanka/internal/audit"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

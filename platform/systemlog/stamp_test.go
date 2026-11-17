@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/securitylog"
+	"github.com/OpenNSW/core/platform/securitylog"
 )
 
 func TestStampCategoryDefaultsPlainLines(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 
 	"github.com/OpenNSW/core/trace"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/authn"
+	"github.com/OpenNSW/core/platform/authn"
 )
 
 // Auditor is the interface that services and handlers accept as an optional

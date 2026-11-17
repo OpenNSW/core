@@ -25,8 +25,8 @@ import (
 
 	"github.com/felixge/httpsnoop"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/authn"
-	"github.com/OpenNSW/nsw-srilanka/internal/securitylog"
+	"github.com/OpenNSW/core/platform/authn"
+	"github.com/OpenNSW/core/platform/securitylog"
 )
 
 // Category is the slog attribute value on every request line.
