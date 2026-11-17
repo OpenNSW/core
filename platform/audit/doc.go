@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package audit records security-relevant application events as structured
 // logs with Category. Bootstrap points LogSink at the OTLP handler only, so
 // records are omitted from the process (pod) log.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package systemlog records every inbound HTTP request as a slog line with
 // category=system, except GET /health. The line names who called (caller
 // kind and id), the route, status, and duration. Request and response

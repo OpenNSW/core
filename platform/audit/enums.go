@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 package audit
 
 // EventType, Action, TargetType and ActorType are the string vocabulary written

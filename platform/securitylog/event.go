@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package securitylog records sparse category=security events worth alerting
 // on (authn failures, authz denials, bad callback tokens). Lines name who
 // called, which route, the status, and a short reason. Request and response
