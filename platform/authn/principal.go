@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package authn is this application's boundary onto the shared JWT
 // authentication library, github.com/OpenNSW/core/authn.
 //
