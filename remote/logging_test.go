@@ -163,6 +163,32 @@ func TestClient_FailedRequestWithRetries_DoesNotLeakQueryString(t *testing.T) {
 	assert.Contains(t, retries[0]["error"], serverURL+"/down")
 }
 
+func TestClient_InvalidURL_DoesNotLeakQueryString(t *testing.T) {
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		atomic.AddInt32(&hits, 1)
+	}))
+	defer server.Close()
+
+	for name, path := range map[string]string{
+		"relative": "/bad%zz?token=parse-secret",
+		"absolute": server.URL + "/bad%zz?token=parse-secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			capture, logger := newLogCapture()
+			client := NewClient(server.URL, WithLogger(logger))
+
+			err := client.Request(context.Background(), Request{Method: http.MethodGet, Path: path}, nil)
+			require.Error(t, err)
+
+			assert.Contains(t, err.Error(), `invalid URL escape "%zz"`, "the cause must still be reported, just without the URL")
+			assert.NotContains(t, err.Error(), "secret", "the returned error is logged by the caller, so it must not carry the query string")
+			assert.NotContains(t, capture.raw(), "secret")
+		})
+	}
+	assert.Zero(t, atomic.LoadInt32(&hits), "a request with an invalid URL must not be sent")
+}
+
 func TestRedactURL(t *testing.T) {
 	cause := errors.New("connection refused")
 

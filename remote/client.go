@@ -93,20 +93,16 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 		}
 	}
 
-	finalURL, err := c.resolveURL(fullPath)
+	target, err := c.resolveURL(fullPath)
 	if err != nil {
 		return nil, err
-	}
-	parsedURL, err := url.Parse(finalURL)
-	if err != nil {
-		return nil, fmt.Errorf("remote: failed to create request: %w", err)
 	}
 	// Only the host and path are logged: the query string can carry credentials
 	// or personal data.
 	log := c.logger.With(
 		attrMethod, req.Method,
-		attrServerAddress, parsedURL.Host,
-		attrURLPath, parsedURL.Path,
+		attrServerAddress, target.Host,
+		attrURLPath, target.Path,
 	)
 
 	var data []byte
@@ -137,35 +133,41 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 		headers["Content-Type"] = contentType
 	}
 
-	return c.executeWithRetry(ctx, log, req.Method, finalURL, data, headers, req.Retry)
+	return c.executeWithRetry(ctx, log, req.Method, target.String(), data, headers, req.Retry)
 }
 
 // resolveURL joins a relative path to the base URL, or checks that an absolute
-// one points at the configured service. It runs once per request, not per
-// attempt, since a bad URL is not worth retrying.
-func (c *Client) resolveURL(path string) (string, error) {
-	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+// one points at the configured service, and parses the result once. It runs
+// once per request, not per attempt, since a bad URL is not worth retrying.
+// Parse errors are redacted: a *url.Error's message is the full URL, query
+// string included, and callers log the errors this package returns.
+func (c *Client) resolveURL(path string) (*url.URL, error) {
+	absolute := strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
+
+	raw := path
+	if !absolute {
 		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
-		base := strings.TrimSuffix(c.baseURL, "/")
-		p := strings.TrimPrefix(path, "/")
-		return base + "/" + p, nil
+		raw = strings.TrimSuffix(c.baseURL, "/") + "/" + strings.TrimPrefix(path, "/")
+	}
+
+	target, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("remote: invalid request URL: %w", redactURL(err))
+	}
+	if !absolute {
+		return target, nil
 	}
 
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return "", fmt.Errorf("remote: invalid base URL: %w", err)
-	}
-
-	provided, err := url.Parse(path)
-	if err != nil {
-		return "", fmt.Errorf("remote: invalid absolute URL: %w", err)
+		return nil, fmt.Errorf("remote: invalid base URL: %w", redactURL(err))
 	}
 
 	// Ensure Scheme and Host match to prevent SSRF or credential leakage
-	if base.Scheme != provided.Scheme || base.Host != provided.Host {
-		return "", fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", provided.Host, base.Host)
+	if base.Scheme != target.Scheme || base.Host != target.Host {
+		return nil, fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", target.Host, base.Host)
 	}
-	return path, nil
+	return target, nil
 }
 
 func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
