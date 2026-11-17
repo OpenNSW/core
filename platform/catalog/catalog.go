@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package catalog holds the deployment's global catalog: the single source of
 // truth mapping the stable logical names used across configuration onto one
 // deployment's concrete identifiers — IdP token roles and OAuth2 client ids
