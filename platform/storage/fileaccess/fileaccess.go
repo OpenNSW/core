@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package fileaccess decides who a file token is for, what it allows and how
 // long it lasts.
 //

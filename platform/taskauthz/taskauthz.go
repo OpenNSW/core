@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package taskauthz is the shared vocabulary of task authorization: who the
 // caller is, what the deployment's logical principal names mean, and which roles
 // the caller may act in on a given task.

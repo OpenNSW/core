@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package filetoken seals a grant into an opaque token, and opens such tokens
 // again. A grant names a resource, the holder allowed to use it, and the
 // scopes saying what the holder may do with it. All are opaque strings to

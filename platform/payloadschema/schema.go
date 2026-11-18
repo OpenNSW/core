@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package payloadschema provides nsw-srilanka's payload schema validation
 // extension: a PRE_RESUME check that a task step submission matches the JSON
 // Schema of the form its step template names.

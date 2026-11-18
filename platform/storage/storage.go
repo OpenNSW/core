@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package storage selects the file storage this deployment serves uploads
 // from: either a storage backend of its own (core/storage — local disk or S3)
 // or a proxy onto another service that owns the files.
