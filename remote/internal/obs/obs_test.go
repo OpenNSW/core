@@ -6,6 +6,7 @@ package obs
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"testing"
 
@@ -56,4 +57,38 @@ func TestRedactURL(t *testing.T) {
 	t.Run("non-URL error passes through", func(t *testing.T) {
 		assert.Same(t, cause, RedactURL(cause))
 	})
+}
+
+func TestServerAttrs(t *testing.T) {
+	tests := []struct {
+		url      string
+		wantHost string
+		wantPort any // nil: no server.port attribute
+	}{
+		{"https://api.example.com:8443/v1", "api.example.com", int64(8443)},
+		{"https://api.example.com/v1", "api.example.com", int64(443)},
+		{"http://api.example.com/v1", "api.example.com", int64(80)},
+		{"http://127.0.0.1:9000", "127.0.0.1", int64(9000)},
+		{"http://[::1]:9000", "::1", int64(9000)},
+		{"ftp://files.example.com/x", "files.example.com", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			u, err := url.Parse(tt.url)
+			require.NoError(t, err)
+
+			got := map[string]any{}
+			for _, v := range ServerAttrs(u) {
+				a, ok := v.(slog.Attr)
+				require.True(t, ok)
+				got[a.Key] = a.Value.Any()
+			}
+			assert.Equal(t, tt.wantHost, got[AttrServerAddress])
+			if tt.wantPort == nil {
+				assert.NotContains(t, got, AttrServerPort)
+			} else {
+				assert.Equal(t, tt.wantPort, got[AttrServerPort])
+			}
+		})
+	}
 }

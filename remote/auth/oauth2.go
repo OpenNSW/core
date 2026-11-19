@@ -329,8 +329,7 @@ func (a *OAuth2) getToken(ctx context.Context) (string, error) {
 		// Logged here as well as returned: the error surfaces on whichever request
 		// happened to trigger the fetch, but the failure affects every call to the
 		// service until a fetch succeeds.
-		a.logger.WarnContext(ctx, "remote/auth: oauth2 token fetch failed",
-			obs.AttrServerAddress, a.tokenHost(),
+		a.logger.With(a.tokenServerAttrs()...).WarnContext(ctx, "remote/auth: oauth2 token fetch failed",
 			"error", err,
 		)
 		return "", err
@@ -338,22 +337,22 @@ func (a *OAuth2) getToken(ctx context.Context) (string, error) {
 
 	a.accessToken = token
 	a.expiry = expiry
-	a.logger.DebugContext(ctx, "remote/auth: oauth2 token fetched",
-		obs.AttrServerAddress, a.tokenHost(),
+	a.logger.With(a.tokenServerAttrs()...).DebugContext(ctx, "remote/auth: oauth2 token fetched",
 		"expires_in", time.Until(expiry).Round(time.Second),
 	)
 
 	return a.accessToken, nil
 }
 
-// tokenHost is the token endpoint's host, for logging. The full URL is never logged,
+// tokenServerAttrs are the token endpoint's server.address and server.port, for
+// logging, or none if the token URL does not parse. The full URL is never logged,
 // since its query string may carry credentials.
-func (a *OAuth2) tokenHost() string {
+func (a *OAuth2) tokenServerAttrs() []any {
 	u, err := url.Parse(a.tokenURL)
 	if err != nil {
-		return ""
+		return nil
 	}
-	return u.Host
+	return obs.ServerAttrs(u)
 }
 
 func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {

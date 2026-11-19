@@ -503,7 +503,10 @@ func TestOAuth2_WithOAuth2Logger(t *testing.T) {
 		out := buf.String()
 		assert.Contains(t, out, `"level":"DEBUG"`)
 		assert.Contains(t, out, "remote/auth: oauth2 token fetched")
-		assert.Contains(t, out, `"server.address":"`+strings.TrimPrefix(ts.URL, "http://")+`"`)
+		tokenURL, err := url.Parse(ts.URL)
+		require.NoError(t, err)
+		assert.Contains(t, out, `"server.address":"127.0.0.1"`)
+		assert.Contains(t, out, `"server.port":`+tokenURL.Port())
 		assert.NotContains(t, out, "secret", "tokens, credentials and the token URL query must never be logged")
 	})
 

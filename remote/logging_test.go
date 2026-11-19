@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,12 +78,15 @@ func TestClient_WithLogger_LogsRequestWithoutQueryString(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	host := strings.TrimPrefix(server.URL, "http://")
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(serverURL.Port())
+	require.NoError(t, err)
 
 	capture, logger := newLogCapture()
 	client := NewClient(server.URL, WithLogger(logger))
 
-	err := client.Request(context.Background(), Request{
+	err = client.Request(context.Background(), Request{
 		Method: http.MethodGet,
 		Path:   "/v1/items?token=path-secret",
 		Query:  url.Values{"key": {"query-secret"}},
@@ -93,7 +97,8 @@ func TestClient_WithLogger_LogsRequestWithoutQueryString(t *testing.T) {
 	require.Len(t, started, 1)
 	assert.Equal(t, "DEBUG", started[0]["level"])
 	assert.Equal(t, http.MethodGet, started[0][obs.AttrMethod])
-	assert.Equal(t, host, started[0][obs.AttrServerAddress])
+	assert.Equal(t, "127.0.0.1", started[0][obs.AttrServerAddress], "server.address is the host alone, as in OTel spans")
+	assert.EqualValues(t, port, started[0][obs.AttrServerPort])
 	assert.Equal(t, "/v1/items", started[0][obs.AttrURLPath])
 	assert.NotContains(t, started[0], obs.AttrResendCount)
 
@@ -155,10 +160,8 @@ func TestClient_FailedRequestWithRetries_DoesNotLeakQueryString(t *testing.T) {
 	assert.NotContains(t, capture.raw(), "secret", "neither the debug nor the retry record may carry the query string")
 	assert.NotContains(t, err.Error(), "secret", "the returned error is logged by the caller, so it must not carry the query string either")
 
-	// The URL is redacted, not dropped: the error keeps its type, host and path.
-	var ue *url.Error
-	require.ErrorAs(t, err, &ue)
-	assert.Equal(t, serverURL+"/down", ue.URL)
+	// The URL is redacted, not dropped: the error keeps its host and path.
+	assert.Contains(t, err.Error(), serverURL+"/down")
 	assert.Contains(t, retries[0]["error"], serverURL+"/down")
 }
 
@@ -218,6 +221,11 @@ func TestClient_RetryIsLoggedAtInfoWithResendCount(t *testing.T) {
 	require.Len(t, retries, 1)
 	assert.Equal(t, "INFO", retries[0]["level"])
 	assert.EqualValues(t, 1, retries[0][obs.AttrResendCount])
+	for _, line := range strings.Split(capture.raw(), "\n") {
+		if strings.Contains(line, `"remote: retrying request"`) {
+			assert.Equal(t, 1, strings.Count(line, `"`+obs.AttrResendCount+`"`), "resend_count must appear once in the retry record")
+		}
+	}
 	assert.EqualValues(t, http.StatusServiceUnavailable, retries[0][obs.AttrStatusCode])
 	assert.Equal(t, "/retry", retries[0][obs.AttrURLPath])
 

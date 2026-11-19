@@ -7,7 +7,9 @@ package obs
 
 import (
 	"errors"
+	"log/slog"
 	"net/url"
+	"strconv"
 )
 
 // Log attribute keys. The HTTP ones follow OpenTelemetry semantic conventions, so
@@ -16,6 +18,7 @@ const (
 	AttrService       = "remote.service"
 	AttrMethod        = "http.request.method"
 	AttrServerAddress = "server.address"
+	AttrServerPort    = "server.port"
 	AttrURLPath       = "url.path"
 	AttrStatusCode    = "http.response.status_code"
 	AttrResendCount   = "http.request.resend_count"
@@ -44,4 +47,26 @@ func RedactURL(err error) error {
 		safe = u.String()
 	}
 	return &url.Error{Op: ue.Op, URL: safe, Err: ue.Err}
+}
+
+// ServerAttrs returns u's server.address (the host name or IP, without the port)
+// and server.port, as OpenTelemetry HTTP client spans record them. A URL with no
+// explicit port gets its scheme's default (80 for http, 443 for https); for any
+// other scheme the port is left out. The attributes are slog.Attr values in a
+// []any, ready to pass to slog.Logger.With.
+func ServerAttrs(u *url.URL) []any {
+	attrs := []any{slog.String(AttrServerAddress, u.Hostname())}
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	if n, err := strconv.Atoi(port); err == nil {
+		attrs = append(attrs, slog.Int(AttrServerPort, n))
+	}
+	return attrs
 }
