@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/filetoken"
+	"github.com/OpenNSW/core/platform/storage/filetoken"
 )
 
 func TestParseKeyset(t *testing.T) {

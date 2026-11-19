@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/OpenNSW/core/platform/authn"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/fileaccess"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/filetoken"
+	"github.com/OpenNSW/core/platform/storage/fileaccess"
+	"github.com/OpenNSW/core/platform/storage/filetoken"
 )
 
 const userTTL = time.Hour

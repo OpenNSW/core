@@ -12,7 +12,7 @@ import (
 
 	corestorage "github.com/OpenNSW/core/storage"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/filetoken"
+	"github.com/OpenNSW/core/platform/storage/filetoken"
 )
 
 // TypeProxy is the storage type (storage.type) that serves storage from

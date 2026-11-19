@@ -15,7 +15,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/google/uuid"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/filetoken"
+	"github.com/OpenNSW/core/platform/storage/filetoken"
 )
 
 // rawKey returns a 32-byte key filled with b, so tests can build keysets

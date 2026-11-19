@@ -21,8 +21,8 @@ import (
 	"github.com/OpenNSW/core/storage/drivers"
 
 	"github.com/OpenNSW/core/platform/authn"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/fileaccess"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/filetoken"
+	"github.com/OpenNSW/core/platform/storage/fileaccess"
+	"github.com/OpenNSW/core/platform/storage/filetoken"
 )
 
 // testFileAccess returns real file tokens over testTokenKeyset, on a clock the

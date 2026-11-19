@@ -45,7 +45,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/platform/authn"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/filetoken"
+	"github.com/OpenNSW/core/platform/storage/filetoken"
 )
 
 // Scope is an action a file token allows its holder.

@@ -16,7 +16,7 @@ import (
 	"github.com/OpenNSW/core/storage/drivers"
 
 	"github.com/OpenNSW/core/platform/authn"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/fileaccess"
+	"github.com/OpenNSW/core/platform/storage/fileaccess"
 )
 
 const (

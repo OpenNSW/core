@@ -15,7 +15,7 @@ import (
 	corestorage "github.com/OpenNSW/core/storage"
 
 	"github.com/OpenNSW/core/platform/authn"
-	"github.com/OpenNSW/nsw-srilanka/internal/storage/fileaccess"
+	"github.com/OpenNSW/core/platform/storage/fileaccess"
 )
 
 // FileRefs issues the file references callers hold in place of stored values,
