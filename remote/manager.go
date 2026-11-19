@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/remote/internal/obs"
 )
 
 // TLSSettings configures transport-level client authentication (mTLS) for a
@@ -90,7 +91,7 @@ func (m *Manager) SetServices(services ...ServiceConfig) error {
 		// startup rather than on the first request.
 		if cfg.Auth != nil {
 			authenticator, err := auth.Build(*cfg.Auth,
-				auth.WithLogger(m.logger.With(attrService, cfg.ID)))
+				auth.WithLogger(m.logger.With(obs.AttrService, cfg.ID)))
 			if err != nil {
 				return fmt.Errorf("remote: failed to configure auth for service %q: %w", cfg.ID, err)
 			}
@@ -159,7 +160,7 @@ func (m *Manager) GetClient(id string) (*Client, error) {
 		return nil, fmt.Errorf("remote: service %q not found in registry", id)
 	}
 
-	opts := []Option{WithLogger(m.logger.With(attrService, id))}
+	opts := []Option{WithLogger(m.logger.With(obs.AttrService, id))}
 
 	if cfg.Timeout != "" {
 		d, err := time.ParseDuration(cfg.Timeout)

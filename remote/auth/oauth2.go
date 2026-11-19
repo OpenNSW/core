@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpenNSW/core/remote/internal/obs"
 )
 
 // reservedEndpointParams are set by the client-credentials flow itself. Letting
@@ -329,7 +330,7 @@ func (a *OAuth2) getToken(ctx context.Context) (string, error) {
 		// happened to trigger the fetch, but the failure affects every call to the
 		// service until a fetch succeeds.
 		a.logger.WarnContext(ctx, "remote/auth: oauth2 token fetch failed",
-			"server.address", a.tokenHost(),
+			obs.AttrServerAddress, a.tokenHost(),
 			"error", err,
 		)
 		return "", err
@@ -338,7 +339,7 @@ func (a *OAuth2) getToken(ctx context.Context) (string, error) {
 	a.accessToken = token
 	a.expiry = expiry
 	a.logger.DebugContext(ctx, "remote/auth: oauth2 token fetched",
-		"server.address", a.tokenHost(),
+		obs.AttrServerAddress, a.tokenHost(),
 		"expires_in", time.Until(expiry).Round(time.Second),
 	)
 
@@ -353,23 +354,6 @@ func (a *OAuth2) tokenHost() string {
 		return ""
 	}
 	return u.Host
-}
-
-// redactURL removes the query string and fragment from a transport error's URL.
-// http.Client.Do wraps every failure in *url.Error, whose message carries the full
-// URL; net/http strips only the password, but the query may carry credentials too.
-// The error keeps its type, Op and cause, so errors.As and errors.Is still work.
-func redactURL(err error) error {
-	var ue *url.Error
-	if !errors.As(err, &ue) {
-		return err
-	}
-	safe := ""
-	if u, perr := url.Parse(ue.URL); perr == nil {
-		u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment, u.User = "", false, "", "", nil
-		safe = u.String()
-	}
-	return &url.Error{Op: ue.Op, URL: safe, Err: ue.Err}
 }
 
 func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
@@ -400,7 +384,7 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 	if err != nil {
 		// A malformed token URL fails here with a *url.Error whose message is the
 		// full URL, query string included, so it is redacted like a transport error.
-		return "", time.Time{}, fmt.Errorf("failed to create token request: %w", redactURL(err))
+		return "", time.Time{}, fmt.Errorf("failed to create token request: %w", obs.RedactURL(err))
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -412,7 +396,7 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("token request failed: %w", redactURL(err))
+		return "", time.Time{}, fmt.Errorf("token request failed: %w", obs.RedactURL(err))
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
