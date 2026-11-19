@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package htmltemplate registers htmlgen templates as the "html_template" kind
 // of the core artifact registry.
 package htmltemplate

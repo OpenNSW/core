@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package staticdata exposes large, versioned JSON reference data by id,
 // sourced through the artifact registry instead of being bundled into the SPA
 // build or embedded in this binary: to the frontend through Handler, and to
