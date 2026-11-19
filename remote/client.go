@@ -100,11 +100,9 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 	}
 	// Only the host and path are logged: the query string can carry credentials
 	// or personal data.
-	log := c.logger.With(
-		obs.AttrMethod, req.Method,
-		obs.AttrServerAddress, target.Host,
-		obs.AttrURLPath, target.Path,
-	)
+	log := c.logger.
+		With(obs.AttrMethod, req.Method, obs.AttrURLPath, target.Path).
+		With(obs.ServerAttrs(target)...)
 
 	var data []byte
 	var contentType string
@@ -173,7 +171,7 @@ func (c *Client) resolveURL(path string) (*url.URL, error) {
 
 func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
 	if retry == nil {
-		return c.executeOnce(ctx, log, method, finalURL, body, headers, 0)
+		return c.executeOnce(ctx, log, method, finalURL, body, headers)
 	}
 
 	var lastResp *http.Response
@@ -185,7 +183,13 @@ func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method,
 			return nil, err
 		}
 
-		lastResp, lastErr = c.executeOnce(ctx, log, method, finalURL, body, headers, attempt)
+		// Retries carry http.request.resend_count. The untagged log is kept for
+		// the "retrying request" record, which sets the count itself.
+		attemptLog := log
+		if attempt > 0 {
+			attemptLog = log.With(obs.AttrResendCount, attempt)
+		}
+		lastResp, lastErr = c.executeOnce(ctx, attemptLog, method, finalURL, body, headers)
 
 		shouldRetry := false
 		if lastErr != nil {
@@ -231,13 +235,8 @@ func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method,
 	return lastResp, lastErr
 }
 
-// executeOnce sends one attempt. attempt is 0 for the first try; retries carry
-// it as http.request.resend_count.
-func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, extraHeaders map[string]string, attempt int) (*http.Response, error) {
-	if attempt > 0 {
-		log = log.With(obs.AttrResendCount, attempt)
-	}
-
+// executeOnce sends one attempt, logging to log.
+func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewBuffer(body)
@@ -364,7 +363,7 @@ func (c *Client) mapNetworkError(err error) error {
 	if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
 		return ErrTimeout
 	}
-	return fmt.Errorf("%w: %w", ErrRequestFailed, err)
+	return fmt.Errorf("%w: %v", ErrRequestFailed, err)
 }
 
 func (c *Client) handleErrorResponse(resp *http.Response) error {

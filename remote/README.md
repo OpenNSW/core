@@ -194,7 +194,7 @@ A standalone client takes `remote.WithLogger(logger)`, and an authenticator buil
 | OAuth2 token fetch failed                   | Warn  |
 | Services loaded                             | Info  |
 
-A failed request is returned to the caller rather than logged as an error, so the caller picks the level. Attribute names follow OpenTelemetry semantic conventions — `http.request.method`, `server.address`, `url.path`, `http.response.status_code`, `http.request.resend_count`, `error.type` — so log records line up with traces. The query string, request and response bodies, and headers are never logged.
+A failed request is returned to the caller rather than logged as an error, so the caller picks the level. Attribute names follow OpenTelemetry semantic conventions — `http.request.method`, `server.address`, `server.port`, `url.path`, `http.response.status_code`, `http.request.resend_count`, `error.type` — so log records line up with traces. The query string, request and response bodies, and headers are never logged, except the RFC 6749 `error` and `error_description` fields of a failed OAuth2 token response.
 
 Request logs use the `*Context` slog methods, so a context-aware handler can add the trace and span IDs of the caller's context.
 
