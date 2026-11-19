@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -26,13 +27,13 @@ func TestTokenExtractor_ExtractPrincipalFromHeader(t *testing.T) {
 	validClientToken := newClientToken(t, privateKey)
 
 	tests := []struct {
-		name       string
-		authHeader string
-		want       string
-		wantErr    bool
+		name        string
+		authHeader  string
+		wantSubject string
+		wantErr     bool
 	}{
-		{name: "valid user token", authHeader: "Bearer " + validUserToken, want: testUserID},
-		{name: "valid client token", authHeader: "Bearer " + validClientToken, want: testClientID},
+		{name: "valid user token", authHeader: "Bearer " + validUserToken, wantSubject: testUserID},
+		{name: "valid client token", authHeader: "Bearer " + validClientToken, wantSubject: "FCAU_TO_NSW"},
 		{name: "missing header", authHeader: "", wantErr: true},
 		{name: "invalid token", authHeader: "Bearer invalid.jwt.token", wantErr: true},
 	}
@@ -46,15 +47,9 @@ func TestTokenExtractor_ExtractPrincipalFromHeader(t *testing.T) {
 			if tt.wantErr {
 				return
 			}
-			got := ""
-			if principal != nil && principal.UserPrincipal != nil {
-				got = principal.UserPrincipal.Subject
-			}
-			if principal != nil && principal.ClientPrincipal != nil {
-				got = principal.ClientPrincipal.ClientID
-			}
-			if got != tt.want {
-				t.Fatalf("unexpected principal id: got %q want %q", got, tt.want)
+			if principal.Subject != tt.wantSubject || principal.ClientID != testClientID {
+				t.Fatalf("unexpected principal: got (%q, %q) want (%q, %q)",
+					principal.Subject, principal.ClientID, tt.wantSubject, testClientID)
 			}
 		})
 	}
@@ -84,7 +79,7 @@ func TestTokenExtractor_ExtractPrincipalFromHeader_MissingClaims(t *testing.T) {
 	defer cleanup()
 
 	baseClaims := func() jwt.MapClaims {
-		claims := newBaseClaims(AuthorizationCodeGrant)
+		claims := newBaseClaims()
 		claims["sub"] = testUserID
 		claims["email"] = testEmail
 		claims["phone_number"] = testPhone
@@ -114,18 +109,11 @@ func TestTokenExtractor_ExtractPrincipalFromHeader_MissingClaims(t *testing.T) {
 			errSubstr: "jwt missing client_id claim",
 		},
 		{
-			name: "unsupported grant_type",
-			mutate: func(claims jwt.MapClaims) {
-				claims["grant_type"] = "password"
-			},
-			errSubstr: "unsupported grant type",
-		},
-		{
 			name: "missing sub",
 			mutate: func(claims jwt.MapClaims) {
 				delete(claims, "sub")
 			},
-			errSubstr: "jwt missing sub claim for user principal",
+			errSubstr: "jwt missing sub claim",
 		},
 	}
 
@@ -142,56 +130,57 @@ func TestTokenExtractor_ExtractPrincipalFromHeader_MissingClaims(t *testing.T) {
 	}
 }
 
-func TestUserPrincipalFromClaims(t *testing.T) {
-	claims := &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}}
-	extra := ExtraClaims{"email": testEmail, "ouId": testOUID, "ouHandle": testOUHandle}
+// TestTokenExtractor_IgnoresGrantType locks in that how a token was obtained
+// has no bearing on whether it is accepted or on the Principal it yields:
+// grant_type used to dispatch between user and client principals and reject
+// anything else.
+func TestTokenExtractor_IgnoresGrantType(t *testing.T) {
+	extractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
 
-	principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims, extra, []string{"exporter"})
-	if err != nil {
-		t.Fatalf("userPrincipalFromClaims() error = %v", err)
-	}
-	if principal.Subject != testUserID {
-		t.Fatalf("unexpected principal: %#v", principal)
-	}
-	if len(principal.Roles) != 1 || principal.Roles[0] != "exporter" {
-		t.Fatalf("unexpected roles: %#v", principal.Roles)
-	}
-	if principal.ExtraClaims.String("email") != testEmail || principal.ExtraClaims.String("ouId") != testOUID || principal.ExtraClaims.String("ouHandle") != testOUHandle {
-		t.Fatalf("unexpected extra claims mapping: %#v", principal.ExtraClaims)
-	}
-
-	// sub is the only claim userPrincipalFromClaims itself still requires:
-	// email/ouId/ouHandle moved to the generic extra-claims mechanism (see
-	// TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU) and are no
-	// longer validated here at all.
-	t.Run("missing sub is an error", func(t *testing.T) {
-		if _, err := (&TokenExtractor{}).userPrincipalFromClaims(&tokenClaims{}, nil, nil); err == nil {
-			t.Fatalf("expected error for missing sub claim")
+	for _, grantType := range []any{nil, "authorization_code", "client_credentials", "password", 42} {
+		claims := newBaseClaims()
+		if grantType != nil {
+			claims["grant_type"] = grantType
 		}
-	})
-
-	t.Run("nil extra claims is fine", func(t *testing.T) {
-		claims := &tokenClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID}}
-		principal, err := (&TokenExtractor{}).userPrincipalFromClaims(claims, nil, nil)
+		principal, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
 		if err != nil {
-			t.Fatalf("userPrincipalFromClaims() error = %v", err)
+			t.Fatalf("grant_type %v: expected success, got %v", grantType, err)
 		}
-		if principal.ExtraClaims != nil {
-			t.Fatalf("expected nil extra claims, got %#v", principal.ExtraClaims)
+		if principal.Subject != testUserID || principal.ClientID != testClientID {
+			t.Fatalf("grant_type %v: unexpected principal %#v", grantType, principal)
 		}
-	})
+	}
+}
+
+// TestTokenExtractor_GrantTypeIsAnOrdinaryClaim covers the other half of
+// dropping dispatch: grant_type is no longer reserved, so it passes through to
+// ExtraClaims like any other claim for a consumer that cares.
+func TestTokenExtractor_GrantTypeIsAnOrdinaryClaim(t *testing.T) {
+	extractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
+
+	claims := newBaseClaims()
+	claims["grant_type"] = "client_credentials"
+
+	principal, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if got := principal.ExtraClaims.String("grant_type"); got != "client_credentials" {
+		t.Fatalf("ExtraClaims grant_type = %q, want client_credentials", got)
+	}
 }
 
 // TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU documents a
 // deliberate behavior change: email/ouId/ouHandle used to be hard-required
 // fixed-schema claims. They are now ordinary extra claims, so a token that
-// omits them entirely is accepted unless a consumer opts into requiring them
-// via WithUserClaims(ClaimSpec{Required: ...}).
+// omits them entirely is accepted; requiring them is the application's job.
 func TestTokenExtractor_UserToken_NoLongerRequiresEmailOrOU(t *testing.T) {
 	extractor, privateKey, cleanup := newTokenExtractor(t)
 	defer cleanup()
 
-	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims := newBaseClaims()
 	claims["sub"] = testUserID
 	// Deliberately omit email/phone_number/ouId/ouHandle/roles entirely.
 
@@ -208,14 +197,14 @@ func TestTokenExtractor_AcceptsAnyClientIDForAudience(t *testing.T) {
 	extractor, privateKey, cleanup := newTokenExtractor(t)
 	defer cleanup()
 
-	claims := newBaseClaims(ClientCredentialsGrant)
+	claims := newBaseClaims()
 	claims["client_id"] = "SOME_OTHER_CLIENT"
 
 	principal, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
 	if err != nil {
 		t.Fatalf("expected success for a token issued for this audience, got %v", err)
 	}
-	if principal.ClientPrincipal == nil || principal.ClientPrincipal.ClientID != "SOME_OTHER_CLIENT" {
+	if principal.ClientID != "SOME_OTHER_CLIENT" {
 		t.Fatalf("unexpected principal: %#v", principal)
 	}
 }
@@ -243,7 +232,7 @@ func TestTokenExtractor_JWKSIsCached(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims := newBaseClaims()
 	claims["sub"] = testUserID
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
@@ -311,7 +300,7 @@ func TestTokenExtractor_RefreshesJWKSOnUnknownKid(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	oldClaims := newBaseClaims(AuthorizationCodeGrant)
+	oldClaims := newBaseClaims()
 	oldClaims["sub"] = testUserID
 	oldClaims["email"] = testEmail
 	oldClaims["phone_number"] = testPhone
@@ -326,7 +315,7 @@ func TestTokenExtractor_RefreshesJWKSOnUnknownKid(t *testing.T) {
 		t.Fatalf("failed to sign old token: %v", err)
 	}
 
-	newClaims := newBaseClaims(AuthorizationCodeGrant)
+	newClaims := newBaseClaims()
 	newClaims["sub"] = testUserID
 	newClaims["email"] = testEmail
 	newClaims["phone_number"] = testPhone
@@ -380,7 +369,7 @@ func TestTokenExtractor_UnknownKidAfterRefresh(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims := newBaseClaims()
 	claims["sub"] = testUserID
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
@@ -416,7 +405,7 @@ func TestTokenExtractor_JWKSFetchError(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	claims := newBaseClaims(AuthorizationCodeGrant)
+	claims := newBaseClaims()
 	claims["sub"] = testUserID
 	claims["email"] = testEmail
 	claims["phone_number"] = testPhone
@@ -496,4 +485,94 @@ func TestParseRSAPublicKey_InvalidData(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTokenExtractor_StandardClaims(t *testing.T) {
+	extractor, privateKey, cleanup := newTokenExtractor(t)
+	defer cleanup()
+
+	t.Run("populated and trimmed", func(t *testing.T) {
+		claims := newBaseClaims()
+		claims["email"] = "  " + testEmail + " \n"
+		claims["ouId"] = testOUID
+		claims["ouHandle"] = testOUHandle
+
+		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		if p.Email != testEmail || p.OUID != testOUID || p.OUHandle != testOUHandle {
+			t.Fatalf("unexpected standard claims: %+v", p)
+		}
+	})
+
+	t.Run("optional by default: absent or blank reads as empty", func(t *testing.T) {
+		claims := newBaseClaims()
+		claims["ouId"] = "   "
+
+		p, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+		if err != nil {
+			t.Fatalf("expected success with no standard claims, got %v", err)
+		}
+		if p.Email != "" || p.OUID != "" || p.OUHandle != "" {
+			t.Fatalf("expected empty standard claims, got %+v", p)
+		}
+	})
+
+	t.Run("a non-string value rejects the token", func(t *testing.T) {
+		claims := newBaseClaims()
+		claims["email"] = 42
+
+		if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims)); err == nil {
+			t.Fatal("expected error for a non-string email claim")
+		}
+	})
+}
+
+func TestTokenExtractor_RequiredStandardClaims(t *testing.T) {
+	tests := []struct {
+		name   string
+		config ClaimsConfig
+		claim  string
+	}{
+		{"email", ClaimsConfig{Email: ClaimConfig{Required: true}}, "email"},
+		{"ouId", ClaimsConfig{OUID: ClaimConfig{Required: true}}, "ouId"},
+		{"ouHandle", ClaimsConfig{OUHandle: ClaimConfig{Required: true}}, "ouHandle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extractor, privateKey, cleanup := newTokenExtractorWithOptions(t, WithClaims(tt.config))
+			defer cleanup()
+
+			for _, value := range []any{nil, "", "   "} {
+				claims := newBaseClaims()
+				if value != nil {
+					claims[tt.claim] = value
+				}
+				_, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims))
+				want := fmt.Sprintf("jwt missing or empty required claim %q", tt.claim)
+				if err == nil || err.Error() != want {
+					t.Fatalf("value %#v: expected %q, got %v", value, want, err)
+				}
+			}
+
+			claims := newBaseClaims()
+			claims[tt.claim] = "present"
+			if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + signToken(t, privateKey, claims)); err != nil {
+				t.Fatalf("expected success when %s is present, got %v", tt.claim, err)
+			}
+		})
+	}
+
+	// Required applies to every token: a client-credentials token without an
+	// email is rejected too.
+	t.Run("applies to client tokens", func(t *testing.T) {
+		extractor, privateKey, cleanup := newTokenExtractorWithOptions(t,
+			WithClaims(ClaimsConfig{Email: ClaimConfig{Required: true}}))
+		defer cleanup()
+
+		if _, err := extractor.ExtractPrincipalFromHeader("Bearer " + newClientToken(t, privateKey)); err == nil {
+			t.Fatal("expected a client token without email to be rejected")
+		}
+	})
 }

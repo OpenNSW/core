@@ -7,15 +7,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"maps"
 	"slices"
 	"strings"
 )
 
-// ExtraClaims holds JWT claims outside authn's fixed schema, declared
-// explicitly by a consumer via WithUserClaims (user principals) or
-// WithClientClaims (client principals).
+// ExtraClaims holds every claim in a validated token outside authn's fixed
+// schema (sub, client_id, scope, the roles claim, and the JWT registered
+// claims), which already have dedicated Principal fields or are consumed by
+// validation. Nothing has to be declared: whatever the IdP puts in the token
+// is here. Deciding which of these a request needs is the application's job.
 //
 // Values are the claim's JSON-decoded Go representation (string, []any,
 // float64, bool, map[string]any), with one normalization: every JSON string a
@@ -99,7 +99,7 @@ func decodeJWTPayload(tokenString string) (map[string]any, error) {
 //
 // Everything else counts as present — including an empty array, false, and 0 —
 // so this is a test for "the IdP said nothing here", not a test for
-// usefulness. Required claims apply requiredClaimValue on top.
+// usefulness.
 func claimAbsent(value any) bool {
 	switch v := value.(type) {
 	case nil:
@@ -136,95 +136,35 @@ func normalizeClaimValue(value any) any {
 	}
 }
 
-// requiredClaimValue reports whether value satisfies the shape a REQUIRED claim
-// must have, returning it normalized.
+// extractExtraClaims returns every claim in an already-decoded payload that is
+// not part of the fixed schema, normalized. Absent-valued claims (JSON null, or
+// a blank string) are dropped, so they read the same as claims the token never
+// carried.
 //
-// The shape is deliberately narrow: a non-blank JSON string, or a non-empty
-// array whose every element is a non-blank JSON string. A required declaration
-// is a consumer asserting "my application cannot run without this attribute";
-// a number, boolean, object, empty array or mixed array cannot satisfy that,
-// and accepting one only defers the failure to the code that indexes the claim
-// with String/Strings and silently gets "" or nil.
-func requiredClaimValue(value any) (any, bool) {
-	switch v := value.(type) {
-	case string:
-		s := strings.TrimSpace(v)
-		return s, s != ""
-	case []any:
-		if len(v) == 0 {
-			return nil, false
-		}
-		out := make([]any, len(v))
-		for i, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return nil, false
-			}
-			if s = strings.TrimSpace(s); s == "" {
-				return nil, false
-			}
-			out[i] = s
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
-// extractDeclared pulls the claims named in declared (name -> required) out of
-// an already-decoded payload. Names are matched exactly: JWT claim names are
-// case-sensitive (RFC 7519 §4), unlike the struct-tag binding the fixed schema
-// relies on. Names are walked in sorted order, so a token violating two
-// required claims always fails on the same one.
-func extractDeclared(payload map[string]any, declared map[string]bool) (ExtraClaims, error) {
-	// nil rather than an empty map, so "nothing declared" reads the same way
-	// whether or not a custom roles claim forced the payload decode.
-	if len(declared) == 0 {
-		return nil, nil
-	}
-	extra := make(ExtraClaims, len(declared))
-	for _, name := range slices.Sorted(maps.Keys(declared)) {
-		required := declared[name]
-		value, present := payload[name]
-
-		if !present || claimAbsent(value) {
-			if required {
-				// Claim NAMES only, never values: these errors reach the
-				// middleware's Debug log with request context, and email /
-				// phone_number are exactly the claims people mark required.
-				return nil, fmt.Errorf("jwt missing or empty required claim %q", name)
-			}
+// The fixed-schema exclusion folds case: encoding/json binds struct tags
+// case-insensitively, so a payload key of "Roles" or "SUB" already landed in a
+// fixed field and must not surface a second time under ExtraClaims.
+func extractExtraClaims(payload map[string]any) ExtraClaims {
+	var extra ExtraClaims
+	for name, value := range payload {
+		if fixedSchemaClaims[foldClaimName(name)] || claimAbsent(value) {
 			continue
 		}
-
-		if required {
-			normalized, ok := requiredClaimValue(value)
-			if !ok {
-				return nil, fmt.Errorf("jwt required claim %q must be a non-empty string or a non-empty array of non-empty strings", name)
-			}
-			extra[name] = normalized
-			continue
+		if extra == nil {
+			extra = make(ExtraClaims)
 		}
 		extra[name] = normalizeClaimValue(value)
 	}
-	return extra, nil
+	return extra
 }
 
-// resolveClaims produces the two payload-derived pieces of a principal that
-// depend on consumer configuration — the roles slice and the declared extra
-// claims — sharing a single payload decode between them.
-//
-// When nothing is declared and roles come from the default "roles" claim (every
-// consumer that has not opted in), there is nothing to read that
-// jwt.ParseWithClaims has not already bound, so no second decode happens.
-func (te *TokenExtractor) resolveClaims(tokenString string, claims *tokenClaims, declared map[string]bool) (ExtraClaims, []string, error) {
-	// The "" guard matters: a TokenExtractor built as a struct literal (only
-	// possible in-package) has no rolesClaim and must not read as "custom".
-	custom := te.rolesClaim != "" && te.rolesClaim != defaultRolesClaim
-
-	if len(declared) == 0 && !custom {
-		roles, err := parseRolesClaim(defaultRolesClaim, claims.Roles.value)
-		return nil, roles, err
+// resolveClaims produces the roles slice and the extra claims of a principal.
+// The extra claims need a second decode of the payload, since tokenClaims only
+// binds the fixed schema.
+func resolveClaims(tokenString string, claims *tokenClaims) (ExtraClaims, []string, error) {
+	roles, err := parseRolesClaim(claims.Roles.value)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	payload, err := decodeJWTPayload(tokenString)
@@ -232,21 +172,5 @@ func (te *TokenExtractor) resolveClaims(tokenString string, claims *tokenClaims,
 		return nil, nil, fmt.Errorf("failed to decode token payload for claim extraction: %w", err)
 	}
 
-	rolesName, rolesRaw := defaultRolesClaim, claims.Roles.value
-	if custom {
-		rolesName, rolesRaw = te.rolesClaim, payload[te.rolesClaim]
-		if rolesRaw == nil {
-			slog.Debug("configured roles claim absent from token", "claim", rolesName)
-		}
-	}
-	roles, err := parseRolesClaim(rolesName, rolesRaw)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	extra, err := extractDeclared(payload, declared)
-	if err != nil {
-		return nil, nil, err
-	}
-	return extra, roles, nil
+	return extractExtraClaims(payload), roles, nil
 }

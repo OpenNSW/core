@@ -10,41 +10,6 @@ import (
 	"math/big"
 )
 
-func buildAuthContext(principal *Principal) *AuthContext {
-	if principal == nil {
-		return &AuthContext{}
-	}
-
-	switch principal.Type {
-	case UserPrincipalType:
-		if principal.UserPrincipal == nil {
-			return &AuthContext{}
-		}
-		return &AuthContext{
-			User: &UserContext{
-				IDPUserID:   principal.UserPrincipal.Subject,
-				Roles:       principal.UserPrincipal.Roles,
-				Scopes:      principal.UserPrincipal.Scopes,
-				ExtraClaims: principal.UserPrincipal.ExtraClaims,
-			},
-		}
-	case ClientPrincipalType:
-		if principal.ClientPrincipal == nil {
-			return &AuthContext{}
-		}
-		return &AuthContext{
-			Client: &ClientContext{
-				ClientID:    principal.ClientPrincipal.ClientID,
-				Roles:       principal.ClientPrincipal.Roles,
-				Scopes:      principal.ClientPrincipal.Scopes,
-				ExtraClaims: principal.ClientPrincipal.ExtraClaims,
-			},
-		}
-	default:
-		return &AuthContext{}
-	}
-}
-
 func parseRSAPublicKey(key jwk) (*rsa.PublicKey, error) {
 	if key.Kty != "RSA" {
 		return nil, fmt.Errorf("unsupported jwk key type: %s", key.Kty)
