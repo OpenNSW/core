@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/remote/internal/obs"
 )
 
 // RetryConfig defines the strategy for retrying failed requests.
@@ -100,9 +101,9 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 	// Only the host and path are logged: the query string can carry credentials
 	// or personal data.
 	log := c.logger.With(
-		attrMethod, req.Method,
-		attrServerAddress, target.Host,
-		attrURLPath, target.Path,
+		obs.AttrMethod, req.Method,
+		obs.AttrServerAddress, target.Host,
+		obs.AttrURLPath, target.Path,
 	)
 
 	var data []byte
@@ -152,7 +153,7 @@ func (c *Client) resolveURL(path string) (*url.URL, error) {
 
 	target, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("remote: invalid request URL: %w", redactURL(err))
+		return nil, fmt.Errorf("remote: invalid request URL: %w", obs.RedactURL(err))
 	}
 	if !absolute {
 		return target, nil
@@ -160,7 +161,7 @@ func (c *Client) resolveURL(path string) (*url.URL, error) {
 
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("remote: invalid base URL: %w", redactURL(err))
+		return nil, fmt.Errorf("remote: invalid base URL: %w", obs.RedactURL(err))
 	}
 
 	// Ensure Scheme and Host match to prevent SSRF or credential leakage
@@ -200,11 +201,11 @@ func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method,
 			return lastResp, lastErr
 		}
 
-		retryAttrs := []any{attrResendCount, attempt + 1, "wait", backoff}
+		retryAttrs := []any{obs.AttrResendCount, attempt + 1, "wait", backoff}
 		if lastErr != nil {
 			retryAttrs = append(retryAttrs, "error", lastErr)
 		} else {
-			retryAttrs = append(retryAttrs, attrStatusCode, lastResp.StatusCode)
+			retryAttrs = append(retryAttrs, obs.AttrStatusCode, lastResp.StatusCode)
 		}
 
 		if lastResp != nil {
@@ -234,7 +235,7 @@ func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method,
 // it as http.request.resend_count.
 func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, extraHeaders map[string]string, attempt int) (*http.Response, error) {
 	if attempt > 0 {
-		log = log.With(attrResendCount, attempt)
+		log = log.With(obs.AttrResendCount, attempt)
 	}
 
 	var bodyReader io.Reader
@@ -276,14 +277,14 @@ func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, fina
 		// whether it matters and logs it at the level it chooses.
 		log.DebugContext(ctx, "remote: request failed",
 			"duration", duration,
-			attrErrorType, errorType,
+			obs.AttrErrorType, errorType,
 			"error", mapped,
 		)
 		return nil, mapped
 	}
 
 	log.DebugContext(ctx, "remote: request completed",
-		attrStatusCode, resp.StatusCode,
+		obs.AttrStatusCode, resp.StatusCode,
 		"duration", duration,
 	)
 
@@ -359,28 +360,11 @@ func (c *Client) RawRequest(ctx context.Context, req Request) (*RawResponse, err
 }
 
 func (c *Client) mapNetworkError(err error) error {
-	err = redactURL(err)
+	err = obs.RedactURL(err)
 	if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
 		return ErrTimeout
 	}
 	return fmt.Errorf("%w: %w", ErrRequestFailed, err)
-}
-
-// redactURL removes the query string and fragment from a transport error's URL.
-// http.Client.Do wraps every failure in *url.Error, whose message carries the full
-// URL; net/http strips only the password, but the query may carry credentials too.
-// The error keeps its type, Op and cause, so errors.As and errors.Is still work.
-func redactURL(err error) error {
-	var ue *url.Error
-	if !errors.As(err, &ue) {
-		return err
-	}
-	safe := ""
-	if u, perr := url.Parse(ue.URL); perr == nil {
-		u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment, u.User = "", false, "", "", nil
-		safe = u.String()
-	}
-	return &url.Error{Op: ue.Op, URL: safe, Err: ue.Err}
 }
 
 func (c *Client) handleErrorResponse(resp *http.Response) error {

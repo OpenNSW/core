@@ -7,8 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +18,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/remote/internal/obs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,15 +92,15 @@ func TestClient_WithLogger_LogsRequestWithoutQueryString(t *testing.T) {
 	started := capture.find(t, "remote: request started")
 	require.Len(t, started, 1)
 	assert.Equal(t, "DEBUG", started[0]["level"])
-	assert.Equal(t, http.MethodGet, started[0][attrMethod])
-	assert.Equal(t, host, started[0][attrServerAddress])
-	assert.Equal(t, "/v1/items", started[0][attrURLPath])
-	assert.NotContains(t, started[0], attrResendCount)
+	assert.Equal(t, http.MethodGet, started[0][obs.AttrMethod])
+	assert.Equal(t, host, started[0][obs.AttrServerAddress])
+	assert.Equal(t, "/v1/items", started[0][obs.AttrURLPath])
+	assert.NotContains(t, started[0], obs.AttrResendCount)
 
 	completed := capture.find(t, "remote: request completed")
 	require.Len(t, completed, 1)
 	assert.Equal(t, "DEBUG", completed[0]["level"])
-	assert.EqualValues(t, http.StatusOK, completed[0][attrStatusCode])
+	assert.EqualValues(t, http.StatusOK, completed[0][obs.AttrStatusCode])
 
 	assert.NotContains(t, capture.raw(), "secret", "the query string must never be logged")
 }
@@ -120,7 +119,7 @@ func TestClient_FailedRequestIsLoggedAtDebug(t *testing.T) {
 	failed := capture.find(t, "remote: request failed")
 	require.Len(t, failed, 1)
 	assert.Equal(t, "DEBUG", failed[0]["level"])
-	assert.Equal(t, "_OTHER", failed[0][attrErrorType])
+	assert.Equal(t, "_OTHER", failed[0][obs.AttrErrorType])
 	assert.NotEmpty(t, failed[0]["error"])
 
 	for _, rec := range capture.records(t) {
@@ -189,39 +188,6 @@ func TestClient_InvalidURL_DoesNotLeakQueryString(t *testing.T) {
 	assert.Zero(t, atomic.LoadInt32(&hits), "a request with an invalid URL must not be sent")
 }
 
-func TestRedactURL(t *testing.T) {
-	cause := errors.New("connection refused")
-
-	tests := []struct {
-		name    string
-		url     string
-		wantURL string
-	}{
-		{"query", "https://api.example.com/v1/items?token=secret", "https://api.example.com/v1/items"},
-		{"empty query", "https://api.example.com/v1/items?", "https://api.example.com/v1/items"},
-		{"fragment", "https://api.example.com/v1/items#secret", "https://api.example.com/v1/items"},
-		{"userinfo", "https://user:secret@api.example.com/v1", "https://api.example.com/v1"},
-		{"no query", "https://api.example.com/v1/items", "https://api.example.com/v1/items"},
-		{"unparseable", "https://api.example.com/%zz?token=secret", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := redactURL(fmt.Errorf("wrapped: %w", &url.Error{Op: "Get", URL: tt.url, Err: cause}))
-
-			var ue *url.Error
-			require.ErrorAs(t, err, &ue)
-			assert.Equal(t, "Get", ue.Op)
-			assert.Equal(t, tt.wantURL, ue.URL)
-			assert.ErrorIs(t, err, cause)
-			assert.NotContains(t, err.Error(), "secret")
-		})
-	}
-
-	t.Run("non-URL error passes through", func(t *testing.T) {
-		assert.Same(t, cause, redactURL(cause))
-	})
-}
-
 func TestClient_RetryIsLoggedAtInfoWithResendCount(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,14 +217,14 @@ func TestClient_RetryIsLoggedAtInfoWithResendCount(t *testing.T) {
 	retries := capture.find(t, "remote: retrying request")
 	require.Len(t, retries, 1)
 	assert.Equal(t, "INFO", retries[0]["level"])
-	assert.EqualValues(t, 1, retries[0][attrResendCount])
-	assert.EqualValues(t, http.StatusServiceUnavailable, retries[0][attrStatusCode])
-	assert.Equal(t, "/retry", retries[0][attrURLPath])
+	assert.EqualValues(t, 1, retries[0][obs.AttrResendCount])
+	assert.EqualValues(t, http.StatusServiceUnavailable, retries[0][obs.AttrStatusCode])
+	assert.Equal(t, "/retry", retries[0][obs.AttrURLPath])
 
 	started := capture.find(t, "remote: request started")
 	require.Len(t, started, 2)
-	assert.NotContains(t, started[0], attrResendCount)
-	assert.EqualValues(t, 1, started[1][attrResendCount])
+	assert.NotContains(t, started[0], obs.AttrResendCount)
+	assert.EqualValues(t, 1, started[1][obs.AttrResendCount])
 }
 
 func TestManager_WithManagerLogger_TagsClientLogsWithService(t *testing.T) {
@@ -280,7 +246,7 @@ func TestManager_WithManagerLogger_TagsClientLogsWithService(t *testing.T) {
 
 	completed := capture.find(t, "remote: request completed")
 	require.Len(t, completed, 1)
-	assert.Equal(t, "svc", completed[0][attrService])
+	assert.Equal(t, "svc", completed[0][obs.AttrService])
 }
 
 func TestManager_WithManagerLogger_ReachesAuthenticator(t *testing.T) {
@@ -306,5 +272,5 @@ func TestManager_WithManagerLogger_ReachesAuthenticator(t *testing.T) {
 	failed := capture.find(t, "remote/auth: oauth2 token fetch failed")
 	require.Len(t, failed, 1)
 	assert.Equal(t, "WARN", failed[0]["level"])
-	assert.Equal(t, "secured", failed[0][attrService])
+	assert.Equal(t, "secured", failed[0][obs.AttrService])
 }
