@@ -26,8 +26,8 @@ service, serves files over HTTP, and issues file tokens whose holder is an `auth
 | `audit` | Structured audit events for security-relevant actions |
 | `securitylog` | Security events worth alerting on |
 | `systemlog` | A log line for every inbound HTTP request |
-| `storage` | Serves a deployment's files from a `storage` library backend or a proxy onto another service |
-| `storage/filetoken` | Seals a grant (resource, holder, scopes) into an opaque encrypted token, and opens it |
-| `storage/fileaccess` | Decides who a file token is for, what it allows and how long it lasts |
-| `payloadschema` | Checks step submissions against their JSON Schema |
-| `taskauthz` | The shared vocabulary of task authorization |
+| [`storage`](storage/README.md) | Serves a deployment's files from a `storage` library backend or a proxy onto another service |
+| [`storage/filetoken`](storage/filetoken/README.md) | Seals a grant (resource, holder, scopes) into an opaque encrypted token, and opens it |
+| [`storage/fileaccess`](storage/fileaccess/README.md) | Decides who a file token is for, what it allows and how long it lasts |
+| [`payloadschema`](payloadschema/README.md) | Checks step submissions against their JSON Schema |
+| [`taskauthz`](taskauthz/README.md) | The shared vocabulary of task authorization |
