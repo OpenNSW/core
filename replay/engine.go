@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package replay is a small, data-driven engine for end-to-end tests: it
 // executes an ordered list of steps (defined in a JSON flow file) against a
 // running NSW backend. Each flow is data, so new scenarios (FCAU, NPQS, …) are
