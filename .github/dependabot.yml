@@ -25,6 +25,7 @@ updates:
       - "/temporal"
       - "/telemetry"
       - "/platform"
+      - "/replay"
       - "/staticdata"
     schedule:
       interval: "weekly"
