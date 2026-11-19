@@ -916,6 +916,41 @@ jobs:
       - name: Run Tests (includes build)
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+  # The staticdata/ package is its own Go module, so the root ./... jobs above do
+  # not cover it. Run its quality checks and tests independently.
+  staticdata-module:
+    name: Staticdata Module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: staticdata
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'staticdata/go.mod'
+          cache-dependency-path: staticdata/go.sum
+          cache: true
+
+      - name: Verify go.mod
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.2
+          args: --timeout=5m
+          working-directory: staticdata
+
+      - name: Run Tests (includes build)
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
   # STAGE 3: Parallel security + vuln scans.
   govulncheck:
     name: Vulnerability Scan

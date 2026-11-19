@@ -1,0 +1,6 @@
+github.com/OpenNSW/core v0.0.0-20261110162335-e9a665c1066a h1:XJnMwsFYp5ohPw/bz/VP8INjOesuVfbtFUCg27j8aJo=
+github.com/OpenNSW/core v0.0.0-20261110162335-e9a665c1066a/go.mod h1:sE833paAprDKBLByqtUGno6fuaWpvUe9rLSQFy8TckE=
+github.com/OpenNSW/core/httputil v0.1.0 h1:IEkr9sHOh065+pubjlPShqmW3X2GPB9+wlHoeNDsGiU=
+github.com/OpenNSW/core/httputil v0.1.0/go.mod h1:kZyjhx9ckd54vYxH/R65KW++X2Lrvt1N13ZvhMupk7M=
+github.com/OpenNSW/core/pagination v0.1.0 h1:xLpgHAdgYxzJkXXBtQoTMxMxsjZZ9RNYvJOoQC0oddA=
+github.com/OpenNSW/core/pagination v0.1.0/go.mod h1:UdpPJO/wMu2mv1nCJ1G1X0WEvFso8hh9OpDz2meA/Ts=
