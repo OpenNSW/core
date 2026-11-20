@@ -3,10 +3,9 @@
 
 // Package systemlog records every inbound HTTP request as a slog line with
 // category=system, except GET /health. The line names who called (caller
-// kind and id), the route, status, and duration. Request and response
-// payloads are not logged: forms are JSON Schema–driven (jsonforms), so field-
-// level redaction cannot list every PII key. RemoteAddr is omitted: behind
-// ingress it is the proxy, and a real client IP would be PII in the pod log.
+// kind and id), the client IP, the route, status, and duration. Request and
+// response payloads are not logged: forms are JSON Schema–driven (jsonforms),
+// so field-level redaction cannot list every PII key.
 //
 // Authorization headers are not logged. The callback token in
 // /api/v1/callbacks/{token} is replaced in the path.
@@ -19,6 +18,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -130,6 +130,7 @@ func systemAttrs(
 		"path", path,
 		"callerKind", kind,
 		"callerID", id,
+		"clientIP", clientIP(r),
 		"status", status,
 		"durationMs", durationMs,
 	}
@@ -173,6 +174,7 @@ func emitSecurityDenial(
 		"path", path,
 		"callerKind", kind,
 		"callerID", id,
+		"clientIP", clientIP(r),
 		"status", status,
 		"reason", reason,
 	}
@@ -183,6 +185,26 @@ func emitSecurityDenial(
 		attrs = append(attrs, "error", ann.Err)
 	}
 	securitylog.Event(ctx, base, msg, attrs...)
+}
+
+// clientIP is the address recorded on system and security lines. Prefer the
+// last X-Forwarded-For hop (what a trusted ingress appends; earlier hops are
+// client-controlled), then X-Real-IP, then RemoteAddr's host.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
+			return ip
+		}
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		return xri
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // CaptureRoute records the ServeMux pattern onto the matchedRoute slot that

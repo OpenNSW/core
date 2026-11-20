@@ -3,9 +3,9 @@
 
 // Package securitylog records sparse category=security events worth alerting
 // on (authn failures, authz denials, bad callback tokens). Lines name who
-// called, which route, the status, and a short reason. Request and response
-// payloads are never logged: forms are JSON Schema–driven (jsonforms), so
-// field-level redaction cannot list every PII key.
+// called, the client IP, which route, the status, and a short reason. Request
+// and response payloads are never logged: forms are JSON Schema–driven
+// (jsonforms), so field-level redaction cannot list every PII key.
 //
 // Handlers do not write security lines themselves. systemlog.Middleware puts
 // an Annotation slot on the request context; handlers call Annotate to add
