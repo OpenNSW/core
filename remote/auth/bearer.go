@@ -16,7 +16,7 @@ type Bearer struct {
 }
 
 // build constructs the authenticator.
-func (c BearerConfig) build() (Authenticator, error) {
+func (c BearerConfig) build(buildOptions) (Authenticator, error) {
 	return NewBearer(c.Token), nil
 }
 
