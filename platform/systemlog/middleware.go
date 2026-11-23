@@ -60,8 +60,10 @@ func Middleware(logger *slog.Logger) func(http.Handler) http.Handler {
 			caller := &authn.RequestCaller{}
 			route := &matchedRoute{}
 			ann := &securitylog.Annotation{}
+			extra := &Attrs{}
 			ctx := authn.WithRequestCaller(r.Context(), caller)
 			ctx = securitylog.WithAnnotation(ctx, ann)
+			ctx = WithAttrs(ctx, extra)
 			ctx = withMatchedRoute(ctx, route)
 			r = r.WithContext(ctx)
 
@@ -90,6 +92,7 @@ func Middleware(logger *slog.Logger) func(http.Handler) http.Handler {
 					r, path, pattern, kind, id, status,
 					time.Since(start).Milliseconds(),
 					requestBytes(r.ContentLength, reqBody), int64(resp.n),
+					extra,
 				)...)
 				emitSecurityDenial(r.Context(), logger, r, path, kind, id, status, ann)
 				if panicked != nil {
@@ -124,6 +127,7 @@ func responseStatus(written int, panicked any) int {
 func systemAttrs(
 	r *http.Request, path, pattern, kind, id string,
 	status int, durationMs, reqN, respN int64,
+	extra *Attrs,
 ) []any {
 	attrs := []any{
 		"method", r.Method,
@@ -145,7 +149,7 @@ func systemAttrs(
 	if respN > 0 {
 		attrs = append(attrs, "responseBytes", respN)
 	}
-	return attrs
+	return extra.appendTo(attrs)
 }
 
 // emitSecurityDenial writes one security line for a 401/403, or when a handler

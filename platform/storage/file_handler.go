@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"path"
@@ -19,6 +20,7 @@ import (
 	"github.com/OpenNSW/core/platform/audit"
 	"github.com/OpenNSW/core/platform/authn"
 	"github.com/OpenNSW/core/platform/storage/fileaccess"
+	"github.com/OpenNSW/core/platform/systemlog"
 )
 
 // FileRefs issues the file references callers hold in place of stored values,
@@ -121,9 +123,11 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 		return
 	}
 	var req struct {
-		Filename string `json:"filename"`
-		MimeType string `json:"mime_type"`
-		Size     int64  `json:"size"`
+		Filename      string `json:"filename"`
+		MimeType      string `json:"mime_type"`
+		Size          int64  `json:"size"`
+		TaskID        string `json:"task_id"`
+		ConsignmentID string `json:"consignment_id"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -138,20 +142,22 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 		httputil.Error(w, r, http.StatusBadRequest, "mime_type is required")
 		return
 	}
+	scope := uploadScope{taskID: req.TaskID, consignmentID: req.ConsignmentID}
+	stampUploadScope(r.Context(), scope)
 
 	meta, err := up.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
-		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, "", err)
+		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, "", scope, err)
 		h.writeServiceError(w, r, err, "failed to prepare upload", req.MimeType)
 		return
 	}
 	ref, err := h.refs.Issue(p, meta.Key, fileaccess.UploadScopes(p)...)
 	if err != nil {
-		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, err)
+		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, scope, err)
 		httputil.InternalServerError(w, r, "storage: failed to issue a file reference", err)
 		return
 	}
-	h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, nil)
+	h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, scope, nil)
 	httputil.JSON(w, http.StatusOK, uploadResponse{
 		Key:       ref,
 		Name:      meta.Name,
@@ -161,12 +167,42 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 	})
 }
 
+// uploadScope is optional client context naming the task and consignment the
+// upload belongs to. It is logged on prepare/confirm; it is not authorized.
+type uploadScope struct {
+	taskID, consignmentID string
+}
+
+func stampUploadScope(ctx context.Context, s uploadScope) {
+	systemlog.Set(ctx, "taskId", s.taskID)
+	systemlog.Set(ctx, "consignmentId", s.consignmentID)
+}
+
+func (s uploadScope) appendLog(attrs []any) []any {
+	if s.taskID != "" {
+		attrs = append(attrs, "taskId", s.taskID)
+	}
+	if s.consignmentID != "" {
+		attrs = append(attrs, "consignmentId", s.consignmentID)
+	}
+	return attrs
+}
+
+func (s uploadScope) putMeta(meta map[string]any) {
+	if s.taskID != "" {
+		meta["taskId"] = s.taskID
+	}
+	if s.consignmentID != "" {
+		meta["consignmentId"] = s.consignmentID
+	}
+}
+
 // recordUploadPrepare writes a system slog line and a STORAGE PRESIGN_UPLOAD
 // audit event for an upload prepare. It names mime, size, extension and the
 // opaque storage key — not the filename or the file reference issued to the
 // caller.
 func (h *FileHandler) recordUploadPrepare(
-	ctx context.Context, p *authn.Principal, kind, filename, mimeType string, size int64, storageKey string, err error,
+	ctx context.Context, p *authn.Principal, kind, filename, mimeType string, size int64, storageKey string, scope uploadScope, err error,
 ) {
 	ext := strings.ToLower(path.Ext(filename))
 	attrs := []any{
@@ -183,6 +219,7 @@ func (h *FileHandler) recordUploadPrepare(
 	if storageKey != "" {
 		attrs = append(attrs, "storage_key", storageKey)
 	}
+	attrs = scope.appendLog(attrs)
 	if err != nil {
 		attrs = append(attrs, "error", err)
 		slog.WarnContext(ctx, "storage: upload not prepared", attrs...)
@@ -201,6 +238,7 @@ func (h *FileHandler) recordUploadPrepare(
 	if p != nil && p.ClientID != "" {
 		meta["client_id"] = p.ClientID
 	}
+	scope.putMeta(meta)
 	if err != nil {
 		meta["error"] = err.Error()
 	}
@@ -226,6 +264,20 @@ func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req struct {
+		TaskID        string `json:"task_id"`
+		ConsignmentID string `json:"consignment_id"`
+	}
+	// An empty body is fine: older clients confirm with no context.
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.Error(w, r, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	scope := uploadScope{taskID: req.TaskID, consignmentID: req.ConsignmentID}
+	stampUploadScope(r.Context(), scope)
+
 	value, err := h.refs.Resolve(p, ref, fileaccess.ScopeSubmit)
 	switch {
 	case err == nil:
@@ -244,22 +296,23 @@ func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.svc.DownloadURL(r.Context(), value); err != nil {
-		h.recordUploadConfirm(r.Context(), p, value, err)
+		h.recordUploadConfirm(r.Context(), p, value, scope, err)
 		h.writeServiceError(w, r, err, "failed to confirm upload", "")
 		return
 	}
-	h.recordUploadConfirm(r.Context(), p, value, nil)
+	h.recordUploadConfirm(r.Context(), p, value, scope, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // recordUploadConfirm writes a system slog line and a STORAGE CONFIRM_UPLOAD
 // audit event after the client reports a finished presigned PUT. It names the
 // opaque storage key — not the file reference or filename.
-func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principal, storageKey string, err error) {
+func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principal, storageKey string, scope uploadScope, err error) {
 	attrs := []any{"storage_key", storageKey}
 	if p != nil && p.ClientID != "" {
 		attrs = append(attrs, "client_id", p.ClientID)
 	}
+	attrs = scope.appendLog(attrs)
 	if err != nil {
 		attrs = append(attrs, "error", err)
 		slog.WarnContext(ctx, "storage: upload not confirmed", attrs...)
@@ -271,6 +324,7 @@ func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principa
 	if p != nil && p.ClientID != "" {
 		meta["client_id"] = p.ClientID
 	}
+	scope.putMeta(meta)
 	if err != nil {
 		meta["error"] = err.Error()
 	}

@@ -466,6 +466,17 @@ func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
 
 	logBuf.Reset()
 	cap.last = audit.Event{}
+	rec = upload(h, user("alice"), `{"filename":"scoped.pdf","mime_type":"application/pdf","size":10,"task_id":"task-1","consignment_id":"c-9"}`)
+	assertStatus(t, rec, http.StatusOK)
+	if cap.last.Metadata["taskId"] != "task-1" || cap.last.Metadata["consignmentId"] != "c-9" {
+		t.Fatalf("scoped audit metadata = %v, want taskId and consignmentId", cap.last.Metadata)
+	}
+	if !strings.Contains(logBuf.String(), `"taskId":"task-1"`) || !strings.Contains(logBuf.String(), `"consignmentId":"c-9"`) {
+		t.Errorf("prepare log = %s, want taskId and consignmentId", logBuf.String())
+	}
+
+	logBuf.Reset()
+	cap.last = audit.Event{}
 	assertStatus(t, upload(h, user("alice"), `{"filename":"x.zip","mime_type":"application/zip","size":10}`), http.StatusUnsupportedMediaType)
 	if !cap.last.Failure || cap.last.Action != audit.ActionPresignUpload {
 		t.Fatalf("refused upload audit = %+v, want failed PRESIGN_UPLOAD", cap.last)
@@ -530,19 +541,37 @@ func TestFileHandler_ConfirmUpload(t *testing.T) {
 
 	logBuf.Reset()
 	cap.last = audit.Event{}
-	assertStatus(t, confirm(h, user("alice"), body.Key), http.StatusNoContent)
+	assertStatus(t, confirmWithBody(h, user("alice"), body.Key, `{"task_id":"task-1","consignment_id":"c-9"}`), http.StatusNoContent)
 	if cap.last.EventType != audit.EventStorage || cap.last.Action != audit.ActionConfirmUpload {
 		t.Fatalf("audit = %+v, want STORAGE CONFIRM_UPLOAD", cap.last)
 	}
 	if cap.last.Failure || cap.last.TargetID == "" {
 		t.Fatalf("audit failure=%v targetID=%q, want success with a storage key", cap.last.Failure, cap.last.TargetID)
 	}
+	if cap.last.Metadata["taskId"] != "task-1" || cap.last.Metadata["consignmentId"] != "c-9" {
+		t.Fatalf("confirm audit metadata = %v, want taskId and consignmentId", cap.last.Metadata)
+	}
 	if !strings.Contains(logBuf.String(), `"msg":"storage: upload confirmed"`) {
 		t.Errorf("system log = %s, want storage: upload confirmed", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), `"taskId":"task-1"`) {
+		t.Errorf("confirm log = %s, want taskId", logBuf.String())
 	}
 
 	assertStatus(t, confirm(h, nil, body.Key), http.StatusUnauthorized)
 	assertStatus(t, confirm(h, user("bob"), body.Key), http.StatusForbidden)
+}
+
+// confirmWithBody is confirm with an optional JSON body.
+func confirmWithBody(h *FileHandler, p *authn.Principal, ref, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/"+url.PathEscape(ref)+"/confirm", strings.NewReader(body))
+	if p != nil {
+		req = req.WithContext(authn.ContextWithPrincipal(req.Context(), p))
+	}
+	req.SetPathValue("key", ref)
+	rec := httptest.NewRecorder()
+	h.ConfirmUpload(rec, req)
+	return rec
 }
 
 func TestFileHandler_UploadRejects(t *testing.T) {

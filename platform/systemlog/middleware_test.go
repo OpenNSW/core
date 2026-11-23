@@ -27,6 +27,25 @@ func testLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(StampCategory(slog.NewJSONHandler(buf, nil)))
 }
 
+func TestMiddlewareIncludesHandlerAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/storage", func(w http.ResponseWriter, r *http.Request) {
+		Set(r.Context(), "taskId", "task-1")
+		Set(r.Context(), "consignmentId", "c-9")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage", nil)
+	Middleware(logger)(mux).ServeHTTP(httptest.NewRecorder(), req)
+
+	line := decodeLine(t, buf.Bytes())
+	assertEqual(t, "taskId", line["taskId"], "task-1")
+	assertEqual(t, "consignmentId", line["consignmentId"], "c-9")
+}
+
 func TestMiddlewareLogsCallerWithoutPayload(t *testing.T) {
 	var buf bytes.Buffer
 	logger := testLogger(&buf)
