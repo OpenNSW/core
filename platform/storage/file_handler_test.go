@@ -475,6 +475,76 @@ func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
 	}
 }
 
+// confirm calls h.ConfirmUpload for ref as p (no principal when p is nil).
+func confirm(h *FileHandler, p *authn.Principal, ref string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/"+url.PathEscape(ref)+"/confirm", nil)
+	if p != nil {
+		req = req.WithContext(authn.ContextWithPrincipal(req.Context(), p))
+	}
+	req.SetPathValue("key", ref)
+	rec := httptest.NewRecorder()
+	h.ConfirmUpload(rec, req)
+	return rec
+}
+
+func TestFileHandler_ConfirmUpload(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	stack, err := New(context.Background(), localConfig(t, srv.URL), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack.LocalContent.RegisterRoutes(mux)
+	access, _ := testFileAccess(t)
+	cap := &captureAuditor{}
+
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
+	rec := upload(h, user("alice"), `{"filename":"invoice.pdf","mime_type":"application/pdf","size":10}`)
+	assertStatus(t, rec, http.StatusOK)
+	var body struct {
+		Key       string `json:"key"`
+		UploadURL string `json:"upload_url"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before the PUT, confirm refuses: the object is not in storage yet.
+	logBuf.Reset()
+	cap.last = audit.Event{}
+	assertStatus(t, confirm(h, user("alice"), body.Key), http.StatusNotFound)
+	if !cap.last.Failure || cap.last.Action != audit.ActionConfirmUpload || cap.last.TargetID == "" {
+		t.Fatalf("missing-object audit = %+v, want failed CONFIRM_UPLOAD with a storage key", cap.last)
+	}
+	if !strings.Contains(logBuf.String(), `"msg":"storage: upload not confirmed"`) {
+		t.Errorf("system log = %s, want storage: upload not confirmed", logBuf.String())
+	}
+
+	putFile(t, body.UploadURL, "application/pdf", 10)
+
+	logBuf.Reset()
+	cap.last = audit.Event{}
+	assertStatus(t, confirm(h, user("alice"), body.Key), http.StatusNoContent)
+	if cap.last.EventType != audit.EventStorage || cap.last.Action != audit.ActionConfirmUpload {
+		t.Fatalf("audit = %+v, want STORAGE CONFIRM_UPLOAD", cap.last)
+	}
+	if cap.last.Failure || cap.last.TargetID == "" {
+		t.Fatalf("audit failure=%v targetID=%q, want success with a storage key", cap.last.Failure, cap.last.TargetID)
+	}
+	if !strings.Contains(logBuf.String(), `"msg":"storage: upload confirmed"`) {
+		t.Errorf("system log = %s, want storage: upload confirmed", logBuf.String())
+	}
+
+	assertStatus(t, confirm(h, nil, body.Key), http.StatusUnauthorized)
+	assertStatus(t, confirm(h, user("bob"), body.Key), http.StatusForbidden)
+}
+
 func TestFileHandler_UploadRejects(t *testing.T) {
 	stack, err := New(context.Background(), localConfig(t, "http://localhost:8080"), nil)
 	if err != nil {

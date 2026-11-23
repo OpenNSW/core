@@ -48,7 +48,8 @@ type FileHandler struct {
 	// strictBodies makes an upload request refuse what its contract
 	// otherwise ignores; see WithStrictRequestBodies.
 	strictBodies bool
-	// audit records each upload prepare (PRESIGN_UPLOAD). Nil skips auditing.
+	// audit records each upload prepare (PRESIGN_UPLOAD) and confirm
+	// (CONFIRM_UPLOAD). Nil skips auditing.
 	audit audit.Auditor
 }
 
@@ -76,7 +77,7 @@ func WithStrictRequestBodies() FileHandlerOption {
 }
 
 // WithAuditor records each upload prepare as a STORAGE PRESIGN_UPLOAD audit
-// event. Nil disables auditing.
+// event and each confirm as CONFIRM_UPLOAD. Nil disables auditing.
 func WithAuditor(a audit.Auditor) FileHandlerOption {
 	return func(h *FileHandler) { h.audit = a }
 }
@@ -232,6 +233,76 @@ func (h *FileHandler) recordUploadPrepare(
 	}
 	if h.audit != nil {
 		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionPresignUpload, storageKey, err != nil, meta))
+	}
+}
+
+// ConfirmUpload records that the caller finished the presigned PUT for the
+// file reference in the path. The PUT goes to the storage backend, so this
+// API never sees it; the client calls here afterwards. The reference must be
+// one issued for an upload (submit scope), and the object must already be
+// present in storage.
+func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
+	ref := r.PathValue("key")
+	if ref == "" {
+		httputil.Error(w, r, http.StatusBadRequest, "key is required")
+		return
+	}
+	p, ok := authn.FromContext(r.Context())
+	if !ok {
+		httputil.Error(w, r, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	value, err := h.refs.Resolve(p, ref, fileaccess.ScopeSubmit)
+	switch {
+	case err == nil:
+	case errors.Is(err, fileaccess.ErrInvalid), errors.Is(err, fileaccess.ErrNotYours):
+		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
+		return
+	case errors.Is(err, fileaccess.ErrScope):
+		httputil.Error(w, r, http.StatusForbidden, "this file reference can't be used to confirm an upload")
+		return
+	case errors.Is(err, fileaccess.ErrExpired):
+		httputil.Error(w, r, http.StatusGone, "this file reference has expired; reload to get a new one")
+		return
+	default:
+		httputil.InternalServerError(w, r, "storage: failed to resolve a file reference", err)
+		return
+	}
+
+	if _, err := h.svc.DownloadURL(r.Context(), value); err != nil {
+		h.recordUploadConfirm(r.Context(), p, value, err)
+		h.writeServiceError(w, r, err, "failed to confirm upload", "")
+		return
+	}
+	h.recordUploadConfirm(r.Context(), p, value, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordUploadConfirm writes a system slog line and a STORAGE CONFIRM_UPLOAD
+// audit event after the client reports a finished presigned PUT. It names the
+// opaque storage key — not the file reference or filename.
+func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principal, storageKey string, err error) {
+	attrs := []any{"storage_key", storageKey}
+	if p != nil && p.ClientID != "" {
+		attrs = append(attrs, "client_id", p.ClientID)
+	}
+	if err != nil {
+		attrs = append(attrs, "error", err)
+		slog.WarnContext(ctx, "storage: upload not confirmed", attrs...)
+	} else {
+		slog.InfoContext(ctx, "storage: upload confirmed", attrs...)
+	}
+
+	meta := map[string]any{}
+	if p != nil && p.ClientID != "" {
+		meta["client_id"] = p.ClientID
+	}
+	if err != nil {
+		meta["error"] = err.Error()
+	}
+	if h.audit != nil {
+		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionConfirmUpload, storageKey, err != nil, meta))
 	}
 }
 

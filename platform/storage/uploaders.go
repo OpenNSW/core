@@ -80,7 +80,8 @@ func machineClient(base []string, extra map[string][]string) typePolicy {
 // newMachineUploads returns the Uploader behind the internal upload route:
 // what users may upload (cfg.AllowedUploadTypes) plus the extra types each
 // machine client is granted, by client ID. Prepare success and failure are
-// recorded by FileHandler.serveUpload (system slog and PRESIGN_UPLOAD audit).
+// recorded by FileHandler.serveUpload (system slog and PRESIGN_UPLOAD audit);
+// a finished PUT is recorded by ConfirmUpload (CONFIRM_UPLOAD).
 //
 // It prepares uploads with a core Service of its own over the same driver and
 // without an upload allowlist, because core compares the whole MIME string with
