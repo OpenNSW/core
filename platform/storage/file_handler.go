@@ -282,15 +282,21 @@ func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, fileaccess.ErrInvalid), errors.Is(err, fileaccess.ErrNotYours):
+		// No storage key: the reference did not resolve. Same public answer as
+		// Download so the route says nothing about a value it will not confirm.
+		h.recordUploadConfirm(r.Context(), p, "", scope, err)
 		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
 		return
 	case errors.Is(err, fileaccess.ErrScope):
+		h.recordUploadConfirm(r.Context(), p, "", scope, err)
 		httputil.Error(w, r, http.StatusForbidden, "this file reference can't be used to confirm an upload")
 		return
 	case errors.Is(err, fileaccess.ErrExpired):
+		h.recordUploadConfirm(r.Context(), p, "", scope, err)
 		httputil.Error(w, r, http.StatusGone, "this file reference has expired; reload to get a new one")
 		return
 	default:
+		h.recordUploadConfirm(r.Context(), p, "", scope, err)
 		httputil.InternalServerError(w, r, "storage: failed to resolve a file reference", err)
 		return
 	}
@@ -305,10 +311,14 @@ func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // recordUploadConfirm writes a system slog line and a STORAGE CONFIRM_UPLOAD
-// audit event after the client reports a finished presigned PUT. It names the
-// opaque storage key — not the file reference or filename.
+// audit event after the client reports a finished presigned PUT. storageKey is
+// the opaque object key when the reference resolved; empty when confirm failed
+// before resolve. It never names the file reference or filename.
 func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principal, storageKey string, scope uploadScope, err error) {
-	attrs := []any{"storage_key", storageKey}
+	attrs := []any{}
+	if storageKey != "" {
+		attrs = append(attrs, "storage_key", storageKey)
+	}
 	if p != nil && p.ClientID != "" {
 		attrs = append(attrs, "client_id", p.ClientID)
 	}
