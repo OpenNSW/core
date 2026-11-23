@@ -542,7 +542,19 @@ func TestFileHandler_ConfirmUpload(t *testing.T) {
 	}
 
 	assertStatus(t, confirm(h, nil, body.Key), http.StatusUnauthorized)
+
+	logBuf.Reset()
+	cap.last = audit.Event{}
 	assertStatus(t, confirm(h, user("bob"), body.Key), http.StatusForbidden)
+	if !cap.last.Failure || cap.last.Action != audit.ActionConfirmUpload {
+		t.Fatalf("foreign-ref audit = %+v, want failed CONFIRM_UPLOAD", cap.last)
+	}
+	if cap.last.TargetID != "" {
+		t.Fatalf("foreign-ref TargetID = %q, want empty (reference did not resolve)", cap.last.TargetID)
+	}
+	if !strings.Contains(logBuf.String(), `"msg":"storage: upload not confirmed"`) {
+		t.Errorf("system log = %s, want storage: upload not confirmed", logBuf.String())
+	}
 }
 
 func TestFileHandler_UploadRejects(t *testing.T) {
