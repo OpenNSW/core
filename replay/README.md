@@ -16,6 +16,7 @@ r := replay.New(server.URL, client) // a nil client means http.DefaultClient
 r.Logf = t.Logf
 r.Agency = mockAgency           // needed by callback steps
 r.PaymentGateway = mockGateway  // needed by pay steps
+r.Signaller = mockSignaller     // needed by signal steps
 
 if err := r.Run(ctx, flow); err != nil {
     t.Fatal(err)
@@ -52,11 +53,12 @@ Each step has a `name` and exactly one of:
 
 | Step | Does |
 |---|---|
-| `request` | Sends `method` to `path` as `actor` with an optional `body`, checks `expectStatus` (default 200), and copies response fields into variables with `extract` (dot paths; a number indexes an array, as in `flows.0.workflowId`). For a GET, `retry` (such as `"30s"`) repeats it until the status and every extracted field are there. |
+| `request` | Sends `method` to `path` as `actor` with an optional `body`, checks `expectStatus` (default 200), and copies response fields into variables with `extract` (dot paths; a number indexes an array, as in `flows.0.workflowId`). Optional `extractEquals` requires named variables to match given strings after extract. For a GET, `retry` (such as `"30s"`) repeats it until the status, every extracted field, and `extractEquals` match. |
 | `wait` | Polls the consignment in `consignmentId` until a workflow node whose name contains `node` reaches `state`, and can store its task ID in `into`. Default timeout 45s. |
 | `callback` | Has `Agency` complete the parked external-review task in `taskVar` with `command` and `content`. Default timeout 30s. |
 | `pay` | Has `PaymentGateway` confirm the payment created for the task in `taskVar`, through gateway `method` with `status` (default `paid`). Default timeout 45s. |
 | `upload` | Uploads `content` as `filename` with `mimeType`, as `actor`, the way a portal does, and stores the file's reference in `into` for a form's file field. |
+| `signal` | Has `Signaller` deliver a Temporal `name` (with optional `payload`) to every child of the parent workflow in `fromWorkflowVar`. Default timeout 60s. |
 
 Paths and request bodies can use variables as `{{name}}`. `wait`, `callback` and `pay` take a `timeout` such as
 `"60s"`.
@@ -68,7 +70,7 @@ transport or authentication stub maps it to a real identity. The engine itself k
 
 ## Mocks
 
-`callback` and `pay` steps drive test doubles the caller provides:
+`callback`, `pay` and `signal` steps drive test doubles the caller provides:
 
 ```go
 type Agency interface {
@@ -77,5 +79,9 @@ type Agency interface {
 
 type PaymentGateway interface {
     Pay(ctx context.Context, taskID, method, status string, timeout time.Duration) error
+}
+
+type Signaller interface {
+    BroadcastToChildren(ctx context.Context, parentWorkflowID, name string, payload map[string]any, timeout time.Duration) error
 }
 ```

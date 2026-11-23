@@ -22,6 +22,8 @@
 //     a gateway webhook.
 //   - upload:   upload a file as an actor, as a portal does, and capture its file
 //     reference for a form's file field.
+//   - signal:   deliver a Temporal signal to every child workflow of a parent
+//     flow (e.g. cusdec_assessed after Customs would have assessed a CusDec).
 //
 // Strings in paths and request bodies may reference variables as {{name}}.
 package replay
@@ -52,6 +54,7 @@ const (
 	defaultWaitTimeout     = 45 * time.Second
 	defaultCallbackTimeout = 30 * time.Second
 	defaultPayTimeout      = 45 * time.Second
+	defaultSignalTimeout   = 60 * time.Second
 	waitPollInterval       = 500 * time.Millisecond
 )
 
@@ -61,7 +64,7 @@ type Flow struct {
 	Steps []Step `json:"steps"`
 }
 
-// Step is exactly one of request, wait, callback, pay, or upload.
+// Step is exactly one of request, wait, callback, pay, upload, or signal.
 type Step struct {
 	Name     string    `json:"name"`
 	Request  *Request  `json:"request,omitempty"`
@@ -69,6 +72,7 @@ type Step struct {
 	Callback *Callback `json:"callback,omitempty"`
 	Pay      *Pay      `json:"pay,omitempty"`
 	Upload   *Upload   `json:"upload,omitempty"`
+	Signal   *Signal   `json:"signal,omitempty"`
 }
 
 // Request issues an HTTP call as a given actor.
@@ -79,10 +83,17 @@ type Request struct {
 	Body         any               `json:"body,omitempty"`
 	ExpectStatus int               `json:"expectStatus,omitempty"` // default 200
 	Extract      map[string]string `json:"extract,omitempty"`      // var -> response field path (dot-notation, e.g. "consignment.id"; a number indexes an array, e.g. "flows.0.workflowId")
+	// ExtractEquals, when set, requires each named flow variable (from Extract)
+	// to equal the given string after a successful extract. With Retry on a GET,
+	// a mismatch is retried — used after a needs_more_info loop so the read
+	// waits for PENDING_USER (and its step_id) rather than the review step that
+	// is still ActiveStepID for a moment.
+	ExtractEquals map[string]string `json:"extractEquals,omitempty"`
 	// Retry, for a GET only, re-issues the request until it gets the expected
-	// status and every Extract path is present, or this long elapses (e.g. "30s").
-	// For state that lands a moment after a wait matched: a task's step_id is
-	// set when its step is claimed, just after the node shows IN_PROGRESS.
+	// status, every Extract path is present, and ExtractEquals matches, or this
+	// long elapses (e.g. "30s"). For state that lands a moment after a wait
+	// matched: a task's step_id is set when its step is claimed, just after the
+	// node shows IN_PROGRESS.
 	Retry string `json:"retry,omitempty"`
 }
 
@@ -141,6 +152,27 @@ type Upload struct {
 	Into     string `json:"into"`
 }
 
+// Signal delivers a Temporal signal to every child workflow of a parent flow.
+// Used when a sibling branch (typically Customs) would have emitted
+// cusdec_assessed; the replay stands in for that emit without driving the full
+// CusDec path.
+type Signal struct {
+	// FromWorkflowVar names the flow variable holding the parent workflow ID
+	// (usually the trade-export flow from an admin consignment detail).
+	FromWorkflowVar string         `json:"fromWorkflowVar"`
+	Name            string         `json:"name"`
+	Payload         map[string]any `json:"payload,omitempty"`
+	Timeout         string         `json:"timeout,omitempty"`
+}
+
+// Signaller delivers Temporal signals to child workflows of a parent flow. The
+// in-process harness provides an implementation backed by a Temporal client.
+type Signaller interface {
+	// BroadcastToChildren waits (up to timeout) for parentWorkflowID to have at
+	// least one child workflow, then signals every child with name/payload.
+	BroadcastToChildren(ctx context.Context, parentWorkflowID, name string, payload map[string]any, timeout time.Duration) error
+}
+
 // LoadFlow reads and parses a JSON flow file.
 func LoadFlow(path string) (*Flow, error) {
 	raw, err := os.ReadFile(path)
@@ -165,6 +197,7 @@ type Runner struct {
 	Logf           func(string, ...any)
 	Agency         Agency
 	PaymentGateway PaymentGateway
+	Signaller      Signaller
 }
 
 // New builds a Runner with an empty variable store and a no-op logger.
@@ -196,8 +229,10 @@ func (r *Runner) Run(ctx context.Context, flow *Flow) error {
 			err = r.doPay(ctx, step.Pay)
 		case step.Upload != nil:
 			err = r.doUpload(ctx, step.Upload)
+		case step.Signal != nil:
+			err = r.doSignal(ctx, step.Signal)
 		default:
-			err = fmt.Errorf("step has no request/wait/callback/pay/upload")
+			err = fmt.Errorf("step has no request/wait/callback/pay/upload/signal")
 		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
@@ -285,6 +320,12 @@ func (r *Runner) doRequestOnce(ctx context.Context, req *Request) error {
 				return fmt.Errorf("extract: path %q not present in response", path)
 			}
 			r.Vars[varName] = v
+		}
+		for varName, want := range req.ExtractEquals {
+			got, _ := r.Vars[varName].(string)
+			if got != want {
+				return fmt.Errorf("extractEquals: %s = %q, want %q", varName, got, want)
+			}
 		}
 	}
 	return nil
@@ -411,6 +452,24 @@ func (r *Runner) doUpload(ctx context.Context, u *Upload) error {
 
 	r.Vars[u.Into] = reserved.Key
 	return nil
+}
+
+func (r *Runner) doSignal(ctx context.Context, s *Signal) error {
+	if r.Signaller == nil {
+		return fmt.Errorf("signal step requires a Signaller (none configured)")
+	}
+	if s.Name == "" {
+		return fmt.Errorf("signal: name is required")
+	}
+	timeout, err := parseTimeout(s.Timeout, defaultSignalTimeout)
+	if err != nil {
+		return err
+	}
+	parentID, _ := r.Vars[s.FromWorkflowVar].(string)
+	if parentID == "" {
+		return fmt.Errorf("signal: %q variable not set (capture the parent workflow id via an admin request extract first)", s.FromWorkflowVar)
+	}
+	return r.Signaller.BroadcastToChildren(ctx, parentID, s.Name, r.interpolateMap(s.Payload), timeout)
 }
 
 // send issues req and returns its response body. It fails unless the status is
