@@ -290,7 +290,10 @@ func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 // the opaque object key when the reference resolved; empty when confirm failed
 // before resolve. It never names the file reference or filename.
 func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principal, storageKey string, err error) {
-	attrs := []any{"storage_key", storageKey}
+	attrs := []any{}
+	if storageKey != "" {
+		attrs = append(attrs, "storage_key", storageKey)
+	}
 	if p != nil && p.ClientID != "" {
 		attrs = append(attrs, "client_id", p.ClientID)
 	}
