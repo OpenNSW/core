@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	corestorage "github.com/OpenNSW/core/storage"
 	"github.com/OpenNSW/core/storage/drivers"
 
+	"github.com/OpenNSW/core/platform/audit"
 	"github.com/OpenNSW/core/platform/authn"
 	"github.com/OpenNSW/core/platform/storage/fileaccess"
 	"github.com/OpenNSW/core/platform/storage/filetoken"
@@ -418,6 +420,59 @@ func TestFileHandler_UploadReturnsAReference(t *testing.T) {
 	assertStatus(t, download(h, read, user("alice")), http.StatusNotFound)
 	putFile(t, body["upload_url"].(string), "application/pdf", 10)
 	assertDownloadURL(t, download(h, read, user("alice")))
+}
+
+// captureAuditor records the last audit event.
+type captureAuditor struct{ last audit.Event }
+
+func (c *captureAuditor) Audit(_ context.Context, e audit.Event) { c.last = e }
+
+func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	stack, err := New(context.Background(), localConfig(t, srv.URL), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack.LocalContent.RegisterRoutes(mux)
+	access, _ := testFileAccess(t)
+	cap := &captureAuditor{}
+
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
+	rec := upload(h, user("alice"), `{"filename":"invoice.PDF","mime_type":"application/pdf","size":10}`)
+	assertStatus(t, rec, http.StatusOK)
+
+	if cap.last.EventType != audit.EventStorage || cap.last.Action != audit.ActionPresignUpload {
+		t.Fatalf("audit = %+v, want STORAGE PRESIGN_UPLOAD", cap.last)
+	}
+	if cap.last.Failure || cap.last.TargetID == "" {
+		t.Fatalf("audit failure=%v targetID=%q, want success with a storage key", cap.last.Failure, cap.last.TargetID)
+	}
+	if cap.last.Metadata["kind"] != "user" || cap.last.Metadata["mime_type"] != "application/pdf" || cap.last.Metadata["extension"] != ".pdf" {
+		t.Errorf("metadata = %v, want kind=user mime application/pdf extension .pdf", cap.last.Metadata)
+	}
+	if _, ok := cap.last.Metadata["filename"]; ok {
+		t.Errorf("metadata names the filename: %v", cap.last.Metadata)
+	}
+	if !strings.Contains(logBuf.String(), `"msg":"storage: upload prepared"`) || !strings.Contains(logBuf.String(), `"kind":"user"`) {
+		t.Errorf("system log = %s, want storage: upload prepared with kind=user", logBuf.String())
+	}
+
+	logBuf.Reset()
+	cap.last = audit.Event{}
+	assertStatus(t, upload(h, user("alice"), `{"filename":"x.zip","mime_type":"application/zip","size":10}`), http.StatusUnsupportedMediaType)
+	if !cap.last.Failure || cap.last.Action != audit.ActionPresignUpload {
+		t.Fatalf("refused upload audit = %+v, want failed PRESIGN_UPLOAD", cap.last)
+	}
+	if !strings.Contains(logBuf.String(), `"msg":"storage: upload not prepared"`) {
+		t.Errorf("system log = %s, want storage: upload not prepared", logBuf.String())
+	}
 }
 
 func TestFileHandler_UploadRejects(t *testing.T) {

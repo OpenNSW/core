@@ -7,12 +7,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
+	"strings"
 
 	"github.com/OpenNSW/core/httputil"
 	corestorage "github.com/OpenNSW/core/storage"
 
+	"github.com/OpenNSW/core/platform/audit"
 	"github.com/OpenNSW/core/platform/authn"
 	"github.com/OpenNSW/core/platform/storage/fileaccess"
 )
@@ -45,6 +48,8 @@ type FileHandler struct {
 	// strictBodies makes an upload request refuse what its contract
 	// otherwise ignores; see WithStrictRequestBodies.
 	strictBodies bool
+	// audit records each upload prepare (PRESIGN_UPLOAD). Nil skips auditing.
+	audit audit.Auditor
 }
 
 // FileHandlerOption adjusts a FileHandler.
@@ -68,6 +73,12 @@ func WithMachineUploads(u Uploader) FileHandlerOption {
 // request that can't be read is a 400.
 func WithStrictRequestBodies() FileHandlerOption {
 	return func(h *FileHandler) { h.strictBodies = true }
+}
+
+// WithAuditor records each upload prepare as a STORAGE PRESIGN_UPLOAD audit
+// event. Nil disables auditing.
+func WithAuditor(a audit.Auditor) FileHandlerOption {
+	return func(h *FileHandler) { h.audit = a }
 }
 
 // NewFileHandler creates a FileHandler over svc, resolving references with
@@ -100,7 +111,7 @@ type uploadResponse struct {
 // as the value of a form's file field, so it never expires; a machine
 // client's, such as an agency proxying its officer's upload, opens the file too.
 func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
-	h.serveUpload(w, r, h.uploads)
+	h.serveUpload(w, r, h.uploads, "user")
 }
 
 // InternalUpload is Upload for the files a machine client generates and stores
@@ -108,7 +119,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 // upload. Its reference opens the file as well as being submittable. Which
 // callers reach it is the route's scope: it does not check the kind of principal.
 func (h *FileHandler) InternalUpload(w http.ResponseWriter, r *http.Request) {
-	h.serveUpload(w, r, h.machine)
+	h.serveUpload(w, r, h.machine, "machine")
 }
 
 // decodeUploadRequest reads an upload request into req, within
@@ -130,7 +141,8 @@ func (h *FileHandler) decodeUploadRequest(w http.ResponseWriter, r *http.Request
 }
 
 // serveUpload prepares an upload with up and answers with a reference to it.
-func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Uploader) {
+// kind is "user" or "machine" and is recorded on the prepare log and audit line.
+func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Uploader, kind string) {
 	p, ok := authn.FromContext(r.Context())
 	if !ok {
 		httputil.Error(w, r, http.StatusUnauthorized, "authentication required")
@@ -155,14 +167,17 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 
 	meta, err := up.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
+		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, "", err)
 		h.writeServiceError(w, r, err, "failed to prepare upload", req.MimeType)
 		return
 	}
 	ref, err := h.refs.Issue(p, meta.Key, fileaccess.UploadScopes(p)...)
 	if err != nil {
+		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, err)
 		httputil.InternalServerError(w, r, "storage: failed to issue a file reference", err)
 		return
 	}
+	h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, nil)
 	httputil.JSON(w, http.StatusOK, uploadResponse{
 		Key:       ref,
 		Name:      meta.Name,
@@ -170,6 +185,54 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 		Size:      meta.Size,
 		MimeType:  meta.MimeType,
 	})
+}
+
+// recordUploadPrepare writes a system slog line and a STORAGE PRESIGN_UPLOAD
+// audit event for an upload prepare. It names mime, size, extension and the
+// opaque storage key — not the filename or the file reference issued to the
+// caller.
+func (h *FileHandler) recordUploadPrepare(
+	ctx context.Context, p *authn.Principal, kind, filename, mimeType string, size int64, storageKey string, err error,
+) {
+	ext := strings.ToLower(path.Ext(filename))
+	attrs := []any{
+		"kind", kind,
+		"mime_type", mimeType,
+		"size", size,
+	}
+	if ext != "" {
+		attrs = append(attrs, "extension", ext)
+	}
+	if p != nil && p.ClientID != "" {
+		attrs = append(attrs, "client_id", p.ClientID)
+	}
+	if storageKey != "" {
+		attrs = append(attrs, "storage_key", storageKey)
+	}
+	if err != nil {
+		attrs = append(attrs, "error", err)
+		slog.WarnContext(ctx, "storage: upload not prepared", attrs...)
+	} else {
+		slog.InfoContext(ctx, "storage: upload prepared", attrs...)
+	}
+
+	meta := map[string]any{
+		"kind":      kind,
+		"mime_type": mimeType,
+		"size":      size,
+	}
+	if ext != "" {
+		meta["extension"] = ext
+	}
+	if p != nil && p.ClientID != "" {
+		meta["client_id"] = p.ClientID
+	}
+	if err != nil {
+		meta["error"] = err.Error()
+	}
+	if h.audit != nil {
+		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionPresignUpload, storageKey, err != nil, meta))
+	}
 }
 
 // Download returns a time-limited URL to download the file the reference in
