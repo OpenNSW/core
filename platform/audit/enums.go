@@ -26,6 +26,7 @@ const (
 	ActionUpdate        Action = "UPDATE"
 	ActionDelete        Action = "DELETE"
 	ActionPresignUpload Action = "PRESIGN_UPLOAD"
+	ActionConfirmUpload Action = "CONFIRM_UPLOAD"
 
 	TargetConsignment     TargetType = "CONSIGNMENT"
 	TargetTask            TargetType = "TASK"
