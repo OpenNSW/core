@@ -6,7 +6,7 @@ require (
 	github.com/OpenNSW/core v0.0.0-20261110162335-e9a665c1066a
 	github.com/OpenNSW/core/authn v0.4.0
 	github.com/OpenNSW/core/authz v0.1.0
-	github.com/OpenNSW/core/httputil v0.1.0
+	github.com/OpenNSW/core/httputil v0.2.0
 	github.com/OpenNSW/core/remote v0.9.0
 	github.com/OpenNSW/core/shared v0.4.0
 	github.com/OpenNSW/core/storage v0.5.0

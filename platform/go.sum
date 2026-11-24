@@ -4,8 +4,8 @@ github.com/OpenNSW/core/authn v0.4.0 h1:kZNUGp49aAZ1ui19soMKF2qGVOc2os1PyS6UuRpT
 github.com/OpenNSW/core/authn v0.4.0/go.mod h1:9/yGWkx5t5u0+YBUH4FsaZO6wpq/5WK5tdyOD+yL2Ek=
 github.com/OpenNSW/core/authz v0.1.0 h1:qWM+NObLNEaG6GZ2ZnKYmtkwrtlAmEzIljfpiQw2vbo=
 github.com/OpenNSW/core/authz v0.1.0/go.mod h1:/LbQLPZtCGJ4DICQvLea8XFtSCe2M3xZCO+0SxTYsog=
-github.com/OpenNSW/core/httputil v0.1.0 h1:IEkr9sHOh065+pubjlPShqmW3X2GPB9+wlHoeNDsGiU=
-github.com/OpenNSW/core/httputil v0.1.0/go.mod h1:kZyjhx9ckd54vYxH/R65KW++X2Lrvt1N13ZvhMupk7M=
+github.com/OpenNSW/core/httputil v0.2.0 h1:smrNphOnFYpB6SGw1TKJa4nkSza5ZtniF1ZD6ThlZ10=
+github.com/OpenNSW/core/httputil v0.2.0/go.mod h1:kZyjhx9ckd54vYxH/R65KW++X2Lrvt1N13ZvhMupk7M=
 github.com/OpenNSW/core/remote v0.9.0 h1:vwmzRZTvYqDkHW4hDX641TD6nNvLjykpWe6v5Xe0coU=
 github.com/OpenNSW/core/remote v0.9.0/go.mod h1:ldtY4TRSPVX5L9BGEB7c4cIgpyJSSEVDit7fiTh4Qzs=
 github.com/OpenNSW/core/shared v0.4.0 h1:jk+nuMkp6EVk/mKPwpNZJZyMcbT8wzxhi4leQHlUuKk=
