@@ -5,6 +5,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -48,8 +51,8 @@ type FileHandler struct {
 	// strictBodies makes an upload request refuse what its contract
 	// otherwise ignores; see WithStrictRequestBodies.
 	strictBodies bool
-	// audit records each upload prepare (PRESIGN_UPLOAD) and confirm
-	// (CONFIRM_UPLOAD). Nil skips auditing.
+	// audit records each upload prepare (PRESIGN_UPLOAD) and each download
+	// link issued or refused (READ). Nil skips auditing.
 	audit audit.Auditor
 }
 
@@ -77,7 +80,8 @@ func WithStrictRequestBodies() FileHandlerOption {
 }
 
 // WithAuditor records each upload prepare as a STORAGE PRESIGN_UPLOAD audit
-// event and each confirm as CONFIRM_UPLOAD. Nil disables auditing.
+// event and each download link issued or refused as a STORAGE READ event. Nil
+// disables auditing.
 func WithAuditor(a audit.Auditor) FileHandlerOption {
 	return func(h *FileHandler) { h.audit = a }
 }
@@ -174,11 +178,11 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 	}
 	ref, err := h.refs.Issue(p, meta.Key, fileaccess.UploadScopes(p)...)
 	if err != nil {
-		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, err)
+		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), err)
 		httputil.InternalServerError(w, r, "storage: failed to issue a file reference", err)
 		return
 	}
-	h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, meta.Key, nil)
+	h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), nil)
 	httputil.JSON(w, http.StatusOK, uploadResponse{
 		Key:       ref,
 		Name:      meta.Name,
@@ -188,10 +192,27 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 	})
 }
 
+// recordedKey returns the identifier of a stored file that logs and audit
+// records carry. In proxy mode the stored value is the owning service's file
+// reference, which grants access there, so it is recorded as the hex SHA-256 of
+// the reference; the owning service can record the same hash of the reference
+// it resolves, and the two records of one request then match. Otherwise the
+// value is an opaque storage key and is recorded as it is.
+func (h *FileHandler) recordedKey(value string) string {
+	if value == "" {
+		return ""
+	}
+	if _, proxied := h.svc.(fileDownloader); !proxied {
+		return value
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
 // recordUploadPrepare writes a system slog line and a STORAGE PRESIGN_UPLOAD
-// audit event for an upload prepare. It names mime, size, extension and the
-// opaque storage key — not the filename or the file reference issued to the
-// caller.
+// audit event for an upload prepare. It names mime, size, extension and
+// storageKey (see recordedKey) — not the filename or the file reference issued
+// to the caller.
 func (h *FileHandler) recordUploadPrepare(
 	ctx context.Context, p *authn.Principal, kind, filename, mimeType string, size int64, storageKey string, err error,
 ) {
@@ -236,86 +257,6 @@ func (h *FileHandler) recordUploadPrepare(
 	}
 }
 
-// ConfirmUpload records that the caller finished the presigned PUT for the
-// file reference in the path. The PUT goes to the storage backend, so this
-// API never sees it; the client calls here afterwards. The reference must be
-// one issued for an upload (submit scope), and the object must already be
-// present in storage.
-func (h *FileHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
-	ref := r.PathValue("key")
-	if ref == "" {
-		httputil.Error(w, r, http.StatusBadRequest, "key is required")
-		return
-	}
-	p, ok := authn.FromContext(r.Context())
-	if !ok {
-		httputil.Error(w, r, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	value, err := h.refs.Resolve(p, ref, fileaccess.ScopeSubmit)
-	switch {
-	case err == nil:
-	case errors.Is(err, fileaccess.ErrInvalid), errors.Is(err, fileaccess.ErrNotYours):
-		// No storage key: the reference did not resolve. Same public answer as
-		// Download so the route says nothing about a value it will not confirm.
-		h.recordUploadConfirm(r.Context(), p, "", err)
-		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
-		return
-	case errors.Is(err, fileaccess.ErrScope):
-		h.recordUploadConfirm(r.Context(), p, "", err)
-		httputil.Error(w, r, http.StatusForbidden, "this file reference can't be used to confirm an upload")
-		return
-	case errors.Is(err, fileaccess.ErrExpired):
-		h.recordUploadConfirm(r.Context(), p, "", err)
-		httputil.Error(w, r, http.StatusGone, "this file reference has expired; reload to get a new one")
-		return
-	default:
-		h.recordUploadConfirm(r.Context(), p, "", err)
-		httputil.InternalServerError(w, r, "storage: failed to resolve a file reference", err)
-		return
-	}
-
-	if _, err := h.svc.DownloadURL(r.Context(), value); err != nil {
-		h.recordUploadConfirm(r.Context(), p, value, err)
-		h.writeServiceError(w, r, err, "failed to confirm upload", "")
-		return
-	}
-	h.recordUploadConfirm(r.Context(), p, value, nil)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// recordUploadConfirm writes a system slog line and a STORAGE CONFIRM_UPLOAD
-// audit event after the client reports a finished presigned PUT. storageKey is
-// the opaque object key when the reference resolved; empty when confirm failed
-// before resolve. It never names the file reference or filename.
-func (h *FileHandler) recordUploadConfirm(ctx context.Context, p *authn.Principal, storageKey string, err error) {
-	attrs := []any{}
-	if storageKey != "" {
-		attrs = append(attrs, "storage_key", storageKey)
-	}
-	if p != nil && p.ClientID != "" {
-		attrs = append(attrs, "client_id", p.ClientID)
-	}
-	if err != nil {
-		attrs = append(attrs, "error", err)
-		slog.WarnContext(ctx, "storage: upload not confirmed", attrs...)
-	} else {
-		slog.InfoContext(ctx, "storage: upload confirmed", attrs...)
-	}
-
-	meta := map[string]any{}
-	if p != nil && p.ClientID != "" {
-		meta["client_id"] = p.ClientID
-	}
-	if err != nil {
-		meta["error"] = err.Error()
-	}
-	if h.audit != nil {
-		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionConfirmUpload, storageKey, err != nil, meta))
-	}
-}
-
 // Download returns a time-limited URL to download the file the reference in
 // the path stands for, and when it expires.
 func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
@@ -333,28 +274,89 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 	value, err := h.refs.Resolve(p, ref, fileaccess.ScopeRead)
 	switch {
 	case err == nil:
-	case errors.Is(err, fileaccess.ErrInvalid), errors.Is(err, fileaccess.ErrNotYours):
-		// One answer for both, so the route says nothing about a value it
-		// will not serve. A raw storage key is one: it grants nothing.
+	case errors.Is(err, fileaccess.ErrInvalid):
+		// One answer for ErrInvalid and ErrNotYours, so the route says nothing
+		// about a value it will not serve. A raw storage key is one: it grants
+		// nothing. The audit record still tells them apart.
+		h.recordDownload(r.Context(), p, "", "invalid_reference", err, 0)
+		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
+		return
+	case errors.Is(err, fileaccess.ErrNotYours):
+		h.recordDownload(r.Context(), p, "", "not_yours", err, 0)
 		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
 		return
 	case errors.Is(err, fileaccess.ErrScope):
+		h.recordDownload(r.Context(), p, "", "wrong_scope", err, 0)
 		httputil.Error(w, r, http.StatusForbidden, "this file reference can't be used to open the file; save the form to view it")
 		return
 	case errors.Is(err, fileaccess.ErrExpired):
+		h.recordDownload(r.Context(), p, "", "expired", err, 0)
 		httputil.Error(w, r, http.StatusGone, "this file reference has expired; reload to get a new one")
 		return
 	default:
+		h.recordDownload(r.Context(), p, "", "resolve_failed", err, 0)
 		httputil.InternalServerError(w, r, "storage: failed to resolve a file reference", err)
 		return
 	}
 
+	key := h.recordedKey(value)
 	dl, err := downloadOf(r.Context(), h.svc, value)
 	if err != nil {
+		h.recordDownload(r.Context(), p, key, downloadFailureReason(err), err, 0)
 		h.writeServiceError(w, r, err, "failed to generate access", "")
 		return
 	}
+	h.recordDownload(r.Context(), p, key, "", nil, dl.ExpiresAt)
 	httputil.JSON(w, http.StatusOK, dl)
+}
+
+// downloadFailureReason names why the storage service could not give a link
+// for a reference that did resolve.
+func downloadFailureReason(err error) string {
+	var rejection *RemoteRejection
+	switch {
+	case errors.Is(err, corestorage.ErrNotFound),
+		errors.As(err, &rejection) && rejection.StatusCode == http.StatusNotFound:
+		return "not_found"
+	case errors.Is(err, corestorage.ErrInvalidKey):
+		return "invalid_key"
+	case isUpstreamFailure(err):
+		return "upstream_failed"
+	default:
+		return "failed"
+	}
+}
+
+// recordDownload writes a system slog line and a STORAGE READ audit event for a
+// download link issued (err nil) or refused. storageKey is the recorded key
+// (see recordedKey) and is empty when the reference did not resolve: a refused
+// reference is never recorded. reason names why a link was refused; expiresAt
+// is the issued link's expiry in Unix seconds.
+func (h *FileHandler) recordDownload(
+	ctx context.Context, p *authn.Principal, storageKey, reason string, err error, expiresAt int64,
+) {
+	attrs := []any{}
+	meta := map[string]any{}
+	if storageKey != "" {
+		attrs = append(attrs, "storage_key", storageKey)
+	}
+	if p != nil && p.ClientID != "" {
+		attrs = append(attrs, "client_id", p.ClientID)
+		meta["client_id"] = p.ClientID
+	}
+	if err != nil {
+		attrs = append(attrs, "reason", reason, "error", err)
+		meta["reason"] = reason
+		meta["error"] = err.Error()
+		slog.WarnContext(ctx, "storage: download link refused", attrs...)
+	} else {
+		attrs = append(attrs, "expires_at", expiresAt)
+		meta["expires_at"] = expiresAt
+		slog.InfoContext(ctx, "storage: download link issued", attrs...)
+	}
+	if h.audit != nil {
+		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionRead, storageKey, err != nil, meta))
+	}
 }
 
 // fileDownload is what a download returns: a time-limited URL to the file,

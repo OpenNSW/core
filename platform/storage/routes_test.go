@@ -23,9 +23,8 @@ func TestRoutes(t *testing.T) {
 	routes := map[string]struct {
 		method, path string
 	}{
-		UploadRoute:        {http.MethodPost, "/api/v1/storage"},
-		ConfirmUploadRoute: {http.MethodPost, "/api/v1/storage/{key}/confirm"},
-		DownloadRoute:      {http.MethodGet, "/api/v1/storage/{key}"},
+		UploadRoute:   {http.MethodPost, "/api/v1/storage"},
+		DownloadRoute: {http.MethodGet, "/api/v1/storage/{key}"},
 	}
 
 	mux := http.NewServeMux()
@@ -66,7 +65,6 @@ func TestRoutes(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/storage", UploadRoute},
 		{http.MethodPost, "/api/v1/internal/storage", InternalUploadRoute},
-		{http.MethodPost, path.Join("/api/v1/storage", file, "confirm"), ConfirmUploadRoute},
 		{http.MethodGet, path.Join("/api/v1/storage", file), DownloadRoute},
 		{http.MethodPut, path.Join("/api/v1/storage", file, "content"), "PUT /api/v1/storage/{key}/content"},
 		{http.MethodGet, path.Join("/api/v1/storage", file, "content"), "GET /api/v1/storage/{key}/content"},

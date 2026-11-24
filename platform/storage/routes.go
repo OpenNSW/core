@@ -18,10 +18,6 @@ const (
 
 	// UploadRoute reserves a key and returns the URL to upload the file to.
 	UploadRoute = "POST /api/v1/storage"
-	// ConfirmUploadRoute records that the caller finished the presigned PUT
-	// for the file reference in {key}. The PUT itself goes to the storage
-	// backend (S3 or local content), so the API never sees it.
-	ConfirmUploadRoute = "POST /api/v1/storage/{key}/confirm"
 	// DownloadRoute returns a time-limited URL to download the file from.
 	DownloadRoute = "GET /api/v1/storage/{key}"
 
