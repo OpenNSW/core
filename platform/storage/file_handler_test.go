@@ -458,6 +458,50 @@ func TestFileHandler_UploadRejects(t *testing.T) {
 	})
 }
 
+// Without WithStrictRequestBodies an upload request reads as it always has:
+// unknown fields and trailing data are ignored, and any request that can't be
+// read is a 400. With it, those are refused and a request over the limit is a
+// 413.
+func TestFileHandler_UploadRequestBody(t *testing.T) {
+	stack, err := New(context.Background(), localConfig(t, "http://localhost:8080"), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	access, _ := testFileAccess(t)
+	lenient := NewFileHandler(stack.Service, access)
+	strict := NewFileHandler(stack.Service, access, WithStrictRequestBodies())
+
+	valid := `{"filename":"a.pdf","mime_type":"application/pdf","size":10}`
+	tests := []struct {
+		name                        string
+		body                        string
+		lenientStatus, strictStatus int
+		strictMessage               string
+	}{
+		{"valid", valid, http.StatusOK, http.StatusOK, ""},
+		{"unknown field", `{"filename":"a.pdf","mime_type":"application/pdf","size":10,"key":"k"}`, http.StatusOK, http.StatusBadRequest, `invalid request body: unknown field \"key\"`},
+		{"trailing data", valid + `{}`, http.StatusOK, http.StatusBadRequest, "invalid request body"},
+		{"over the limit", `{"filename":"` + strings.Repeat("a", maxUploadRequestBytes) + `.pdf"}`, http.StatusBadRequest, http.StatusRequestEntityTooLarge, "request body too large"},
+		{"empty", ``, http.StatusBadRequest, http.StatusBadRequest, "invalid request body"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"/lenient", func(t *testing.T) {
+			rec := upload(lenient, user("alice"), tt.body)
+			assertStatus(t, rec, tt.lenientStatus)
+			if tt.lenientStatus == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "invalid request body") {
+				t.Errorf("body %s, want it to say %q", rec.Body.String(), "invalid request body")
+			}
+		})
+		t.Run(tt.name+"/strict", func(t *testing.T) {
+			rec := upload(strict, user("alice"), tt.body)
+			assertStatus(t, rec, tt.strictStatus)
+			if !strings.Contains(rec.Body.String(), tt.strictMessage) {
+				t.Errorf("body %s, want it to say %q", rec.Body.String(), tt.strictMessage)
+			}
+		})
+	}
+}
+
 // In proxy mode the owning service's rejection is relayed, and its failure to
 // accept this service's credentials is a gateway failure.
 func TestFileHandler_UploadThroughProxy(t *testing.T) {

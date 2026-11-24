@@ -5,7 +5,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -43,6 +42,9 @@ type FileHandler struct {
 	// machine prepares the uploads on the internal route. Nil when this
 	// deployment serves none.
 	machine Uploader
+	// strictBodies makes an upload request refuse what its contract
+	// otherwise ignores; see WithStrictRequestBodies.
+	strictBodies bool
 }
 
 // FileHandlerOption adjusts a FileHandler.
@@ -57,6 +59,15 @@ func WithUploads(u Uploader) FileHandlerOption {
 // WithMachineUploads enables InternalUpload, preparing its uploads with u.
 func WithMachineUploads(u Uploader) FileHandlerOption {
 	return func(h *FileHandler) { h.machine = u }
+}
+
+// WithStrictRequestBodies makes the upload routes read their request as
+// httputil.DecodeJSON does by default: a field the request does not declare,
+// or anything after the JSON value, is a 400, and a request over the limit a
+// 413. Without it, unknown fields and trailing data are ignored, and any
+// request that can't be read is a 400.
+func WithStrictRequestBodies() FileHandlerOption {
+	return func(h *FileHandler) { h.strictBodies = true }
 }
 
 // NewFileHandler creates a FileHandler over svc, resolving references with
@@ -100,6 +111,24 @@ func (h *FileHandler) InternalUpload(w http.ResponseWriter, r *http.Request) {
 	h.serveUpload(w, r, h.machine)
 }
 
+// decodeUploadRequest reads an upload request into req, within
+// maxUploadRequestBytes, by the rules WithStrictRequestBodies chooses. On
+// failure it writes the response and returns false.
+func (h *FileHandler) decodeUploadRequest(w http.ResponseWriter, r *http.Request, req any) bool {
+	if h.strictBodies {
+		if err := httputil.DecodeJSON(w, r, maxUploadRequestBytes, req); err != nil {
+			httputil.WriteDecodeError(w, r, err)
+			return false
+		}
+		return true
+	}
+	if err := httputil.DecodeJSON(w, r, maxUploadRequestBytes, req, httputil.AllowUnknownFields(), httputil.AllowTrailingData()); err != nil {
+		httputil.Error(w, r, http.StatusBadRequest, httputil.MsgInvalidBody)
+		return false
+	}
+	return true
+}
+
 // serveUpload prepares an upload with up and answers with a reference to it.
 func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Uploader) {
 	p, ok := authn.FromContext(r.Context())
@@ -112,9 +141,7 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 		MimeType string `json:"mime_type"`
 		Size     int64  `json:"size"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.Error(w, r, http.StatusBadRequest, "invalid request body")
+	if !h.decodeUploadRequest(w, r, &req) {
 		return
 	}
 	if req.Filename == "" {

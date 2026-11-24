@@ -59,6 +59,11 @@ middleware attached.
 A user's upload token can only be submitted as a form's file field, so it never expires. A machine client's token can
 also open the file.
 
+An upload request is at most 1 MiB. By default it reads as it always has: a field it does not declare and anything
+after the JSON value are ignored, and a request that can't be read is a 400. `WithStrictRequestBodies()` makes it read
+as `httputil.DecodeJSON` does by default: those are a 400 that names an unknown field, and a request over the limit is
+a 413.
+
 ## Configuration
 
 `Config` inlines the storage library's settings (`type`, `local`, `s3`) and adds:
