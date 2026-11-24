@@ -3,9 +3,9 @@ module github.com/OpenNSW/core/temporal
 go 1.26.0
 
 require (
-	github.com/OpenNSW/core/shared v0.3.0
-	go.temporal.io/api v1.64.1
-	go.temporal.io/sdk v1.50.0
+	github.com/OpenNSW/core/shared v0.4.0
+	go.temporal.io/api v1.64.3
+	go.temporal.io/sdk v1.51.0
 	go.yaml.in/yaml/v3 v3.0.6
 	google.golang.org/grpc v1.85.0
 )
@@ -23,9 +23,9 @@ require (
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
