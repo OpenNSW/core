@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/OpenNSW/core/shared/validation"
+	"go.temporal.io/sdk/client"
 )
 
 // Config holds configuration required to connect to Temporal.
@@ -30,6 +31,34 @@ type Config struct {
 	// send to the Temporal server, and refuses any payload not encrypted with its
 	// key. When it is nil, payloads are stored as plain JSON.
 	Encryption *EncryptionConfig `yaml:"encryption"`
+}
+
+// configBlock is an optional block of Config, such as tls or encryption. Each
+// block checks its own fields and sets the client options it is responsible
+// for. A new block, such as an API key, is added by implementing configBlock
+// and listing it in Config.blocks; Validate and NewClient pick it up from there.
+type configBlock interface {
+	// Validate checks the block's fields. It reads no files and makes no
+	// connections.
+	Validate() error
+
+	// applyTo sets the block's client options. It may read files, and it repeats
+	// the checks Validate makes, since NewClient can be given a Config that was
+	// never validated.
+	applyTo(opts *client.Options) error
+}
+
+// blocks returns the optional blocks that are set, in the order NewClient
+// applies them.
+func (c Config) blocks() []configBlock {
+	var set []configBlock
+	if c.TLS != nil {
+		set = append(set, c.TLS)
+	}
+	if c.Encryption != nil {
+		set = append(set, c.Encryption)
+	}
+	return set
 }
 
 // TLSConfig configures TLS to the Temporal server, and mutual TLS when the
@@ -60,13 +89,8 @@ func (c Config) Validate() error {
 	if c.Namespace == "" {
 		return fmt.Errorf("temporal namespace is required")
 	}
-	if c.TLS != nil {
-		if err := c.TLS.Validate(); err != nil {
-			return err
-		}
-	}
-	if c.Encryption != nil {
-		if err := c.Encryption.Validate(); err != nil {
+	for _, block := range c.blocks() {
+		if err := block.Validate(); err != nil {
 			return err
 		}
 	}

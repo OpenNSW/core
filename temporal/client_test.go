@@ -118,6 +118,29 @@ func TestOptionsFromConfigEncryption(t *testing.T) {
 	}
 }
 
+// With several blocks set, each one sets its own options: none stops the next
+// from being applied or undoes what an earlier one set.
+func TestOptionsFromConfigAppliesEveryBlock(t *testing.T) {
+	ca := newTestCA(t)
+	enc := testEncryptionConfig(t, "k1")
+	opts, err := optionsFromConfig(Config{
+		Host:       "temporal.example",
+		Port:       7233,
+		Namespace:  "default",
+		TLS:        &TLSConfig{CAFile: ca.file},
+		Encryption: &enc,
+	})
+	if err != nil {
+		t.Fatalf("optionsFromConfig() error = %v", err)
+	}
+	if opts.ConnectionOptions.TLS == nil {
+		t.Fatalf("ConnectionOptions.TLS not set with tls and encryption blocks")
+	}
+	if opts.DataConverter == nil || opts.FailureConverter == nil {
+		t.Fatalf("converters not set with tls and encryption blocks")
+	}
+}
+
 // serverStub answers the capabilities call the Temporal SDK makes when it
 // dials, and records the client certificate that call came with.
 type serverStub struct {

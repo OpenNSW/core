@@ -32,20 +32,10 @@ func optionsFromConfig(cfg Config) (client.Options, error) {
 		Namespace: cfg.Namespace,
 		Logger:    temporallog.NewStructuredLogger(slog.Default()),
 	}
-	if cfg.TLS != nil {
-		tlsConfig, err := clientTLSConfig(*cfg.TLS)
-		if err != nil {
+	for _, block := range cfg.blocks() {
+		if err := block.applyTo(&opts); err != nil {
 			return client.Options{}, err
 		}
-		opts.ConnectionOptions.TLS = tlsConfig
-	}
-	if cfg.Encryption != nil {
-		dataConverter, failureConverter, err := encryptingConverters(*cfg.Encryption)
-		if err != nil {
-			return client.Options{}, err
-		}
-		opts.DataConverter = dataConverter
-		opts.FailureConverter = failureConverter
 	}
 	return opts, nil
 }

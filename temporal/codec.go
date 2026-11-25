@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	sdktemporal "go.temporal.io/sdk/temporal"
 	"google.golang.org/protobuf/proto"
@@ -20,6 +21,18 @@ const (
 	encodingEncrypted = "binary/encrypted"
 	metadataKeyID     = "encryption-key-id"
 )
+
+// applyTo encrypts the payloads and failures the client and its workers send.
+// Workers created from the client inherit both converters.
+func (c EncryptionConfig) applyTo(opts *client.Options) error {
+	dataConverter, failureConverter, err := encryptingConverters(c)
+	if err != nil {
+		return err
+	}
+	opts.DataConverter = dataConverter
+	opts.FailureConverter = failureConverter
+	return nil
+}
 
 // encryptingConverters returns a data converter that encrypts every payload
 // with the configured key, and a failure converter that moves failure messages

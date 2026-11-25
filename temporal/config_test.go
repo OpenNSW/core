@@ -135,6 +135,20 @@ func TestConfigValidateEncryption(t *testing.T) {
 	}
 }
 
+// A valid block doesn't end validation: a later block is still checked.
+func TestConfigValidateChecksEveryBlock(t *testing.T) {
+	cfg := Config{
+		Host:       "localhost",
+		Port:       7233,
+		Namespace:  "default",
+		TLS:        &TLSConfig{},
+		Encryption: &EncryptionConfig{KeyID: "k1"},
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "temporal encryption") {
+		t.Fatalf("Validate() error = %v, want the encryption block's error", err)
+	}
+}
+
 func TestConfigEncryptionFromYAML(t *testing.T) {
 	const doc = `
 host: localhost
