@@ -156,6 +156,34 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: 'p@ss:w/rd#?'
+          POSTGRES_DB: database_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: 'p@ss:w/rd#?'
+          MYSQL_DATABASE: database_test
+          MYSQL_USER: test
+          MYSQL_PASSWORD: 'p@ss:w/rd#?'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h127.0.0.1 -uroot -p'p@ss:w/rd#?' --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: database
@@ -182,6 +210,17 @@ jobs:
           working-directory: database
 
       - name: Run Tests (includes build)
+        env:
+          DATABASE_TEST_POSTGRES_HOST: 127.0.0.1
+          DATABASE_TEST_POSTGRES_PORT: 5432
+          DATABASE_TEST_POSTGRES_USER: postgres
+          DATABASE_TEST_POSTGRES_PASSWORD: 'p@ss:w/rd#?'
+          DATABASE_TEST_POSTGRES_NAME: database_test
+          DATABASE_TEST_MYSQL_HOST: 127.0.0.1
+          DATABASE_TEST_MYSQL_PORT: 3306
+          DATABASE_TEST_MYSQL_USER: test
+          DATABASE_TEST_MYSQL_PASSWORD: 'p@ss:w/rd#?'
+          DATABASE_TEST_MYSQL_NAME: database_test
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
   # The authz/ package is its own Go module, so the root ./... jobs above do not
