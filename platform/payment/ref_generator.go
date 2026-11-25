@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package payment adapts core/payment to the refid registry and the task engine.
 //
 // It issues the references payers pay against, from the refid formats in the

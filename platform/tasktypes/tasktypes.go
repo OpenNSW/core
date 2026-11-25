@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package tasktypes holds the task types any single window can use: the ones a
 // template names in a step's type and that need nothing specific to one
 // deployment. Each has a TaskType constant and a constructor, and the

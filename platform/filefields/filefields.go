@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Lanka Software Foundation
+
 // Package filefields reads which values in a task's data are stored files, as
 // the task's render config declares them, and rewrites those values.
 //
