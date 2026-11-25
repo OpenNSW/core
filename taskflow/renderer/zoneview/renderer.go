@@ -77,7 +77,7 @@ func (r *TaskRenderer) Render(ctx context.Context, configRaw json.RawMessage, fa
 			ID:      slot,
 			Title:   sec.Title,
 			Type:    secType,
-			Handles: filterLegalHandles(cfg.Sections[slot].Handles, legal),
+			Handles: filterLegalHandles(cfg.Sections[slot].Handles, legal, facts.Commands),
 			Payload: payload,
 		})
 	}
@@ -152,14 +152,20 @@ func legalCommands(actions []Action) map[string]struct{} {
 }
 
 // filterLegalHandles keeps only those claims whose command is legal in the
-// current state. State gating cascades through to per-zone handles.
-func filterLegalHandles(claims []HandleClaim, legal map[string]struct{}) []HandleClaim {
+// current state and, when allowed is non-nil, that the caller may issue
+// (allowed[command] is true). State gating cascades through to per-zone
+// handles; a nil allowed means the caller resolved no commands and filters
+// nothing.
+func filterLegalHandles(claims []HandleClaim, legal map[string]struct{}, allowed map[string]bool) []HandleClaim {
 	if len(claims) == 0 {
 		return nil
 	}
 	out := make([]HandleClaim, 0, len(claims))
 	for _, h := range claims {
 		if _, ok := legal[h.Command]; !ok {
+			continue
+		}
+		if allowed != nil && !allowed[h.Command] {
 			continue
 		}
 		out = append(out, h)
