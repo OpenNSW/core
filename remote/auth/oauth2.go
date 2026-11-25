@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpenNSW/core/remote/internal/obs"
 )
 
 // reservedEndpointParams are set by the client-credentials flow itself. Letting
@@ -174,14 +176,15 @@ type OAuth2Config struct {
 }
 
 // build validates the settings and constructs the authenticator.
-func (c OAuth2Config) build() (Authenticator, error) {
+func (c OAuth2Config) build(opts buildOptions) (Authenticator, error) {
 	// Validated here, not just at token-request time, so a bad configuration fails when
 	// services are loaded rather than on the first outbound call.
 	if err := c.EndpointParams.validate(); err != nil {
 		return nil, fmt.Errorf("oauth2: %w", err)
 	}
 	auth := NewOAuth2(c.TokenURL, c.ClientID, c.ClientSecret, c.Scopes,
-		WithEndpointParams(url.Values(c.EndpointParams)))
+		WithEndpointParams(url.Values(c.EndpointParams)),
+		WithOAuth2Logger(opts.logger))
 	auth.SetInsecureSkipTLSVerify(c.InsecureSkipTLSVerify)
 	return auth, nil
 }
@@ -193,6 +196,7 @@ type OAuth2 struct {
 	scopes                []string
 	endpointParams        url.Values
 	insecureSkipTLSVerify bool
+	logger                *slog.Logger
 
 	// Internal client for fetching tokens
 	httpClient *http.Client
@@ -215,6 +219,16 @@ func WithEndpointParams(params url.Values) OAuth2Option {
 	}
 }
 
+// WithOAuth2Logger sets the logger token fetches are reported to. A nil logger
+// leaves the default, slog.Default().
+func WithOAuth2Logger(logger *slog.Logger) OAuth2Option {
+	return func(a *OAuth2) {
+		if logger != nil {
+			a.logger = logger
+		}
+	}
+}
+
 // NewOAuth2 builds an OAuth2 client-credentials authenticator from
 // already-resolved values.
 func NewOAuth2(tokenURL, clientID, clientSecret string, scopes []string, opts ...OAuth2Option) *OAuth2 {
@@ -223,6 +237,7 @@ func NewOAuth2(tokenURL, clientID, clientSecret string, scopes []string, opts ..
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		scopes:       scopes,
+		logger:       slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -311,13 +326,33 @@ func (a *OAuth2) getToken(ctx context.Context) (string, error) {
 	// Fetch new token
 	token, expiry, err := a.refreshToken(ctx)
 	if err != nil {
+		// Logged here as well as returned: the error surfaces on whichever request
+		// happened to trigger the fetch, but the failure affects every call to the
+		// service until a fetch succeeds.
+		a.logger.With(a.tokenServerAttrs()...).WarnContext(ctx, "remote/auth: oauth2 token fetch failed",
+			"error", err,
+		)
 		return "", err
 	}
 
 	a.accessToken = token
 	a.expiry = expiry
+	a.logger.With(a.tokenServerAttrs()...).DebugContext(ctx, "remote/auth: oauth2 token fetched",
+		"expires_in", time.Until(expiry).Round(time.Second),
+	)
 
 	return a.accessToken, nil
+}
+
+// tokenServerAttrs are the token endpoint's server.address and server.port, for
+// logging, or none if the token URL does not parse. The full URL is never logged,
+// since its query string may carry credentials.
+func (a *OAuth2) tokenServerAttrs() []any {
+	u, err := url.Parse(a.tokenURL)
+	if err != nil {
+		return nil
+	}
+	return obs.ServerAttrs(u)
 }
 
 func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
@@ -346,7 +381,9 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to create token request: %w", err)
+		// A malformed token URL fails here with a *url.Error whose message is the
+		// full URL, query string included, so it is redacted like a transport error.
+		return "", time.Time{}, fmt.Errorf("failed to create token request: %w", obs.RedactURL(err))
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -358,11 +395,11 @@ func (a *OAuth2) refreshToken(ctx context.Context) (string, time.Time, error) {
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("token request failed: %w", err)
+		return "", time.Time{}, fmt.Errorf("token request failed: %w", obs.RedactURL(err))
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.WarnContext(ctx, "failed to close response body", "error", err)
+			a.logger.WarnContext(ctx, "remote/auth: failed to close token response body", "error", err)
 		}
 	}()
 

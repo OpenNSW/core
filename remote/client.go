@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/remote/auth"
+	"github.com/OpenNSW/core/remote/internal/obs"
 )
 
 // RetryConfig defines the strategy for retrying failed requests.
@@ -80,7 +82,7 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	return c
 }
 
-// execute builds the full path (query string included) and the body/
+// execute resolves the request URL (query string included) and the body/
 // Content-Type pair from req.Body, then sends the request with retries.
 func (c *Client) execute(ctx context.Context, req Request) (*http.Response, error) {
 	fullPath := req.Path
@@ -91,6 +93,16 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 			fullPath += "?" + req.Query.Encode()
 		}
 	}
+
+	target, err := c.resolveURL(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	// Only the host and path are logged: the query string can carry credentials
+	// or personal data.
+	log := c.logger.
+		With(obs.AttrMethod, req.Method, obs.AttrURLPath, target.Path).
+		With(obs.ServerAttrs(target)...)
 
 	var data []byte
 	var contentType string
@@ -120,12 +132,46 @@ func (c *Client) execute(ctx context.Context, req Request) (*http.Response, erro
 		headers["Content-Type"] = contentType
 	}
 
-	return c.executeWithRetry(ctx, req.Method, fullPath, data, headers, req.Retry)
+	return c.executeWithRetry(ctx, log, req.Method, target.String(), data, headers, req.Retry)
 }
 
-func (c *Client) executeWithRetry(ctx context.Context, method, path string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
+// resolveURL joins a relative path to the base URL, or checks that an absolute
+// one points at the configured service, and parses the result once. It runs
+// once per request, not per attempt, since a bad URL is not worth retrying.
+// Parse errors are redacted: a *url.Error's message is the full URL, query
+// string included, and callers log the errors this package returns.
+func (c *Client) resolveURL(path string) (*url.URL, error) {
+	absolute := strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
+
+	raw := path
+	if !absolute {
+		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
+		raw = strings.TrimSuffix(c.baseURL, "/") + "/" + strings.TrimPrefix(path, "/")
+	}
+
+	target, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("remote: invalid request URL: %w", obs.RedactURL(err))
+	}
+	if !absolute {
+		return target, nil
+	}
+
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("remote: invalid base URL: %w", obs.RedactURL(err))
+	}
+
+	// Ensure Scheme and Host match to prevent SSRF or credential leakage
+	if base.Scheme != target.Scheme || base.Host != target.Host {
+		return nil, fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", target.Host, base.Host)
+	}
+	return target, nil
+}
+
+func (c *Client) executeWithRetry(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, headers map[string]string, retry *RetryConfig) (*http.Response, error) {
 	if retry == nil {
-		return c.executeOnce(ctx, method, path, body, headers)
+		return c.executeOnce(ctx, log, method, finalURL, body, headers)
 	}
 
 	var lastResp *http.Response
@@ -137,7 +183,13 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 			return nil, err
 		}
 
-		lastResp, lastErr = c.executeOnce(ctx, method, path, body, headers)
+		// Retries carry http.request.resend_count. The untagged log is kept for
+		// the "retrying request" record, which sets the count itself.
+		attemptLog := log
+		if attempt > 0 {
+			attemptLog = log.With(obs.AttrResendCount, attempt)
+		}
+		lastResp, lastErr = c.executeOnce(ctx, attemptLog, method, finalURL, body, headers)
 
 		shouldRetry := false
 		if lastErr != nil {
@@ -153,17 +205,18 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 			return lastResp, lastErr
 		}
 
+		retryAttrs := []any{obs.AttrResendCount, attempt + 1, "wait", backoff}
+		if lastErr != nil {
+			retryAttrs = append(retryAttrs, "error", lastErr)
+		} else {
+			retryAttrs = append(retryAttrs, obs.AttrStatusCode, lastResp.StatusCode)
+		}
+
 		if lastResp != nil {
 			_ = lastResp.Body.Close()
 		}
 
-		c.logger.InfoContext(ctx, "remote: retrying request",
-			"method", method,
-			"path", path,
-			"attempt", attempt+1,
-			"wait", backoff,
-			"error", lastErr,
-		)
+		log.InfoContext(ctx, "remote: retrying request", retryAttrs...)
 
 		timer := time.NewTimer(backoff)
 		select {
@@ -182,36 +235,8 @@ func (c *Client) executeWithRetry(ctx context.Context, method, path string, body
 	return lastResp, lastErr
 }
 
-func (c *Client) executeOnce(ctx context.Context, method, path string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
-	finalURL := path
-
-	// Handle URL construction and verification
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		// Absolute URL validation
-		if c.baseURL != "" {
-			base, err := url.Parse(c.baseURL)
-			if err != nil {
-				return nil, fmt.Errorf("remote: invalid base URL: %w", err)
-			}
-
-			provided, err := url.Parse(path)
-			if err != nil {
-				return nil, fmt.Errorf("remote: invalid absolute URL: %w", err)
-			}
-
-			// Ensure Scheme and Host match to prevent SSRF or credential leakage
-			if base.Scheme != provided.Scheme || base.Host != provided.Host {
-				return nil, fmt.Errorf("remote: absolute URL host %q does not match configured service host %q", provided.Host, base.Host)
-			}
-		}
-	} else {
-		// Relative path handling
-		// Ensure baseURL ends with / and path doesn't start with / to avoid double slashes or missing slashes
-		base := strings.TrimSuffix(c.baseURL, "/")
-		p := strings.TrimPrefix(path, "/")
-		finalURL = base + "/" + p
-	}
-
+// executeOnce sends one attempt, logging to log.
+func (c *Client) executeOnce(ctx context.Context, log *slog.Logger, method, finalURL string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewBuffer(body)
@@ -235,18 +260,32 @@ func (c *Client) executeOnce(ctx context.Context, method, path string, body []by
 		}
 	}
 
-	c.logger.DebugContext(ctx, "remote: outbound request starting", "method", method, "url", finalURL)
+	log.DebugContext(ctx, "remote: request started")
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(start)
 
 	if err != nil {
-		c.logger.ErrorContext(ctx, "remote: outbound request failed", "method", method, "url", finalURL, "duration", duration, "error", err)
-		return nil, c.mapNetworkError(err)
+		mapped := c.mapNetworkError(err)
+		errorType := "_OTHER"
+		if errors.Is(mapped, ErrTimeout) {
+			errorType = "timeout"
+		}
+		// Debug, not Error: the error is returned to the caller, which decides
+		// whether it matters and logs it at the level it chooses.
+		log.DebugContext(ctx, "remote: request failed",
+			"duration", duration,
+			obs.AttrErrorType, errorType,
+			"error", mapped,
+		)
+		return nil, mapped
 	}
 
-	c.logger.DebugContext(ctx, "remote: outbound request completed", "method", method, "url", finalURL, "status", resp.StatusCode, "duration", duration)
+	log.DebugContext(ctx, "remote: request completed",
+		obs.AttrStatusCode, resp.StatusCode,
+		"duration", duration,
+	)
 
 	return resp, nil
 }
@@ -320,6 +359,7 @@ func (c *Client) RawRequest(ctx context.Context, req Request) (*RawResponse, err
 }
 
 func (c *Client) mapNetworkError(err error) error {
+	err = obs.RedactURL(err)
 	if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
 		return ErrTimeout
 	}

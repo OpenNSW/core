@@ -175,6 +175,29 @@ var result MyResponseType
 err = client.Request(ctx, remote.Request{Method: http.MethodGet, Path: "/v1/applications/123"}, &result)
 ```
 
+## Logging
+
+The package logs through `log/slog`. Give the manager a logger with `WithManagerLogger`; it is passed to every client and to the services' authenticators, each tagged with a `remote.service` attribute. Without it, `slog.Default()` is used.
+
+```go
+manager := remote.NewManager(remote.WithManagerLogger(logger))
+```
+
+A standalone client takes `remote.WithLogger(logger)`, and an authenticator built with `auth.Build` takes `auth.WithLogger(logger)`. The `slog.Default()` fallback is read when the manager, client or authenticator is created, so call `slog.SetDefault` before building them — or pass a logger explicitly.
+
+| Event                                       | Level |
+|---------------------------------------------|-------|
+| Request started / completed                 | Debug |
+| Request failed (the error is also returned) | Debug |
+| Retry scheduled                             | Info  |
+| OAuth2 token fetched                        | Debug |
+| OAuth2 token fetch failed                   | Warn  |
+| Services loaded                             | Info  |
+
+A failed request is returned to the caller rather than logged as an error, so the caller picks the level. Attribute names follow OpenTelemetry semantic conventions — `http.request.method`, `server.address`, `server.port`, `url.path`, `http.response.status_code`, `http.request.resend_count`, `error.type` — so log records line up with traces. The query string, request and response bodies, and headers are never logged, except the RFC 6749 `error` and `error_description` fields of a failed OAuth2 token response.
+
+Request logs use the `*Context` slog methods, so a context-aware handler can add the trace and span IDs of the caller's context.
+
 ## Listing registered services
 
 ```go
