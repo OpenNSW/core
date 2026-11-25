@@ -25,7 +25,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`cors`](cors/README.md)                   | CORS HTTP middleware                                                                                                                                                                          |
 | [`database`](database/README.md)           | `database/sql` connection factory (PostgreSQL, MySQL, SQLite) with pooling and health checks                                                                                                  |
 | [`htmlgen`](htmlgen/README.md)             | Print-ready HTML document generation from a static template and structured data, with contextual escaping                                                                                     |
-| [`httputil`](httputil/README.md)           | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
+| [`httputil`](httputil/README.md)           | Shared HTTP helpers: JSON request-body decode with a size limit, JSON responses, and correlation-ID-tagged API errors                                                                       |
 | [`json`](json/README.md)                   | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
 | [`notification`](notification/README.md)   | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
 | [`pagination`](pagination/README.md)       | Standard pagination envelope and query parameter parsing                                                                                                                                      |
@@ -47,15 +47,71 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 
 ## Requirements
 
-- Go 1.26+
-- PostgreSQL, MySQL, or SQLite
-- [Temporal](https://temporal.io/) server (for workflow and task orchestration)
+| Need | Detail |
+| --- | --- |
+| Go | Each module declares its version in its `go.mod`. The root module requires **Go 1.26.0** (`go 1.26.0` in `./go.mod`). Some nested modules require a newer patch (for example `platform` declares `go 1.26.4`). |
+| Temporal | Required at **runtime** only when your app runs `workflow` / `taskflow` workers. Local default from [`temporal`](temporal/README.md): `temporal server start-dev` → `localhost:7233`, namespace `default`. |
+| SQL database | Required at **runtime** when your app uses [`database`](database/README.md) or SQL-backed stores. Drivers: PostgreSQL, MySQL, or SQLite (SQLite is enough for many unit tests). |
+| Nothing else from this repo | No product Compose file is shipped here. Nested tools for contributors are listed in [CONTRIBUTING.md](CONTRIBUTING.md). |
 
 ## Installation
 
+This repository is **multiple Go modules**. `go get github.com/OpenNSW/core` installs the **root** module only (`artifact`, `taskflow`, `workflow`). Other packages use their own paths and tags.
+
 ```sh
-go get github.com/OpenNSW/core
+# Root module (pin main or a commit)
+go get github.com/OpenNSW/core@main
+
+# Examples of nested modules (pin a tag)
+go get github.com/OpenNSW/core/httputil@v0.2.0
+go get github.com/OpenNSW/core/database@v0.3.0
+go get github.com/OpenNSW/core/temporal@v0.1.0
 ```
+
+How to assemble an application, which systems to run locally, and how downstream apps upgrade dependencies: **[docs/using.md](docs/using.md)** and **[docs/releases.md](docs/releases.md)**.
+
+## Documentation map
+
+| Topic | Where |
+| --- | --- |
+| Install modules into an app; external systems; behaviour you can rely on | [docs/using.md](docs/using.md) |
+| Architecture (macro / micro workflow) | [Architecture Overview](#architecture-overview) below |
+| Technology stack and tool versions | [Technology stack](#technology-stack) below |
+| Fork, test, pull request, keep a fork current | [docs/contributing/development.md](docs/contributing/development.md), [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Module tags and upgrading dependencies | [docs/releases.md](docs/releases.md) |
+| Security reporting | [SECURITY.md](SECURITY.md) |
+| Package APIs | Each package's `README.md` (links in the table above) |
+
+## Functional requirements (SDK behaviour)
+
+Callers can rely on these packages to:
+
+1. **Orchestrate long-running service applications** as Temporal workflows defined by a JSON graph (`workflow`), including task activation and completion callbacks.
+2. **Run human-in-the-loop steps** as short Temporal workflows with pluggable step plugins and UI projection (`taskflow`, `uiprojector`).
+3. **Load versioned workflow/form/template artifacts** by ID from a configured loader (`artifact`).
+4. **Authenticate and authorize HTTP callers** via JWT/JWKS and scope checks (`authn`, `authz`) without embedding product policy.
+5. **Talk to SQL databases, object storage, payment gateways, notifiers, and remote HTTP APIs** through typed factories and interfaces (`database`, `storage`, `payment`, `notification`, `remote`).
+6. **Expose consistent HTTP JSON errors and optional strict JSON body decoding** (`httputil`).
+
+Exact APIs, config keys, and error types are defined in each package README and its tests—not by a separate requirements specification document.
+
+## Technology stack
+
+Versions below are taken from this tree (`go.mod` files, `Makefile`, `.github/workflows/ci.yml`). Nested modules may pin slightly different dependency versions; open the module's `go.mod` when you import that module.
+
+| Component | Version in tree | Source |
+| --- | --- | --- |
+| Go (root module) | 1.26.0 | `./go.mod` |
+| Go (`platform` module) | 1.26.4 | `platform/go.mod` |
+| golangci-lint (local + CI) | v2.11.2 | `Makefile` `GOLANGCI_VERSION`, CI `golangci-lint-action` |
+| Temporal Go SDK (root) | v1.51.0 | `./go.mod` `go.temporal.io/sdk` |
+| Temporal Go SDK (`temporal` module) | v1.50.0 | `temporal/go.mod` |
+| AWS SDK v2 (S3-related) | v1.48.0 | `./go.mod`, `storage/go.mod` |
+| GORM (root) | v1.31.2 | `./go.mod` |
+| CI Go install | `go-version-file` → each job's `go.mod` | `.github/workflows/ci.yml` |
+| License | Apache-2.0 | `LICENSE`, SPDX headers |
+
+Language and protocols used across packages include JSON, YAML, HTTP, JWT/JWKS, and OpenTelemetry (see [`telemetry`](telemetry/README.md)).
 
 ## Architecture Overview
 
@@ -187,12 +243,20 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup,
-hooks, the Apache-2.0 license-header policy, and commit conventions.
+hooks, the Apache-2.0 license-header policy, and commit conventions, and
+[docs/contributing/development.md](docs/contributing/development.md) for fork,
+test, and pull-request steps.
 
 After cloning, install tools and enable git hooks in one step:
 
 ```sh
 make setup
+```
+
+Then run the root-module tests:
+
+```sh
+make test
 ```
 
 ## License
