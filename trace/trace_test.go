@@ -192,3 +192,22 @@ func TestContextWithClientRequestID(t *testing.T) {
 		t.Errorf("GetClientRequestID() = %q, want client-1", got)
 	}
 }
+
+
+func TestTraceMiddleware_PropagatesPattern(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/tasks", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	var outerPattern string
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		TraceMiddleware(mux).ServeHTTP(w, r)
+		outerPattern = r.Pattern
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if outerPattern != "GET /api/v1/tasks" {
+		t.Fatalf("outer Pattern = %q, want GET /api/v1/tasks", outerPattern)
+	}
+}

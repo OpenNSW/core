@@ -104,7 +104,11 @@ func TraceMiddleware(next http.Handler) http.Handler {
 			s.traceID = traceID
 			s.clientRequestID = clientID
 		}
-		next.ServeHTTP(w, r.WithContext(ctx))
+		// WithContext returns a shallow copy; ServeMux sets Pattern on that
+		// copy. Copy it back so outer otelhttp can still label http.route.
+		child := r.WithContext(ctx)
+		next.ServeHTTP(w, child)
+		r.Pattern = child.Pattern
 	})
 }
 
