@@ -90,6 +90,7 @@ temporal:
 - Decoding refuses a payload that isn't encrypted, was encrypted under another key, or was altered. A payload written to Temporal by anything without the key, such as a signal sent from the CLI, fails to decode.
 - Failure messages and stack traces are encrypted too (the SDK's `EncodeCommonAttributes`), since error text can carry the same data.
 - Every client and worker on a namespace must use the same key. Workflows started under one key can't be read under another.
+- Turn encryption on for a fresh namespace. Workflows already running on a namespace when it is turned on have plain payloads in their history, which the workers then refuse, so those workflows can't continue. Turning it off strands workflows with encrypted history the same way.
 - The Temporal UI and CLI show the encrypted payloads unless they are given a codec server with the key.
 - Workflow and activity IDs, task queues, and search attributes are not payloads, so they stay readable.
 
