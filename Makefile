@@ -1,4 +1,4 @@
-GOLANGCI_VERSION := v2.11.2
+GOLANGCI_VERSION := v2.15.0
 LICENSE_TMPL     := .github/license-header.tmpl
 GO_FILES         := $(shell find . -type f -name '*.go' -not -path './vendor/*')
 
