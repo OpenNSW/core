@@ -137,3 +137,22 @@ func TestNewHandler(t *testing.T) {
 		t.Error("NewHandler() did not wrap the given handler")
 	}
 }
+
+func TestHandler_Handle_ClientRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(NewHandler(slog.NewJSONHandler(&buf, nil)))
+	ctx := trace.ContextWithTraceID(t.Context(), "server-id")
+	ctx = trace.ContextWithClientRequestID(ctx, "client-id")
+	logger.InfoContext(ctx, "test message")
+
+	var record map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if record["traceId"] != "server-id" {
+		t.Errorf("traceId = %v, want server-id", record["traceId"])
+	}
+	if record["clientRequestId"] != "client-id" {
+		t.Errorf("clientRequestId = %v, want client-id", record["clientRequestId"])
+	}
+}

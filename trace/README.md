@@ -1,12 +1,14 @@
 # trace
 
-A lightweight Go package providing HTTP request trace propagation, trace ID generation, and context-based trace ID correlation.
+A lightweight Go package providing HTTP request correlation, trace ID generation, and context-based correlation for logs and audit records.
 
 ## Usage
 
 ### Injecting Trace Middleware
 
-Integrate `TraceMiddleware` into your HTTP handler pipeline to automatically extract, validate, and propagate request trace IDs:
+Integrate `TraceMiddleware` into your HTTP handler pipeline. The middleware always assigns a **server-generated** correlation id. When OpenTelemetry has already started a server span (for example via `otelhttp`), that span's TraceID is used so logs and spans match; otherwise a random 32-character hex id is generated.
+
+Caller headers (`X-Trace-ID`, `X-Correlation-ID`, `X-Request-ID`) are **not** used as the correlation id. Valid values are kept only as `clientRequestId` for matching the caller's own records.
 
 ```go
 import (
@@ -18,7 +20,12 @@ func main() {
     mux := http.NewServeMux()
     mux.HandleFunc("/api/v1/resource", handleResource)
 
-    // Wrap the mux with the trace middleware
+    // When using otelhttp, wrap TraceMiddleware *inside* it so the span exists:
+    //   otelhttp.NewHandler(trace.TraceMiddleware(mux), "api")
+    // If a log middleware sits outside otelhttp and logs with the outer request
+    // context after the handler, wrap with TraceSlotMiddleware so GetTraceID
+    // still sees the id TraceMiddleware wrote:
+    //   trace.TraceSlotMiddleware(systemlog(otelhttp(trace.TraceMiddleware(mux))))
     handler := trace.TraceMiddleware(mux)
 
     http.ListenAndServe(":8080", handler)
@@ -27,7 +34,7 @@ func main() {
 
 ### Logging with Trace IDs
 
-Wrap an `slog.Handler` with `logging.NewHandler` (in the `trace/logging` subpackage) to automatically attach the request's trace ID as a `"traceId"` attribute on every log record produced via a `*Context` `slog` method (`InfoContext`, `WarnContext`, `ErrorContext`, ...). Call sites no longer need to add `traceId` manually:
+Wrap an `slog.Handler` with `logging.NewHandler` (in the `trace/logging` subpackage) to automatically attach `"traceId"` on every log record produced via a `*Context` slog method. When the caller supplied a request id header, `"clientRequestId"` is attached as well.
 
 ```go
 import (
@@ -45,65 +52,49 @@ func main() {
 
     mux := http.NewServeMux()
     mux.HandleFunc("/api/v1/resource", func(w http.ResponseWriter, r *http.Request) {
-        // r.Context() carries the trace ID injected by TraceMiddleware below.
-        logger.ErrorContext(r.Context(), "request failed") // includes "traceId" automatically
+        logger.ErrorContext(r.Context(), "request failed") // includes "traceId"
     })
 
     http.ListenAndServe(":8080", trace.TraceMiddleware(mux))
 }
 ```
 
-If the context passed to the logging call has no trace ID, the record is logged unchanged.
-
 ### Context Helpers
-
-You can manually get or set the trace ID within a `context.Context` using the provided helpers:
 
 ```go
 import (
-    "context"
     "fmt"
     "github.com/OpenNSW/core/trace"
 )
 
 func process(ctx context.Context) {
-    // Extract the trace ID from the context
-    traceID := trace.GetTraceID(ctx)
-    if traceID != "" {
-        fmt.Printf("Processing request with Trace ID: %s\n", traceID)
+    if id := trace.GetTraceID(ctx); id != "" {
+        fmt.Printf("server correlation id: %s\n", id)
     }
-
-    // Inject a trace ID into a new context
-    newCtx := trace.ContextWithTraceID(ctx, "custom-trace-id")
-    _ = newCtx
+    if id := trace.GetClientRequestID(ctx); id != "" {
+        fmt.Printf("caller request id: %s\n", id)
+    }
 }
 ```
 
 ## Behavior
 
-### 1. Header Extraction & Precedence
-The middleware inspects incoming request headers in the following order to resolve a trace or correlation ID:
-1. `X-Trace-ID`
-2. `X-Correlation-ID`
-3. `X-Request-ID`
+### 1. Server correlation id
 
-The first non-empty header value found is selected as the trace ID candidate.
+`TraceMiddleware` never trusts the caller for the correlation id:
 
-### 2. Validation Constraints
-To prevent header injection or trace ID corruption, resolved candidate IDs are validated. A valid trace ID:
-- Must have a length between 1 and 64 characters.
-- Must contain only alphanumeric characters (`a-zA-Z0-9`) or the following safe special characters: `-`, `_`, `:`, `.`, `/`, `=`.
+1. If the request context has a valid OpenTelemetry `SpanContext`, use its `TraceID` (32 lowercase hex characters).
+2. Otherwise generate a cryptographically secure random 16-byte id, formatted as 32 hex characters.
 
-If the candidate ID fails validation, it is discarded.
+That value is set on the context (`GetTraceID`), returned as the `X-Trace-ID` response header, and (when `TraceSlotMiddleware` is used) written into the outer slot.
 
-### 3. Fallback Generation
-If no candidate ID is found in the headers, or if the candidate ID is invalid, the middleware automatically generates a fallback trace ID using a cryptographically secure random 16-byte array, formatted as a 32-character hexadecimal string.
+### 2. Caller request id (information only)
 
-### 4. Response Header Propagation
-Once validated or generated, the trace ID is injected into the response headers under:
-- `X-Trace-ID`
+The first valid value among `X-Trace-ID`, `X-Correlation-ID`, and `X-Request-ID` is stored as `GetClientRequestID` / log field `clientRequestId`. Validation: length 1–64; characters `[A-Za-z0-9-_:./=]` only. Invalid values are discarded. This id is never used as `traceId` or `X-Trace-ID` on the response.
 
-This ensures that the client receives the exact trace ID that was used to process their request, facilitating end-to-end debugging.
+### 3. Breaking change from v0.2.0
+
+A caller's `X-Trace-ID` (or correlation / request id header) is no longer echoed as the response `X-Trace-ID` and no longer becomes the log/audit `traceId`.
 
 ## Testing
 

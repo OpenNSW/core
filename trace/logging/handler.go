@@ -17,7 +17,8 @@ type Handler struct {
 }
 
 // NewHandler wraps next so every log record made via a *Context slog
-// call automatically gets "traceId" attached.
+// call automatically gets "traceId" attached, and "clientRequestId" when
+// the caller supplied a request id header.
 func NewHandler(next slog.Handler) *Handler {
 	return &Handler{Handler: next}
 }
@@ -25,6 +26,9 @@ func NewHandler(next slog.Handler) *Handler {
 func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
 	if traceID := trace.GetTraceID(ctx); traceID != "" {
 		record.AddAttrs(slog.String("traceId", traceID))
+	}
+	if clientID := trace.GetClientRequestID(ctx); clientID != "" {
+		record.AddAttrs(slog.String("clientRequestId", clientID))
 	}
 	return h.Handler.Handle(ctx, record)
 }
