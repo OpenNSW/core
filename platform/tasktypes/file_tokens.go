@@ -11,7 +11,7 @@ import (
 	"github.com/OpenNSW/core/shared/deepcopy"
 	"github.com/OpenNSW/core/taskflow/store"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/tasks/filefields"
+	"github.com/OpenNSW/core/platform/filefields"
 )
 
 // FileTokens replaces the stored files in what a step sends another service

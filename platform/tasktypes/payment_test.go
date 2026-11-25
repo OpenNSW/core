@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/payment"
+	paymentref "github.com/OpenNSW/core/platform/payment"
 	"github.com/OpenNSW/core/taskflow/callbacktoken"
 	"github.com/OpenNSW/core/taskflow/plugins"
 	"github.com/OpenNSW/core/taskflow/store"
-	paymentref "github.com/OpenNSW/nsw-srilanka/internal/payment"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

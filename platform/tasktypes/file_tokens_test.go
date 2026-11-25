@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/tasks/filefields"
+	"github.com/OpenNSW/core/platform/filefields"
 )
 
 // tokenFor stands in for file tokens: "<client>/<value>".

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/payment"
+	paymentref "github.com/OpenNSW/core/platform/payment"
 	coreplugins "github.com/OpenNSW/core/taskflow/plugins"
-	paymentref "github.com/OpenNSW/nsw-srilanka/internal/payment"
 	"github.com/shopspring/decimal"
 )
 

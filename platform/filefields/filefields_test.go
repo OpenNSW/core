@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/OpenNSW/nsw-srilanka/internal/tasks/filefields"
+	"github.com/OpenNSW/core/platform/filefields"
 )
 
 func parse(t *testing.T, files ...string) []filefields.Path {
