@@ -89,6 +89,7 @@ func TestPrincipalFromAuthContext_UserFlattensDeclaredClaims(t *testing.T) {
 	})
 	if p == nil {
 		t.Fatal("expected a principal")
+		return
 	}
 	if p.Kind != KindUser || p.UserID != "u1" || p.IDPUserID != "idp1" {
 		t.Fatalf("unexpected identity: %#v", p)
@@ -111,6 +112,7 @@ func TestPrincipalFromAuthContext_UserWithoutExtraClaims(t *testing.T) {
 	})
 	if p == nil {
 		t.Fatal("expected a principal")
+		return
 	}
 	if p.Email != "" || p.PhoneNumber != "" || p.OUID != "" || p.OUHandle != "" {
 		t.Fatalf("expected empty claim fields, got %#v", p)
@@ -127,6 +129,7 @@ func TestPrincipalFromAuthContext_ClientCarriesNoIdentityClaims(t *testing.T) {
 	})
 	if p == nil {
 		t.Fatal("expected a principal")
+		return
 	}
 	if p.Kind != KindClient || p.ClientID != "GOVPAY_TO_NSW" {
 		t.Fatalf("unexpected client principal: %#v", p)
@@ -191,6 +194,7 @@ func TestPrincipalFromAuthContext_UserCarriesExtraClaims(t *testing.T) {
 	})
 	if p == nil {
 		t.Fatal("expected a principal")
+		return
 	}
 	if got := p.ExtraClaims.String("department"); got != "Customs" {
 		t.Errorf("department = %q, want Customs", got)
@@ -245,6 +249,7 @@ func TestCoreProfileShim_CarriesExtraClaims(t *testing.T) {
 	p := svc.got
 	if p == nil {
 		t.Fatal("expected the service to be called with a principal")
+		return
 	}
 	if p.Kind != KindUser || p.IDPUserID != "idp1" || p.Email != "officer@example.com" ||
 		p.PhoneNumber != "+94771234567" || p.OUID != "OU-001" || p.OUHandle != "ou-001" {
@@ -275,6 +280,7 @@ func TestPrincipalFromAuthContext_ClientCarriesExtraClaims(t *testing.T) {
 	})
 	if p == nil {
 		t.Fatal("expected a principal")
+		return
 	}
 	if p.Kind != KindClient || p.ExtraClaims.String("agency") != "npqs" {
 		t.Fatalf("unexpected client principal: %#v", p)
