@@ -4,15 +4,16 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
-	"github.com/OpenNSW/agency/backend/internal/configyaml"
-	"github.com/OpenNSW/agency/backend/internal/database"
+	"github.com/OpenNSW/core/configyaml"
+	"github.com/OpenNSW/core/database"
 )
 
 // defaultConfigPath is where LoadConfig looks for its YAML file when
-// CONFIG_PATH is unset. Same file and default as cmd/server — cmd/migrate
-// only reads its db/migrationDir fields from it, ignoring everything else.
+// CONFIG_PATH is unset. It can be the application's own config file: the
+// migrate command reads only its db and migrationDir fields.
 const defaultConfigPath = "./config.yaml"
 
 // Config holds all configuration for the migrate command.
@@ -23,11 +24,9 @@ type Config struct {
 }
 
 // LoadConfig loads configuration from the YAML file at CONFIG_PATH (default
-// "./config.yaml") — the same file, and the same "{{env:NAME}}" /
-// "{{file:/path}}" placeholder resolution, cmd/server uses (see
-// internal/configyaml.LoadAndExpand). Reading one shared file means a
-// deployment's DB connection is defined in one place rather than duplicated
-// across a separate migrate-only config.
+// "./config.yaml"), resolving "{{env:NAME}}" / "{{file:/path}}" placeholders
+// with configyaml.LoadAndExpand. The db section has the shape of
+// database.Config, so an application and its migrations can share one file.
 func LoadConfig() (Config, error) {
 	path := envOrDefault("CONFIG_PATH", defaultConfigPath)
 
@@ -37,18 +36,24 @@ func LoadConfig() (Config, error) {
 	}
 
 	if cfg.DB.Driver == "" {
-		cfg.DB.Driver = "sqlite"
+		cfg.DB.Driver = database.SQLite
+	}
+	if cfg.DB.SQLite == nil {
+		cfg.DB.SQLite = &database.SQLiteConfig{}
 	}
 	if cfg.DB.SQLite.Path == "" {
 		cfg.DB.SQLite.Path = "./agency_applications.db"
 	}
-	if cfg.DB.Postgres.SSLMode == "" {
+	if cfg.DB.Postgres != nil && cfg.DB.Postgres.SSLMode == "" {
 		cfg.DB.Postgres.SSLMode = "require"
 	}
 	if cfg.Dir == "" {
 		cfg.Dir = "./migrations"
 	}
 
+	if cfg.DB.Driver != database.SQLite && cfg.DB.Driver != database.Postgres {
+		return Config{}, fmt.Errorf("unsupported database driver %q (must be %q or %q)", cfg.DB.Driver, database.SQLite, database.Postgres)
+	}
 	if err := cfg.DB.Validate(); err != nil {
 		return Config{}, err
 	}
