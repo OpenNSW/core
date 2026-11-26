@@ -27,6 +27,7 @@ updates:
       - "/platform"
       - "/replay"
       - "/staticdata"
+      - "/migrator"
     schedule:
       interval: "weekly"
       day: "monday"
