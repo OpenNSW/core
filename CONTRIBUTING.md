@@ -8,7 +8,7 @@ Contributions are welcome. For a detailed guide on setting up your local environ
 |---|---|---|
 | Go | ≥ 1.26.4 | [go.dev/dl](https://go.dev/dl/) |
 | git | ≥ 2.9 | system package manager |
-| golangci-lint | v2.11.2 | `go install` (see below) |
+| golangci-lint | v2.15.0 | `go install` (see below) |
 | addlicense | latest | `go install` (see below) |
 | gitleaks | latest | see [gitleaks install](#gitleaks) |
 
@@ -26,7 +26,7 @@ This installs `golangci-lint` and `addlicense`, then runs
 **Manual equivalent:**
 
 ```sh
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 go install github.com/google/addlicense@latest
 git config core.hooksPath .githooks
 ```

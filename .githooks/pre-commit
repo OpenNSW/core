@@ -50,7 +50,7 @@ need_tool() {
 info "preflight: checking tools"
 need_tool go            "https://go.dev/dl/ (>= 1.26.4)"
 need_tool gitleaks      "brew install gitleaks  |  https://github.com/gitleaks/gitleaks/releases"
-need_tool golangci-lint "https://golangci-lint.run/welcome/install/ (v2.11.2)"
+need_tool golangci-lint "https://golangci-lint.run/welcome/install/ (v2.15.0)"
 need_tool addlicense    "go install github.com/google/addlicense@latest"
 
 # 1. Secret scan (hard gate, before any auto-fix).
