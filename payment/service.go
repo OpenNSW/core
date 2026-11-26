@@ -35,6 +35,10 @@ var ErrDuplicateReference = errors.New("payment reference already in use")
 // that has already succeeded or failed. The checkout is left unchanged.
 var ErrPaymentSettled = errors.New("payment already settled")
 
+// MetadataKeyLatePayment marks a transaction whose payment arrived after it was cancelled.
+// The gateway's transaction id is stored beside it so staff can refund the payer.
+const MetadataKeyLatePayment = "late_payment"
+
 // ReferenceGenerator issues the reference a payer pays against for a checkout,
 // in the host's format. It receives the checkout request with a copy of its
 // metadata. Each reference it issues is unique; CreateCheckoutSession returns
@@ -419,6 +423,28 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 				return fmt.Errorf("reference %s: expected %s %s, got %s %s: %w",
 					tx.ReferenceNumber, tx.Amount, tx.Currency, gwPayload.Amount, gwPayload.Currency, ErrAmountMismatch)
 			}
+		}
+
+		// A cancelled checkout stays CANCELLED whatever the gateway reports. A payment that
+		// lands after the cancel is recorded for staff to refund, and completes no step.
+		if tx.Status == StatusCancelled {
+			if newStatus != StatusSuccess {
+				slog.InfoContext(ctx, "webhook ignored (checkout cancelled)", "reference", tx.ReferenceNumber, "gateway_status", newStatus)
+				return nil
+			}
+			tx.PaymentMethod = gwPayload.PaymentMethod
+			if tx.GatewayMetadata == nil {
+				tx.GatewayMetadata = make(map[string]string)
+			}
+			tx.GatewayMetadata[MetadataKeyLatePayment] = "true"
+			tx.GatewayMetadata["gateway_transaction_id"] = gwPayload.GatewayTransactionID
+			tx.GatewayMetadata["webhook_timestamp"] = gwPayload.Timestamp
+
+			if err := repo.Update(ctx, tx); err != nil {
+				return fmt.Errorf("failed to record late payment: %w", err)
+			}
+			slog.WarnContext(ctx, "payment: paid after cancel, refund needed", "reference", tx.ReferenceNumber, "gateway_transaction_id", gwPayload.GatewayTransactionID, "amount", tx.Amount.String(), "currency", tx.Currency)
+			return nil
 		}
 
 		tx.Status = newStatus
