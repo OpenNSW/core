@@ -31,3 +31,7 @@ service, serves files over HTTP, and issues file tokens whose holder is an `auth
 | [`storage/fileaccess`](storage/fileaccess/README.md) | Decides who a file token is for, what it allows and how long it lasts |
 | [`payloadschema`](payloadschema/README.md) | Checks step submissions against their JSON Schema |
 | [`taskauthz`](taskauthz/README.md) | The shared vocabulary of task authorization |
+| [`tasktypes`](tasktypes/README.md) | The generic task types a workflow step names, such as `AUTH_API_CALL`, `EXTERNAL_REVIEW` and `PAYMENT` |
+| [`payment`](payment/README.md) | Connects `core/payment` to the task engine and to `refid` |
+| [`filefields`](filefields/README.md) | Reads and rewrites the file fields a task's render config declares |
+| [`renderer`](renderer/README.md) | UI projectors for the platform's task types, such as the payment instructions |
