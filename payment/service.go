@@ -31,6 +31,10 @@ var ErrAmountMismatch = errors.New("webhook amount/currency mismatch")
 // and retry the checkout.
 var ErrDuplicateReference = errors.New("payment reference already in use")
 
+// ErrPaymentSettled is returned, wrapped, by CancelCheckoutSession for a checkout
+// that has already succeeded or failed. The checkout is left unchanged.
+var ErrPaymentSettled = errors.New("payment already settled")
+
 // ReferenceGenerator issues the reference a payer pays against for a checkout,
 // in the host's format. It receives the checkout request with a copy of its
 // metadata. Each reference it issues is unique; CreateCheckoutSession returns
@@ -90,6 +94,10 @@ type Service interface {
 	// CreateCheckoutSession initializes a payment session under a ReferenceNumber
 	// from the service's ReferenceGenerator.
 	CreateCheckoutSession(ctx context.Context, req CreateCheckoutRequest) (*CreateCheckoutResponse, error)
+
+	// CancelCheckoutSession closes an unpaid checkout under the same row lock as ProcessWebhook,
+	// so a cancel and a settlement can't both win. It never completes the task step.
+	CancelCheckoutSession(ctx context.Context, req CancelCheckoutRequest) error
 
 	// ValidateReference is used for real-time validation requests from gateways.
 	ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage, headers map[string][]string) (*ValidationResponse, error)
@@ -226,6 +234,44 @@ func (s *paymentService) CreateCheckoutSession(ctx context.Context, req CreateCh
 		Instructions:    sessionResp.Instructions,
 		ExpiresIn:       int(req.ExpiresAt.Sub(now).Seconds()),
 	}, nil
+}
+
+// CancelCheckoutSession cancels a PENDING checkout; a repeat cancel is a no-op. It returns
+// ErrTransactionNotFound for an unknown reference or token and ErrPaymentSettled once settled.
+func (s *paymentService) CancelCheckoutSession(ctx context.Context, req CancelCheckoutRequest) error {
+	if err := req.validate(); err != nil {
+		return fmt.Errorf("invalid cancel request: %w", err)
+	}
+
+	return s.repo.RunInTransaction(ctx, func(repo Repository) error {
+		tx, err := repo.GetByReferenceNumberForUpdate(ctx, req.ReferenceNumber)
+		if err != nil {
+			return fmt.Errorf("failed to retrive transaction by reference: %w", err)
+		}
+
+		// An unknown reference and another step's checkout get the same error, so a caller
+		// learns nothing about a checkout that is not its own.
+		if tx == nil || tx.CallbackToken != req.CallbackToken {
+			return fmt.Errorf("reference %s: %w", req.ReferenceNumber, ErrTransactionNotFound)
+		}
+
+		switch tx.Status {
+		case StatusCancelled:
+			slog.DebugContext(ctx, "payment: checkout already cancelled", "reference", tx.ReferenceNumber)
+			return nil
+		case StatusSuccess, StatusFailed:
+			return fmt.Errorf("reference %s is %s: %w", tx.ReferenceNumber, tx.Status, ErrPaymentSettled)
+		case StatusPending:
+			tx.Status = StatusCancelled
+			if err := repo.Update(ctx, tx); err != nil {
+				return fmt.Errorf("failed to cancel transaction: %w", err)
+			}
+			slog.InfoContext(ctx, "payment: checkout cancelled", "reference", tx.ReferenceNumber)
+			return nil
+		default:
+			return fmt.Errorf("reference %s: cannot cancel a checkout in status %q", tx.ReferenceNumber, tx.Status)
+		}
+	})
 }
 
 func (s *paymentService) ValidateReference(ctx context.Context, gatewayID string, rawBody json.RawMessage, headers map[string][]string) (*ValidationResponse, error) {
