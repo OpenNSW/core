@@ -5,6 +5,7 @@ package payment
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -88,6 +89,9 @@ func (r CreateCheckoutRequest) validate(now time.Time) error {
 	}
 	if !r.ExpiresAt.After(now) {
 		return errors.New("expires_at must be in the future")
+	}
+	if _, reserved := r.Metadata[MetadataKeyLatePayment]; reserved {
+		return fmt.Errorf("metadata key %q is reserved", MetadataKeyLatePayment)
 	}
 	return nil
 }
