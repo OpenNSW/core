@@ -221,6 +221,24 @@ Gateways notify the payment service of results. The Service looks up the gateway
 
 Once a payment reaches SUCCESS or FAILED, the Service resumes the workflow step it was created for through its **TaskCompleter**, calling `CompleteTaskStepByToken` with the `CallbackToken` the checkout carried (`CreateCheckoutRequest.CallbackToken`, required). The token is opaque to this package and names one step, so a settlement that arrives after the task has moved on completes nothing. Core taskflow's `*orchestrator.TaskManager` satisfies `TaskCompleter`; build the token with `plugins.CallbackToken` when creating the checkout.
 
+### Cancelling a Checkout
+An unpaid checkout stays payable until it expires. To close one, for example when the trader changes the payment method, call `CancelCheckoutSession` with a `CancelCheckoutRequest` holding the `ReferenceNumber` and the same `CallbackToken` the checkout was created with. It runs in one transaction under the same row lock as webhook processing, so a cancel and a settlement can't both win: whichever takes the lock first decides.
+
+| Checkout status | Result |
+|---|---|
+| `PENDING` | Becomes `CANCELLED` |
+| `CANCELLED` | Left as it is and `nil` is returned, so a retried cancel succeeds |
+| `SUCCESS`, `FAILED` | Left as it is, and `ErrPaymentSettled` is returned |
+| unknown reference, or a different `CallbackToken` | `ErrTransactionNotFound`, the same error for both, so a step can't tell whether another step's reference exists |
+
+`CancelCheckoutSession` only closes the checkout. It never calls the `TaskCompleter`; the caller completes the step itself.
+
+`CANCELLED` is a final status, and a cancelled reference is not payable: real-time validation reports it as such, because only a `PENDING`, unexpired checkout is. A gateway can't cancel a checkout, so `CANCELLED` is never produced by a webhook. If a webhook arrives for a `CANCELLED` checkout:
+- A `SUCCESS` notification whose amount and currency match is a payment that landed after the cancel. The row stays `CANCELLED` and completes no step. The Service records `late_payment` (`"true"`), `gateway_transaction_id` and `webhook_timestamp` in the transaction's `gateway_metadata`, logs a warning, and acknowledges the gateway so it stops retrying. Staff refund it using the `gateway_transaction_id`.
+- A `FAILED` or `PENDING` notification changes nothing and is acknowledged.
+
+`late_payment` is reserved: `CreateCheckoutSession` rejects a request whose `Metadata` already holds it, so a normal checkout can't be mistaken for a late payment.
+
 ## Schema
 
 `Transaction` stores the payee as two `NOT NULL` columns, `org_id` and `service_id`, with a composite index `idx_payment_tx_payee`. Gateway ids are never stored on the row: callbacks resolve them from the payee through the method's current `payees` config, so a gateway re-issuing its ids is a config change, not a data migration. A mapping changed while a payment is pending is checked against the new ids.
@@ -288,6 +306,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 
 - `Payee`: Who a checkout pays (`org_id`, `service_id`), mapped to each gateway's ids by its `payees` config
 - `PayeeLookup`: Resolves a gateway's mapping for the payee a reference was issued for, handed to `ParseWebhook`
+- `CancelCheckoutRequest`: The checkout to cancel (`ReferenceNumber`) and the step cancelling it (`CallbackToken`), for `CancelCheckoutSession`
 - `SessionRequest`: Checkout session initialization
 - `SessionResponse`: Session response with checkout details
 - `WebhookPayload`: Incoming webhook data
@@ -314,6 +333,7 @@ If your scheme needs TLS state or the real client IP specifically: confirm with 
 - `ErrTransactionNotFound`: Payment transaction not found
 - `ErrAmountMismatch`: Payment amount or currency mismatch
 - `ErrDuplicateReference`: A transaction already holds the reference the `ReferenceGenerator` issued
+- `ErrPaymentSettled`: `CancelCheckoutSession` found a checkout that has already succeeded or failed
 - `ErrPayeeNotMapped`: The selected method has no mapping for the checkout's payee
 - `ErrWebhookVerificationFailed`: Caller could not be verified — see "Verification error classification" above for when a gateway should (and should not) use this
 - `NewWebhookVerificationError(reason string) error`: Optional helper that builds a correctly-wrapped `ErrWebhookVerificationFailed` rejection
