@@ -5,7 +5,6 @@ package payment
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -14,10 +13,11 @@ import (
 type Status string
 
 const (
-	StatusPending   Status = "PENDING"
-	StatusSuccess   Status = "SUCCESS"
-	StatusFailed    Status = "FAILED"
-	StatusCancelled Status = "CANCELLED"
+	StatusPending         Status = "PENDING"
+	StatusSuccess         Status = "SUCCESS"
+	StatusFailed          Status = "FAILED"
+	StatusCancelled       Status = "CANCELLED"
+	StatusPaidAfterCancel Status = "PAID_AFTER_CANCEL"
 )
 
 // Transaction represents the internal state of a payment
@@ -36,7 +36,7 @@ type Transaction struct {
 	SessionID       string            `json:"session_id"` // Gateway-specific session identifier
 	Amount          decimal.Decimal   `json:"amount"`
 	Currency        string            `json:"currency"`       // "LKR" or foreign currency
-	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, CANCELLED
+	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, CANCELLED, PAID_AFTER_CANCEL
 	PaymentMethod   string            `json:"payment_method"` // CC, BANK_TRANSFER (populated on webhook)
 	ExpiryDate      time.Time         `json:"expiry_date"`
 	GatewayMetadata map[string]string `json:"gateway_metadata" gorm:"serializer:json"`
@@ -89,9 +89,6 @@ func (r CreateCheckoutRequest) validate(now time.Time) error {
 	}
 	if !r.ExpiresAt.After(now) {
 		return errors.New("expires_at must be in the future")
-	}
-	if _, reserved := r.Metadata[MetadataKeyLatePayment]; reserved {
-		return fmt.Errorf("metadata key %q is reserved", MetadataKeyLatePayment)
 	}
 	return nil
 }

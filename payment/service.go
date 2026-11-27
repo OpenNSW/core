@@ -35,10 +35,6 @@ var ErrDuplicateReference = errors.New("payment reference already in use")
 // that has already succeeded or failed. The checkout is left unchanged.
 var ErrPaymentSettled = errors.New("payment already settled")
 
-// MetadataKeyLatePayment marks a transaction whose payment arrived after it was cancelled.
-// The gateway's transaction id is stored beside it so staff can refund the payer.
-const MetadataKeyLatePayment = "late_payment"
-
 // ReferenceGenerator issues the reference a payer pays against for a checkout,
 // in the host's format. It receives the checkout request with a copy of its
 // metadata. Each reference it issues is unique; CreateCheckoutSession returns
@@ -260,7 +256,7 @@ func (s *paymentService) CancelCheckoutSession(ctx context.Context, req CancelCh
 		}
 
 		switch tx.Status {
-		case StatusCancelled:
+		case StatusCancelled, StatusPaidAfterCancel:
 			slog.DebugContext(ctx, "payment: checkout already cancelled", "reference", tx.ReferenceNumber)
 			return nil
 		case StatusSuccess, StatusFailed:
@@ -410,7 +406,7 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 
 		// Idempotency: a terminal status is already recorded (possibly by a
 		// concurrent delivery that committed first) — nothing more to do.
-		if tx.Status == StatusSuccess || tx.Status == StatusFailed {
+		if tx.Status == StatusSuccess || tx.Status == StatusFailed || tx.Status == StatusPaidAfterCancel {
 			slog.InfoContext(ctx, "webhook ignored (idempotent)", "reference", tx.ReferenceNumber, "current_status", tx.Status)
 			return nil
 		}
@@ -425,18 +421,18 @@ func (s *paymentService) ProcessWebhook(ctx context.Context, gatewayID string, b
 			}
 		}
 
-		// A cancelled checkout stays CANCELLED whatever the gateway reports. A payment that
-		// lands after the cancel is recorded for staff to refund, and completes no step.
+		// A cancelled checkout only changes on a paid webhook, which becomes PAID_AFTER_CANCEL
+		// for staff to refund. Any other gateway status is ignored. No step is completed.
 		if tx.Status == StatusCancelled {
 			if newStatus != StatusSuccess {
 				slog.InfoContext(ctx, "webhook ignored (checkout cancelled)", "reference", tx.ReferenceNumber, "gateway_status", newStatus)
 				return nil
 			}
+			tx.Status = StatusPaidAfterCancel
 			tx.PaymentMethod = gwPayload.PaymentMethod
 			if tx.GatewayMetadata == nil {
 				tx.GatewayMetadata = make(map[string]string)
 			}
-			tx.GatewayMetadata[MetadataKeyLatePayment] = "true"
 			tx.GatewayMetadata["gateway_transaction_id"] = gwPayload.GatewayTransactionID
 			tx.GatewayMetadata["webhook_timestamp"] = gwPayload.Timestamp
 
