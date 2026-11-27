@@ -169,7 +169,7 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 
 	meta, err := up.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
-		h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, "", "", uploadFailureReason(err))
+		h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, "", "", failureReason(err))
 		h.writeServiceError(w, r, err, "failed to prepare upload", req.MimeType)
 		return
 	}
@@ -253,29 +253,6 @@ func (h *FileHandler) recordUploadPrepare(
 	h.audit.Audit(ctx, audit.StorageEvent(audit.ActionPresignUpload, storageKey, reason != "", meta))
 }
 
-// uploadFailureReason names why an upload prepare was refused by the storage
-// service.
-func uploadFailureReason(err error) string {
-	var tooLarge *corestorage.FileTooLargeError
-	var mismatch *corestorage.ExtensionMismatchError
-	switch {
-	case errors.Is(err, corestorage.ErrInvalidKey):
-		return "invalid_key"
-	case errors.Is(err, corestorage.ErrInvalidSize):
-		return "invalid_size"
-	case errors.As(err, &tooLarge):
-		return "too_large"
-	case errors.Is(err, corestorage.ErrContentTypeNotAllowed):
-		return "content_type_not_allowed"
-	case errors.As(err, &mismatch):
-		return "extension_mismatch"
-	case isUpstreamFailure(err):
-		return "upstream_failed"
-	default:
-		return "failed"
-	}
-}
-
 // Download returns a time-limited URL to download the file the reference in
 // the path stands for, and when it expires.
 func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
@@ -322,29 +299,12 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 	referenceSHA := h.ownerReferenceSHA(ref, value)
 	dl, err := downloadOf(r.Context(), h.svc, value)
 	if err != nil {
-		h.recordDownload(r.Context(), key, downloadFailureReason(err), referenceSHA, 0)
+		h.recordDownload(r.Context(), key, failureReason(err), referenceSHA, 0)
 		h.writeServiceError(w, r, err, "failed to generate access", "")
 		return
 	}
 	h.recordDownload(r.Context(), key, "", referenceSHA, dl.ExpiresAt)
 	httputil.JSON(w, http.StatusOK, dl)
-}
-
-// downloadFailureReason names why the storage service could not give a link
-// for a reference that did resolve.
-func downloadFailureReason(err error) string {
-	var rejection *RemoteRejection
-	switch {
-	case errors.Is(err, corestorage.ErrNotFound),
-		errors.As(err, &rejection) && rejection.StatusCode == http.StatusNotFound:
-		return "not_found"
-	case errors.Is(err, corestorage.ErrInvalidKey):
-		return "invalid_key"
-	case isUpstreamFailure(err):
-		return "upstream_failed"
-	default:
-		return "failed"
-	}
 }
 
 // recordDownload writes a STORAGE READ audit event for a download link issued
@@ -415,6 +375,39 @@ func downloadOf(ctx context.Context, svc Service, value string) (fileDownload, e
 		MimeType:    dl.ContentType,
 		Disposition: dl.Disposition,
 	}, nil
+}
+
+// failureReason names why a Service call failed, for audit records. The cases
+// match writeServiceError. A RemoteRejection other than 404 is owner_rejected
+// (the owning service refused the caller's request); an upstreamFailure is
+// upstream_failed (the owner or the route to it failed).
+func failureReason(err error) string {
+	var tooLarge *corestorage.FileTooLargeError
+	var mismatch *corestorage.ExtensionMismatchError
+	var rejection *RemoteRejection
+	var failure *upstreamFailure
+	switch {
+	case errors.Is(err, corestorage.ErrInvalidKey):
+		return "invalid_key"
+	case errors.Is(err, corestorage.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, corestorage.ErrInvalidSize):
+		return "invalid_size"
+	case errors.As(err, &tooLarge):
+		return "too_large"
+	case errors.Is(err, corestorage.ErrContentTypeNotAllowed):
+		return "content_type_not_allowed"
+	case errors.As(err, &mismatch):
+		return "extension_mismatch"
+	case errors.As(err, &rejection) && rejection.StatusCode == http.StatusNotFound:
+		return "not_found"
+	case errors.As(err, &rejection):
+		return "owner_rejected"
+	case errors.As(err, &failure):
+		return "upstream_failed"
+	default:
+		return "failed"
+	}
 }
 
 // writeServiceError answers a failed Service call the way core/storage's and

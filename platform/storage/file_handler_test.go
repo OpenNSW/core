@@ -650,6 +650,34 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 	})
 }
 
+func TestFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"invalid key", corestorage.ErrInvalidKey, "invalid_key"},
+		{"not found", corestorage.ErrNotFound, "not_found"},
+		{"invalid size", corestorage.ErrInvalidSize, "invalid_size"},
+		{"too large", &corestorage.FileTooLargeError{Limit: 1 << 20}, "too_large"},
+		{"content type", corestorage.ErrContentTypeNotAllowed, "content_type_not_allowed"},
+		{"extension mismatch", &corestorage.ExtensionMismatchError{Extension: ".txt", MediaType: "application/pdf"}, "extension_mismatch"},
+		{"owner 404", &RemoteRejection{StatusCode: http.StatusNotFound, err: errors.New("missing")}, "not_found"},
+		{"owner rejected", &RemoteRejection{StatusCode: http.StatusUnsupportedMediaType, err: errors.New("type")}, "owner_rejected"},
+		{"upstream", &upstreamFailure{err: errors.New("dial")}, "upstream_failed"},
+		{"wrapped rejection", fmt.Errorf("proxy: %w", &RemoteRejection{StatusCode: http.StatusBadRequest, err: errors.New("bad")}), "owner_rejected"},
+		{"other", errors.New("boom"), "failed"},
+		{"nil", nil, "failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := failureReason(tt.err); got != tt.want {
+				t.Errorf("failureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFileHandler_UploadRejects(t *testing.T) {
 	stack, err := New(context.Background(), localConfig(t, "http://localhost:8080"), nil)
 	if err != nil {
