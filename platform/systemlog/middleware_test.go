@@ -51,7 +51,7 @@ func TestMiddlewareLogsCallerWithoutPayload(t *testing.T) {
 
 	raw := buf.String()
 	assertLogOmits(t, raw,
-		"super-secret-token", "a@example.com", "+94111", payload, response, "203.0.113.10")
+		"super-secret-token", "a@example.com", "+94111", payload, response)
 	line := decodeLine(t, buf.Bytes())
 	assertEqual(t, "category", line["category"], "system")
 	assertEqual(t, "msg", line["msg"], "http request")
@@ -60,6 +60,7 @@ func TestMiddlewareLogsCallerWithoutPayload(t *testing.T) {
 	assertEqual(t, "pattern", line["pattern"], "POST /api/v1/tasks/{id}")
 	assertEqual(t, "callerKind", line["callerKind"], "user")
 	assertEqual(t, "callerID", line["callerID"], "user-1")
+	assertEqual(t, "clientIP", line["clientIP"], "203.0.113.10")
 	assertEqual(t, "status", line["status"], float64(http.StatusCreated))
 	assertEqual(t, "requestBytes", line["requestBytes"], float64(len(payload)))
 	assertEqual(t, "responseBytes", line["responseBytes"], float64(len(response)))
@@ -152,6 +153,7 @@ func TestMiddlewareAnonymousWhenUnauthenticated(t *testing.T) {
 	assertEqual(t, "security.reason", securityLine["reason"], "unauthenticated")
 	assertEqual(t, "security.status", securityLine["status"], float64(http.StatusUnauthorized))
 	assertEqual(t, "security.path", securityLine["path"], "/webhooks/slpa")
+	assertKeysPresent(t, securityLine, "clientIP")
 	assertKeysAbsent(t, securityLine, "requestBody", "responseBody", "query")
 }
 
@@ -487,6 +489,44 @@ type sendFile struct {
 func (s *sendFile) ReadFrom(r io.Reader) (int64, error) {
 	s.used = true
 	return io.Copy(&s.buf, r)
+}
+
+func TestClientIP(t *testing.T) {
+	tests := []struct {
+		name string
+		mod  func(*http.Request)
+		want string
+	}{
+		{
+			name: "X-Forwarded-For last hop",
+			mod: func(r *http.Request) {
+				// Client-spoofed first hop; ingress appends the TCP peer last.
+				r.Header.Set("X-Forwarded-For", "198.51.100.7, 203.0.113.10")
+				r.RemoteAddr = "10.0.0.1:443"
+			},
+			want: "203.0.113.10",
+		},
+		{
+			name: "X-Real-IP",
+			mod: func(r *http.Request) {
+				r.Header.Set("X-Real-IP", "198.51.100.9")
+				r.RemoteAddr = "10.0.0.1:443"
+			},
+			want: "198.51.100.9",
+		},
+		{
+			name: "RemoteAddr host",
+			mod:  func(r *http.Request) { r.RemoteAddr = "203.0.113.10:54321" },
+			want: "203.0.113.10",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			tt.mod(req)
+			assertEqual(t, "clientIP", clientIP(req), tt.want)
+		})
+	}
 }
 
 func decodeLine(t *testing.T, raw []byte) map[string]any {
