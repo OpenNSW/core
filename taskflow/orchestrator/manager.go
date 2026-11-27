@@ -112,6 +112,7 @@ type TaskManager struct {
 	artifacts           *artifact.Set
 	pluginsRegistry     *plugins.Registry
 	extensionsRegistry  *extensions.Registry
+	dispatcher          Dispatcher
 	onTaskCompleted     TaskCompletedCallback
 	taskWorkflowManager engine.TemporalManager
 	logger              *slog.Logger
@@ -149,6 +150,7 @@ func NewTaskManager(
 		taskWorkflowManager: taskWorkflowManager,
 		renderer:            renderer,
 		logger:              slog.Default(),
+		dispatcher:          goDispatcher{},
 	}
 	for _, opt := range opts {
 		opt(tm)
@@ -471,7 +473,7 @@ func (tm *TaskManager) CompleteTaskStepByToken(ctx context.Context, token string
 //  5. The submission is persisted with the state ADVANCING, guarded by the step and the seq read in
 //     step 1. If the workflow has already started the next step this matches no row and is dropped;
 //     the submission reached the workflow through the Activity result either way.
-//  6. Post-resume extensions start in the background (best effort, not awaited).
+//  6. Post-resume extensions are handed to the Dispatcher (best effort, not awaited).
 //
 // Returning nil means the workflow accepted the step; the row shows ADVANCING (or the next step)
 // from then on. Clients should refetch the task rather than assume the state.
@@ -508,11 +510,12 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 		return err
 	}
 
-	// Pre-resume extensions (blocking, read-only) receive deep copies of the record and payload so
-	// they can validate/inspect them but cannot mutate the data that gets persisted or sent to the
-	// workflow.
-	preResumeRecord := record.DeepCopy()
-	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, stepTemplate.Extensions, deepcopy.Map(payload), true); err != nil {
+	// Both phases fire for this run of the step, whichever seq the row has moved on to by then.
+	occ := occurrence{taskID: taskID, stepID: stepID, seq: seq}
+
+	// Pre-resume extensions (guard) receive deep copies of the record and payload, so they can
+	// inspect them but cannot change what gets persisted or sent to the workflow.
+	if err := tm.fire(ctx, types.PhasePreResume, occ, record, payload, stepTemplate.Extensions); err != nil {
 		return err
 	}
 
@@ -550,24 +553,10 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 		record.Data, record.State, record.Seq = data, store.StateAdvancing, seq+1
 	}
 
-	// Post-resume extensions (non-blocking, immutable, async).
-	if tm.extensionsRegistry != nil && len(stepTemplate.Extensions) > 0 {
-		// Deep copy the payload and record so extensions cannot mutate the data
-		// that was persisted/sent to the workflow (the read-only contract). As a
-		// bonus this keeps the async goroutine from sharing nested maps/slices
-		// with the live data, avoiding concurrent-map data races.
-		copiedPayload := deepcopy.Map(payload)
-		copiedRecord := record.DeepCopy()
-		copiedRecord.Data = deepcopy.Map(data)
-
-		// Use context.WithoutCancel to propagate tracing/telemetry context without cancellation
-		bgCtx := context.WithoutCancel(ctx)
-
-		// Execute in background; errors are logged inside runExtensions, not returned to client.
-		go func() {
-			_ = tm.runExtensions(bgCtx, &copiedRecord, types.PhasePostResume, stepTemplate.Extensions, copiedPayload, false)
-		}()
-	}
+	// Post-resume extensions (notify) see the record with the submission in it, whether or not the
+	// persist above matched, and are handed to the Dispatcher; their errors never reach the caller.
+	record.Data = data
+	_ = tm.fire(ctx, types.PhasePostResume, occ, record, payload, stepTemplate.Extensions)
 
 	return nil
 }
@@ -677,9 +666,9 @@ func (tm *TaskManager) submissionData(ctx context.Context, record store.TaskReco
 // checkRequiredPreResume returns ErrStepNotGuarded unless step declares, in its PRE_RESUME phase,
 // every extension the TaskManager requires (WithRequiredPreResumeExtensions). With none required it
 // allows everything, as before. With some required and no extensions registry, it refuses every
-// step: runExtensions would skip the extensions, so nothing would check the caller.
+// step: fire would skip the extensions, so nothing would check the caller.
 //
-// That an id is declared is enough here. runExtensions refuses a declared PRE_RESUME extension the
+// That an id is declared is enough here. fire refuses a declared PRE_RESUME extension the
 // registry does not know, so a required extension that was never registered still fails closed.
 func (tm *TaskManager) checkRequiredPreResume(step types.StepTemplate) error {
 	if len(tm.requiredPreResume) == 0 {
@@ -704,37 +693,6 @@ func declaresExtension(extensions []types.ExtensionConfig, id string, phase type
 		}
 	}
 	return false
-}
-
-// runExtensions executes the configured extensions matching phase against the
-// record. When stopOnError is true (pre-resume), the first failure aborts and is
-// returned; otherwise (post-resume) failures are logged and execution continues.
-func (tm *TaskManager) runExtensions(ctx context.Context, record *store.TaskRecord, phase types.ExecutionPhase, extensions []types.ExtensionConfig, payload map[string]any, stopOnError bool) error {
-	if tm.extensionsRegistry == nil {
-		return nil
-	}
-	for _, extCfg := range extensions {
-		if extCfg.Phase != phase {
-			continue
-		}
-		ext, registered := tm.extensionsRegistry.Get(extCfg.ID)
-		if !registered {
-			err := fmt.Errorf("%s extension %q configured but not registered", phase, extCfg.ID)
-			if stopOnError {
-				return err
-			}
-			tm.logger.ErrorContext(ctx, "extension not registered", "phase", phase, "extension_id", extCfg.ID)
-			continue
-		}
-		if err := ext.Execute(ctx, record, payload, extCfg.Properties); err != nil {
-			err = fmt.Errorf("%s extension %q failed: %w", phase, extCfg.ID, err)
-			if stopOnError {
-				return err
-			}
-			tm.logger.ErrorContext(ctx, "extension execution failed", "phase", phase, "extension_id", extCfg.ID, "error", err)
-		}
-	}
-	return nil
 }
 
 // GetTaskRenderInfo retrieves a task record and dynamically decorates it with rich render metadata
