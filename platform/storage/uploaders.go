@@ -6,7 +6,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"mime"
 
 	corestorage "github.com/OpenNSW/core/storage"
@@ -78,27 +77,10 @@ func machineClient(base []string, extra map[string][]string) typePolicy {
 	}
 }
 
-// logged records the uploads an Uploader prepares for a machine client, and
-// those it refuses or fails.
-type logged struct{ next Uploader }
-
-func (l logged) Upload(ctx context.Context, filename string, size int64, mimeType string) (*corestorage.FileMetadata, error) {
-	meta, err := l.next.Upload(ctx, filename, size, mimeType)
-	var clientID string
-	if p, ok := authn.FromContext(ctx); ok {
-		clientID = p.ClientID
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "storage: machine upload not prepared", "client_id", clientID, "mime_type", mimeType, "size", size, "error", err)
-		return nil, err
-	}
-	slog.InfoContext(ctx, "storage: machine upload prepared", "client_id", clientID, "mime_type", mimeType, "size", size)
-	return meta, nil
-}
-
 // newMachineUploads returns the Uploader behind the internal upload route:
 // what users may upload (cfg.AllowedUploadTypes) plus the extra types each
-// machine client is granted, by client ID.
+// machine client is granted, by client ID. Prepare success and failure are
+// recorded by FileHandler.serveUpload (PRESIGN_UPLOAD audit).
 //
 // It prepares uploads with a core Service of its own over the same driver and
 // without an upload allowlist, because core compares the whole MIME string with
@@ -111,7 +93,7 @@ func newMachineUploads(driver corestorage.StorageDriver, cfg Config, extra map[s
 		corestorage.WithMaxUploadSize(cfg.MaxUploadBytes),
 		corestorage.WithUploadTypeExtensions(cfg.UploadTypeExtensions),
 	)
-	return logged{limitTypes(svc, machineClient(cfg.AllowedUploadTypes, extra))}
+	return limitTypes(svc, machineClient(cfg.AllowedUploadTypes, extra))
 }
 
 // typeSet returns the set of the given media types.
