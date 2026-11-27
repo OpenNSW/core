@@ -5,14 +5,18 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"path"
+	"strings"
 
 	"github.com/OpenNSW/core/httputil"
 	corestorage "github.com/OpenNSW/core/storage"
 
+	"github.com/OpenNSW/core/platform/audit"
 	"github.com/OpenNSW/core/platform/authn"
 	"github.com/OpenNSW/core/platform/storage/fileaccess"
 )
@@ -45,6 +49,9 @@ type FileHandler struct {
 	// strictBodies makes an upload request refuse what its contract
 	// otherwise ignores; see WithStrictRequestBodies.
 	strictBodies bool
+	// audit records each upload prepare (PRESIGN_UPLOAD) and each download
+	// link issued or refused (READ). Nil skips auditing.
+	audit audit.Auditor
 }
 
 // FileHandlerOption adjusts a FileHandler.
@@ -68,6 +75,13 @@ func WithMachineUploads(u Uploader) FileHandlerOption {
 // request that can't be read is a 400.
 func WithStrictRequestBodies() FileHandlerOption {
 	return func(h *FileHandler) { h.strictBodies = true }
+}
+
+// WithAuditor records each upload prepare as a STORAGE PRESIGN_UPLOAD audit
+// event and each download link issued or refused as a STORAGE READ event. Nil
+// disables auditing.
+func WithAuditor(a audit.Auditor) FileHandlerOption {
+	return func(h *FileHandler) { h.audit = a }
 }
 
 // NewFileHandler creates a FileHandler over svc, resolving references with
@@ -155,14 +169,17 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 
 	meta, err := up.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
+		h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, "", "", failureReason(err))
 		h.writeServiceError(w, r, err, "failed to prepare upload", req.MimeType)
 		return
 	}
 	ref, err := h.refs.Issue(p, meta.Key, fileaccess.UploadScopes(p)...)
 	if err != nil {
+		h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), "", "issue_failed")
 		httputil.InternalServerError(w, r, "storage: failed to issue a file reference", err)
 		return
 	}
+	h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), h.ownerReferenceSHA(ref, meta.Key), "")
 	httputil.JSON(w, http.StatusOK, uploadResponse{
 		Key:       ref,
 		Name:      meta.Name,
@@ -170,6 +187,70 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 		Size:      meta.Size,
 		MimeType:  meta.MimeType,
 	})
+}
+
+// hashReference is the hex SHA-256 of a file reference. Both sides of a proxied
+// request record this of the owning service's reference, so the records match
+// without either log carrying the reference itself.
+func hashReference(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+// proxied reports whether svc stores the owning service's file reference
+// rather than a storage key.
+func (h *FileHandler) proxied() bool {
+	_, ok := h.svc.(fileDownloader)
+	return ok
+}
+
+// recordedKey returns the identifier of a stored file that audit records
+// carry. In proxy mode that is hashReference of the owning service's file
+// reference. Otherwise it is the storage key.
+func (h *FileHandler) recordedKey(value string) string {
+	if value == "" || !h.proxied() {
+		return value
+	}
+	return hashReference(value)
+}
+
+// ownerReferenceSHA is the hex SHA-256 of the owning service's file reference.
+// issuedOrResolved is the reference this service issued (upload) or resolved
+// (download). stored is the value behind it: a storage key on the owner, or the
+// owner's reference in proxy mode. Both sides of a proxied request record the
+// same hash.
+func (h *FileHandler) ownerReferenceSHA(issuedOrResolved, stored string) string {
+	if h.proxied() {
+		return hashReference(stored)
+	}
+	return hashReference(issuedOrResolved)
+}
+
+// recordUploadPrepare writes a STORAGE PRESIGN_UPLOAD audit event for an
+// upload prepare. It names mime, size, extension, storageKey (see
+// recordedKey) and referenceSHA (see ownerReferenceSHA), not the filename or a
+// file reference. reason names why a prepare was refused and is empty on
+// success.
+func (h *FileHandler) recordUploadPrepare(
+	ctx context.Context, filename, mimeType string, size int64, storageKey, referenceSHA, reason string,
+) {
+	if h.audit == nil {
+		return
+	}
+	meta := map[string]any{
+		"mime_type": mimeType,
+		"size":      size,
+	}
+	if ext := strings.ToLower(path.Ext(filename)); ext != "" {
+		meta["extension"] = ext
+	}
+	if referenceSHA != "" {
+		meta["reference_sha256"] = referenceSHA
+	}
+	if reason != "" {
+		meta["reason"] = reason
+	}
+	h.audit.Audit(ctx, audit.StorageEvent(audit.ActionPresignUpload, storageKey, reason != "", meta))
 }
 
 // Download returns a time-limited URL to download the file the reference in
@@ -189,28 +270,64 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 	value, err := h.refs.Resolve(p, ref, fileaccess.ScopeRead)
 	switch {
 	case err == nil:
-	case errors.Is(err, fileaccess.ErrInvalid), errors.Is(err, fileaccess.ErrNotYours):
-		// One answer for both, so the route says nothing about a value it
-		// will not serve. A raw storage key is one: it grants nothing.
+	case errors.Is(err, fileaccess.ErrInvalid):
+		// One answer for ErrInvalid and ErrNotYours, so the route says nothing
+		// about a value it will not serve. A raw storage key is one: it grants
+		// nothing. The audit record still tells them apart.
+		h.recordDownload(r.Context(), "", "invalid_reference", "", 0)
+		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
+		return
+	case errors.Is(err, fileaccess.ErrNotYours):
+		h.recordDownload(r.Context(), "", "not_yours", "", 0)
 		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
 		return
 	case errors.Is(err, fileaccess.ErrScope):
+		h.recordDownload(r.Context(), "", "wrong_scope", "", 0)
 		httputil.Error(w, r, http.StatusForbidden, "this file reference can't be used to open the file; save the form to view it")
 		return
 	case errors.Is(err, fileaccess.ErrExpired):
+		h.recordDownload(r.Context(), "", "expired", "", 0)
 		httputil.Error(w, r, http.StatusGone, "this file reference has expired; reload to get a new one")
 		return
 	default:
+		h.recordDownload(r.Context(), "", "resolve_failed", "", 0)
 		httputil.InternalServerError(w, r, "storage: failed to resolve a file reference", err)
 		return
 	}
 
+	key := h.recordedKey(value)
+	referenceSHA := h.ownerReferenceSHA(ref, value)
 	dl, err := downloadOf(r.Context(), h.svc, value)
 	if err != nil {
+		h.recordDownload(r.Context(), key, failureReason(err), referenceSHA, 0)
 		h.writeServiceError(w, r, err, "failed to generate access", "")
 		return
 	}
+	h.recordDownload(r.Context(), key, "", referenceSHA, dl.ExpiresAt)
 	httputil.JSON(w, http.StatusOK, dl)
+}
+
+// recordDownload writes a STORAGE READ audit event for a download link issued
+// (reason empty) or refused. storageKey is the recorded key (see recordedKey)
+// and is empty when the reference did not resolve: a refused reference is
+// never recorded. referenceSHA is ownerReferenceSHA of the owning service's
+// file reference once one has been resolved, so a proxy record and the owning
+// service's record of the same request share it. reason names why a link was
+// refused; expiresAt is the issued link's expiry in Unix seconds.
+func (h *FileHandler) recordDownload(ctx context.Context, storageKey, reason, referenceSHA string, expiresAt int64) {
+	if h.audit == nil {
+		return
+	}
+	meta := map[string]any{}
+	if referenceSHA != "" {
+		meta["reference_sha256"] = referenceSHA
+	}
+	if reason != "" {
+		meta["reason"] = reason
+	} else {
+		meta["expires_at"] = expiresAt
+	}
+	h.audit.Audit(ctx, audit.StorageEvent(audit.ActionRead, storageKey, reason != "", meta))
 }
 
 // fileDownload is what a download returns: a time-limited URL to the file,
@@ -258,6 +375,39 @@ func downloadOf(ctx context.Context, svc Service, value string) (fileDownload, e
 		MimeType:    dl.ContentType,
 		Disposition: dl.Disposition,
 	}, nil
+}
+
+// failureReason names why a Service call failed, for audit records. The cases
+// match writeServiceError. A RemoteRejection other than 404 is owner_rejected
+// (the owning service refused the caller's request); an upstreamFailure is
+// upstream_failed (the owner or the route to it failed).
+func failureReason(err error) string {
+	var tooLarge *corestorage.FileTooLargeError
+	var mismatch *corestorage.ExtensionMismatchError
+	var rejection *RemoteRejection
+	var failure *upstreamFailure
+	switch {
+	case errors.Is(err, corestorage.ErrInvalidKey):
+		return "invalid_key"
+	case errors.Is(err, corestorage.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, corestorage.ErrInvalidSize):
+		return "invalid_size"
+	case errors.As(err, &tooLarge):
+		return "too_large"
+	case errors.Is(err, corestorage.ErrContentTypeNotAllowed):
+		return "content_type_not_allowed"
+	case errors.As(err, &mismatch):
+		return "extension_mismatch"
+	case errors.As(err, &rejection) && rejection.StatusCode == http.StatusNotFound:
+		return "not_found"
+	case errors.As(err, &rejection):
+		return "owner_rejected"
+	case errors.As(err, &failure):
+		return "upstream_failed"
+	default:
+		return "failed"
+	}
 }
 
 // writeServiceError answers a failed Service call the way core/storage's and

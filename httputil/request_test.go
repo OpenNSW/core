@@ -75,6 +75,55 @@ func TestDecodeJSON_Errors(t *testing.T) {
 	}
 }
 
+// Whatever follows the first value is refused as before, and the error says the value
+// decoded, so the destination holds it.
+func TestDecodeJSON_TrailingDataKeepsTheValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		limit int64
+		want  error
+	}{
+		{"second value", `{"name":"a"}{"name":"b"}`, 1024, ErrBodyInvalid},
+		{"trailing garbage", `{"name":"a"} x`, 1024, ErrBodyInvalid},
+		{"trailing value over the limit", `{"name":"a"} {"name":"bbbbbbbbbbbbbbbb"}`, 20, ErrBodyTooLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst, err := decodeBody(t, tt.body, tt.limit)
+			if !errors.Is(err, ErrTrailingData) || !errors.Is(err, tt.want) {
+				t.Fatalf("expected ErrTrailingData and %v, got %v", tt.want, err)
+			}
+			if dst.Name != "a" {
+				t.Fatalf("expected the first value to be decoded, got %+v", dst)
+			}
+		})
+	}
+}
+
+// An error in or before the first value is not ErrTrailingData: nothing decoded.
+func TestDecodeJSON_ErrorsBeforeTheValueAreNotTrailingData(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		limit int64
+	}{
+		{"value over the limit", `{"name":"abc"}`, int64(len(`{"name":"abc"}`)) - 1},
+		{"empty", ``, 1024},
+		{"malformed", `{"name":`, 1024},
+		{"wrong type", `{"count":"two"}`, 1024},
+		{"unknown field", `{"name":"a","extra":1}`, 1024},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := decodeBody(t, tt.body, tt.limit)
+			if err == nil || errors.Is(err, ErrTrailingData) {
+				t.Fatalf("expected an error that is not ErrTrailingData, got %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeJSON_NamesUnknownField(t *testing.T) {
 	_, err := decodeBody(t, `{"name":"a","extra":1}`, 1024)
 
@@ -205,13 +254,27 @@ func TestWriteDecodeError(t *testing.T) {
 }
 
 func TestWriteDecodeError_AnswersDecodeJSONErrors(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"abcdef"}`))
-	w := httptest.NewRecorder()
-	err := DecodeJSON(w, r, 4, &decodeTarget{})
+	tests := []struct {
+		name  string
+		body  string
+		limit int64
+		want  int
+	}{
+		{"value over the limit", `{"name":"abcdef"}`, 4, http.StatusRequestEntityTooLarge},
+		{"trailing value over the limit", `{"name":"a"} {"name":"bbbbbbbbbbbbbbbb"}`, 20, http.StatusRequestEntityTooLarge},
+		{"second value", `{"name":"a"}{"name":"b"}`, 1024, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			err := DecodeJSON(w, r, tt.limit, &decodeTarget{})
 
-	WriteDecodeError(w, r, err)
+			WriteDecodeError(w, r, err)
 
-	if w.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d", w.Code)
+			if w.Code != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, w.Code)
+			}
+		})
 	}
 }

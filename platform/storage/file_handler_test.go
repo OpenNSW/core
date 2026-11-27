@@ -6,7 +6,9 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	corestorage "github.com/OpenNSW/core/storage"
 	"github.com/OpenNSW/core/storage/drivers"
 
+	"github.com/OpenNSW/core/platform/audit"
 	"github.com/OpenNSW/core/platform/authn"
 	"github.com/OpenNSW/core/platform/storage/fileaccess"
 	"github.com/OpenNSW/core/platform/storage/filetoken"
@@ -418,6 +421,261 @@ func TestFileHandler_UploadReturnsAReference(t *testing.T) {
 	assertStatus(t, download(h, read, user("alice")), http.StatusNotFound)
 	putFile(t, body["upload_url"].(string), "application/pdf", 10)
 	assertDownloadURL(t, download(h, read, user("alice")))
+}
+
+// captureAuditor records the last audit event.
+type captureAuditor struct{ last audit.Event }
+
+func (c *captureAuditor) Audit(_ context.Context, e audit.Event) { c.last = e }
+
+func TestFileHandler_UploadPrepareIsAudited(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	stack, err := New(context.Background(), localConfig(t, srv.URL), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack.LocalContent.RegisterRoutes(mux)
+	access, _ := testFileAccess(t)
+	cap := &captureAuditor{}
+	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
+	rec := upload(h, user("alice"), `{"filename":"invoice.PDF","mime_type":"application/pdf","size":10}`)
+	assertStatus(t, rec, http.StatusOK)
+
+	if cap.last.EventType != audit.EventStorage || cap.last.Action != audit.ActionPresignUpload {
+		t.Fatalf("audit = %+v, want STORAGE PRESIGN_UPLOAD", cap.last)
+	}
+	if cap.last.Failure || cap.last.TargetID == "" {
+		t.Fatalf("audit failure=%v targetID=%q, want success with a storage key", cap.last.Failure, cap.last.TargetID)
+	}
+	if cap.last.Metadata["mime_type"] != "application/pdf" || cap.last.Metadata["extension"] != ".pdf" {
+		t.Errorf("metadata = %v, want mime application/pdf extension .pdf", cap.last.Metadata)
+	}
+	if _, ok := cap.last.Metadata["kind"]; ok {
+		t.Errorf("metadata names the route kind: %v", cap.last.Metadata)
+	}
+	if _, ok := cap.last.Metadata["client_id"]; ok {
+		t.Errorf("metadata repeats the actor as client_id: %v", cap.last.Metadata)
+	}
+	var uploaded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &uploaded); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+	issued, _ := uploaded["key"].(string)
+	if cap.last.Metadata["reference_sha256"] != hashReference(issued) {
+		t.Errorf("reference_sha256 = %v, want the hash of the reference issued to the caller", cap.last.Metadata["reference_sha256"])
+	}
+	if _, ok := cap.last.Metadata["filename"]; ok {
+		t.Errorf("metadata names the filename: %v", cap.last.Metadata)
+	}
+
+	cap.last = audit.Event{}
+	assertStatus(t, upload(h, user("alice"), `{"filename":"x.zip","mime_type":"application/zip","size":10}`), http.StatusUnsupportedMediaType)
+	if !cap.last.Failure || cap.last.Action != audit.ActionPresignUpload || cap.last.Metadata["reason"] != "content_type_not_allowed" {
+		t.Fatalf("refused upload audit = %+v, want failed PRESIGN_UPLOAD with reason content_type_not_allowed", cap.last)
+	}
+	if _, ok := cap.last.Metadata["error"]; ok {
+		t.Errorf("metadata carries error text: %v", cap.last.Metadata)
+	}
+}
+
+func TestFileHandler_DownloadIsAudited(t *testing.T) {
+	stack, err := New(context.Background(), localConfig(t, "http://localhost:8080"), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	access, now := testFileAccess(t)
+	cap := &captureAuditor{}
+	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
+
+	key := storedKey(t, stack.Service)
+	token, err := access.Issue(user("alice"), key, fileaccess.ScopeRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := access.Issue(user("alice"), reservedKey(t, stack.Service), fileaccess.ScopeRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitOnly, err := access.Issue(user("alice"), key, fileaccess.ScopeSubmit)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// refused checks the audit record of a download the handler answered with
+	// status: a failed STORAGE READ with the given reason and no target,
+	// because a reference that did not resolve names no stored file.
+	refused := func(name, ref string, p *authn.Principal, status int, reason string) {
+		t.Helper()
+		cap.last = audit.Event{}
+		assertStatus(t, download(h, ref, p), status)
+		e := cap.last
+		if e.EventType != audit.EventStorage || e.Action != audit.ActionRead || e.TargetType != audit.TargetStorage {
+			t.Fatalf("%s: audit = %+v, want STORAGE READ on STORAGE_OBJECT", name, e)
+		}
+		if !e.Failure || e.Metadata["reason"] != reason {
+			t.Errorf("%s: failure=%v reason=%v, want a failure with reason %q", name, e.Failure, e.Metadata["reason"], reason)
+		}
+		if _, ok := e.Metadata["error"]; ok {
+			t.Errorf("%s: metadata carries error text: %v", name, e.Metadata)
+		}
+		metaJSON, _ := json.Marshal(e.Metadata)
+		if e.TargetID == ref || strings.Contains(string(metaJSON), ref) {
+			t.Errorf("%s: audit names the reference: %+v", name, e)
+		}
+	}
+
+	// A refusal before the reference resolves has no target.
+	t.Run("someone else's reference", func(t *testing.T) {
+		refused("not yours", token, user("bob"), http.StatusForbidden, "not_yours")
+		if cap.last.TargetID != "" {
+			t.Errorf("TargetID = %q, want empty", cap.last.TargetID)
+		}
+	})
+	t.Run("not a reference", func(t *testing.T) {
+		refused("invalid", key, user("alice"), http.StatusForbidden, "invalid_reference")
+		if cap.last.TargetID != "" {
+			t.Errorf("TargetID = %q, want empty", cap.last.TargetID)
+		}
+	})
+	t.Run("wrong scope", func(t *testing.T) {
+		refused("scope", submitOnly, user("alice"), http.StatusForbidden, "wrong_scope")
+		if cap.last.TargetID != "" {
+			t.Errorf("TargetID = %q, want empty", cap.last.TargetID)
+		}
+	})
+	t.Run("a file the backend does not hold", func(t *testing.T) {
+		refused("not found", missing, user("alice"), http.StatusNotFound, "not_found")
+		if cap.last.TargetID == "" {
+			t.Error("TargetID is empty, want the storage key the reference resolved to")
+		}
+		if cap.last.Metadata["reference_sha256"] != hashReference(missing) {
+			t.Errorf("reference_sha256 = %v, want the hash of the reference that resolved", cap.last.Metadata["reference_sha256"])
+		}
+	})
+	t.Run("a link issued", func(t *testing.T) {
+		cap.last = audit.Event{}
+		assertDownloadURL(t, download(h, token, user("alice")))
+		e := cap.last
+		if e.EventType != audit.EventStorage || e.Action != audit.ActionRead || e.TargetType != audit.TargetStorage {
+			t.Fatalf("audit = %+v, want STORAGE READ on STORAGE_OBJECT", e)
+		}
+		if e.Failure || e.TargetID != key {
+			t.Errorf("failure=%v targetID=%q, want success on %q", e.Failure, e.TargetID, key)
+		}
+		if exp, _ := e.Metadata["expires_at"].(int64); exp <= time.Now().Unix() {
+			t.Errorf("expires_at = %v, want a future time", e.Metadata["expires_at"])
+		}
+		if e.Metadata["reference_sha256"] != hashReference(token) {
+			t.Errorf("reference_sha256 = %v, want the hash of the reference that resolved", e.Metadata["reference_sha256"])
+		}
+		if e.TargetID == token || e.Metadata["reference_sha256"] == token {
+			t.Errorf("audit names the reference: %+v", e)
+		}
+	})
+	t.Run("an expired reference", func(t *testing.T) {
+		*now = now.Add(time.Hour)
+		refused("expired", token, user("alice"), http.StatusGone, "expired")
+	})
+	t.Run("no principal is not audited", func(t *testing.T) {
+		cap.last = audit.Event{}
+		assertStatus(t, download(h, token, nil), http.StatusUnauthorized)
+		if cap.last.Action != "" {
+			t.Errorf("audit = %+v, want none", cap.last)
+		}
+	})
+}
+
+func TestFileHandler_DownloadFailuresAreAudited(t *testing.T) {
+	stack, err := New(context.Background(), localConfig(t, "http://localhost:8080"), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cap := &captureAuditor{}
+	assertStatus(t, download(NewFileHandler(stack.Service, failingRefs{}, WithAuditor(cap)), "ref", user("alice")), http.StatusInternalServerError)
+	if !cap.last.Failure || cap.last.Action != audit.ActionRead || cap.last.Metadata["reason"] != "resolve_failed" || cap.last.TargetID != "" {
+		t.Errorf("audit = %+v, want a failed READ with reason resolve_failed and no target", cap.last)
+	}
+}
+
+// In proxy mode the stored value is the owning service's file reference, so
+// the records carry its SHA-256 instead.
+func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
+	access, _ := testFileAccess(t)
+	stack := newProxyStack(t, ownerToken)
+	cap := &captureAuditor{}
+	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
+	hashOf := func(v string) string {
+		sum := sha256.Sum256([]byte(v))
+		return hex.EncodeToString(sum[:])
+	}
+
+	t.Run("download", func(t *testing.T) {
+		ownerRef := storedKey(t, stack.Service)
+		token, err := access.Issue(user("alice"), ownerRef, fileaccess.ScopeRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertDownloadURL(t, download(h, token, user("alice")))
+		if cap.last.Action != audit.ActionRead || cap.last.Failure || cap.last.TargetID != hashOf(ownerRef) || cap.last.Metadata["reference_sha256"] != hashOf(ownerRef) {
+			t.Errorf("audit = %+v, want a READ on the hash of the owner's reference", cap.last)
+		}
+		metaJSON, _ := json.Marshal(cap.last.Metadata)
+		if cap.last.TargetID == ownerRef || strings.Contains(string(metaJSON), ownerRef) {
+			t.Errorf("audit names the owner's reference: %+v", cap.last)
+		}
+	})
+	t.Run("a refused link for a file the owner does not hold", func(t *testing.T) {
+		ownerRef := reservedKey(t, stack.Service)
+		token, err := access.Issue(user("alice"), ownerRef, fileaccess.ScopeRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStatus(t, download(h, token, user("alice")), http.StatusNotFound)
+		if !cap.last.Failure || cap.last.Metadata["reason"] != "not_found" || cap.last.TargetID != hashOf(ownerRef) || cap.last.Metadata["reference_sha256"] != hashOf(ownerRef) {
+			t.Errorf("audit = %+v, want a failed READ (not_found) on the hash of the owner's reference", cap.last)
+		}
+		metaJSON, _ := json.Marshal(cap.last.Metadata)
+		if _, ok := cap.last.Metadata["error"]; ok || strings.Contains(string(metaJSON), ownerRef) {
+			t.Errorf("audit names the owner's reference or carries error text: %+v", cap.last)
+		}
+	})
+	t.Run("upload prepare", func(t *testing.T) {
+		rec := upload(h, user("alice"), `{"filename":"a.pdf","mime_type":"application/pdf","size":10}`)
+		assertStatus(t, rec, http.StatusOK)
+		if cap.last.Action != audit.ActionPresignUpload || cap.last.Failure || len(cap.last.TargetID) != sha256.Size*2 || cap.last.Metadata["reference_sha256"] != cap.last.TargetID {
+			t.Fatalf("audit = %+v, want a PRESIGN_UPLOAD on a SHA-256 hex digest", cap.last)
+		}
+	})
+}
+
+func TestFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"invalid key", corestorage.ErrInvalidKey, "invalid_key"},
+		{"not found", corestorage.ErrNotFound, "not_found"},
+		{"invalid size", corestorage.ErrInvalidSize, "invalid_size"},
+		{"too large", &corestorage.FileTooLargeError{Limit: 1 << 20}, "too_large"},
+		{"content type", corestorage.ErrContentTypeNotAllowed, "content_type_not_allowed"},
+		{"extension mismatch", &corestorage.ExtensionMismatchError{Extension: ".txt", MediaType: "application/pdf"}, "extension_mismatch"},
+		{"owner 404", &RemoteRejection{StatusCode: http.StatusNotFound, err: errors.New("missing")}, "not_found"},
+		{"owner rejected", &RemoteRejection{StatusCode: http.StatusUnsupportedMediaType, err: errors.New("type")}, "owner_rejected"},
+		{"upstream", &upstreamFailure{err: errors.New("dial")}, "upstream_failed"},
+		{"wrapped rejection", fmt.Errorf("proxy: %w", &RemoteRejection{StatusCode: http.StatusBadRequest, err: errors.New("bad")}), "owner_rejected"},
+		{"other", errors.New("boom"), "failed"},
+		{"nil", nil, "failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := failureReason(tt.err); got != tt.want {
+				t.Errorf("failureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestFileHandler_UploadRejects(t *testing.T) {
