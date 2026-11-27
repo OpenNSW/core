@@ -1,6 +1,6 @@
 # Using OpenNSW Core
 
-This repository is an open Go **software toolkit**: importable modules for
+This repository is an open Go **software library**: importable modules for
 building a National Single Window / paperless-trade (or similar) application.
 It is **not** a deployable country product, and it does **not** require a
 separate demo or sample application to use or to assess as open software.

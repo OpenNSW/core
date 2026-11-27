@@ -1,8 +1,9 @@
 # Documentation
 
-OpenNSW Core is documented as an **open software toolkit** (this repository
-alone). Indicator 5–style install, test, contribute, and use paths are covered
-below—no country deployment or separate demo app is part of that scope.
+OpenNSW Core is documented as an **open software library** (this repository
+alone: importable Go modules). Indicator 5–style install, test, contribute, and
+use paths are covered below—no country deployment or separate demo app is part
+of that scope.
 
 | Document | Purpose |
 | --- | --- |

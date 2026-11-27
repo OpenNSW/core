@@ -1,8 +1,8 @@
 # OpenNSW Core
 
-OpenNSW Core is an **open software toolkit** for building a National Single Window / paperless-trade (or similar) application. Indicator 5–style install, test, contribute, and use paths are covered below.
+OpenNSW Core is an **open software library** — a set of Go modules you import to build a National Single Window / paperless-trade (or similar) application. Indicator 5–style install, test, contribute, and use paths are covered below.
 
-This repository is importable Go packages (multiple modules), not a country deployment or a separate demo product. Applications you build with it live in their own repositories.
+This repository is the library itself (multiple Go modules), not a country deployment or a separate demo product. Applications you build with it live in their own repositories.
 
 ## What is a Single Window System?
 
@@ -14,7 +14,7 @@ A single window can give citizens or businesses one portal for end-to-end servic
 - Calls to external agency services
 - UI driven by workflow state
 
-These packages are building blocks for that kind of application; domain logic stays in yours.
+Use the packages as a library in your own application; domain logic stays there.
 
 ## Packages
 

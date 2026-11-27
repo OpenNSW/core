@@ -132,7 +132,7 @@ or change the module path. See [Releases](../releases.md).
 ## Deploy (running what these packages need)
 
 This repo does not deploy a national single-window product. “Running” the
-toolkit here means building and testing the modules (see [Test](#test) above).
+library here means building and testing the modules (see [Test](#test) above).
 For how an application imports the packages and which external systems they may
 need (Temporal, databases, storage, IdP), see [Using OpenNSW Core](../using.md).
 
