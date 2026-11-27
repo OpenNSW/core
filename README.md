@@ -1,6 +1,8 @@
 # OpenNSW Core
 
-A Go SDK for building **single window systems** — integrated service portals that orchestrate complex, multi-step government or enterprise workflows across multiple agencies and backend services.
+An open Go **software toolkit** (multi-module SDK) for building **National Single Window** / paperless-trade and similar single-window systems — integrated service portals that orchestrate complex, multi-step government or enterprise workflows across agencies and backend services.
+
+This repository is the toolkit itself: importable packages, not a country deployment or a separate demo product. Applications you build with it live in their own repositories.
 
 ## What is a Single Window System?
 
@@ -103,7 +105,7 @@ Versions below are taken from this tree (`go.mod` files, `Makefile`, `.github/wo
 | --- | --- | --- |
 | Go (root module) | 1.26.0 | `./go.mod` |
 | Go (`platform` module) | 1.26.4 | `platform/go.mod` |
-| golangci-lint (local + CI) | v2.11.2 | `Makefile` `GOLANGCI_VERSION`, CI `golangci-lint-action` |
+| golangci-lint (local + CI) | v2.15.0 | `Makefile` `GOLANGCI_VERSION`, CI `golangci-lint-action` |
 | Temporal Go SDK (root) | v1.51.0 | `./go.mod` `go.temporal.io/sdk` |
 | Temporal Go SDK (`temporal` module) | v1.50.0 | `temporal/go.mod` |
 | AWS SDK v2 (S3-related) | v1.48.0 | `./go.mod`, `storage/go.mod` |
@@ -158,7 +160,7 @@ The two-tier workflow design is central to single window systems:
 
 ## Full Wiring Example
 
-The following shows how to assemble the components into a working application (condensed from the reference implementation pattern):
+The following shows how to assemble the components into a working application in **your** codebase (illustrative wiring only — this repo does not ship a runnable product binary):
 
 ```go
 func Build(ctx context.Context, cfg *Config) (*App, error) {

@@ -1,8 +1,11 @@
 # Using OpenNSW Core
 
-This repository is a **Go SDK**: a set of importable modules for building a
-single-window application. It is not a deployable product. Your application
-owns HTTP routes, configuration, migrations, and process supervision.
+This repository is an open Go **software toolkit**: importable modules for
+building a National Single Window / paperless-trade (or similar) application.
+It is **not** a deployable country product, and it does **not** require a
+separate demo or sample application to use or to assess as open software.
+Your application owns HTTP routes, configuration, migrations, and process
+supervision.
 
 ## Modules
 
@@ -73,8 +76,11 @@ Package READMEs document each package's API. Taskflow also has:
 | Object storage | Using `storage` in production-like setups | `storage.TypeLocal` for local files; S3-compatible endpoint optional ([`storage` README](../storage/README.md)) |
 | OIDC/OAuth2 IdP | Using `authn` against real tokens | Any IdP that serves JWKS; configure `JWKSURL`, `Issuer`, `Audience` |
 
-This repository does **not** ship a product Compose stack. Country or product
-repos that depend on these modules provide their own deployable layout.
+This repository does **not** ship a product Compose stack. Downstream apps that
+import these modules provide their own deployable layout. For Digital Public
+Goods documentation (Indicator 5), “launch and run the software” means install
+the Go modules and run the documented tests and package flows in this repo—not
+boot a national single-window product from here.
 
 ## Behaviour callers can rely on
 

@@ -10,7 +10,7 @@ Set up a local environment, run tests, and send changes upstream to
 | [Go](https://go.dev/dl/) | Version in each module's `go.mod` (root module: `go 1.26.0`) | Build and test |
 | [Git](https://git-scm.com/downloads) | ≥ 2.9 | Clone and pull requests |
 | [Make](https://www.gnu.org/software/make/) | Any recent Make | `make setup`, `make test`, … |
-| [golangci-lint](https://golangci-lint.run/) | **v2.11.2** (see `Makefile` `GOLANGCI_VERSION` and CI) | Lint / format |
+| [golangci-lint](https://golangci-lint.run/) | **v2.15.0** (see `Makefile` `GOLANGCI_VERSION` and CI) | Lint / format |
 | [gitleaks](https://github.com/gitleaks/gitleaks) | Latest release | Pre-commit secret scan |
 | [addlicense](https://github.com/google/addlicense) | Latest (`go install`) | SPDX headers |
 
@@ -34,7 +34,7 @@ git remote add upstream https://github.com/OpenNSW/core.git
 make setup
 ```
 
-`make setup` installs `golangci-lint` **v2.11.2** and `addlicense`, and sets
+`make setup` installs `golangci-lint` **v2.15.0** and `addlicense`, and sets
 `core.hooksPath` to `.githooks`.
 
 Install gitleaks with your OS package manager or from
@@ -114,8 +114,8 @@ Rebase or merge `main` into your feature branch before the pull request if
 
 ## How a downstream project gets upstream fixes
 
-A product or country application that **requires** these modules upgrades its
-own `go.mod`:
+A downstream application that **requires** these modules upgrades its own
+`go.mod`:
 
 ```sh
 go get github.com/OpenNSW/core@main
@@ -131,9 +131,10 @@ or change the module path. See [Releases](../releases.md).
 
 ## Deploy (running what these packages need)
 
-This repo does not deploy a single-window product. For how an application
-imports the packages and which external systems they need (Temporal, databases,
-storage, IdP), see [Using OpenNSW Core](../using.md).
+This repo does not deploy a national single-window product. “Running” the
+toolkit here means building and testing the modules (see [Test](#test) above).
+For how an application imports the packages and which external systems they may
+need (Temporal, databases, storage, IdP), see [Using OpenNSW Core](../using.md).
 
 ## Project layout (short)
 
