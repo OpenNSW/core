@@ -1,20 +1,20 @@
 # OpenNSW Core
 
-An open Go **software toolkit** (multi-module SDK) for building **National Single Window** / paperless-trade and similar single-window systems — integrated service portals that orchestrate complex, multi-step government or enterprise workflows across agencies and backend services.
+OpenNSW Core is an **open software toolkit** for building a National Single Window / paperless-trade (or similar) application. Indicator 5–style install, test, contribute, and use paths are covered below.
 
-This repository is the toolkit itself: importable packages, not a country deployment or a separate demo product. Applications you build with it live in their own repositories.
+This repository is importable Go packages (multiple modules), not a country deployment or a separate demo product. Applications you build with it live in their own repositories.
 
 ## What is a Single Window System?
 
-A single window system provides citizens or businesses with one portal to complete end-to-end service applications (e.g. trade permits, licensing, consignment approvals) without navigating separate agency websites. Behind the scenes it:
+A single window can give citizens or businesses one portal for end-to-end service applications (for example trade permits or licensing) instead of separate agency websites. Behind the scenes that often involves:
 
-- Runs **long-lived workflows** that span days or weeks
-- Coordinates **interactive tasks** where humans submit forms, upload documents, or wait for agency review
-- Integrates **payment gateways** for fees and levies
-- Calls **external agency services** on the user's behalf
-- Renders **dynamic UI** driven by workflow state
+- Long-lived workflows that span days or weeks
+- Interactive tasks where people submit forms, upload documents, or wait for review
+- Payment gateways for fees
+- Calls to external agency services
+- UI driven by workflow state
 
-This SDK provides all the infrastructure pieces to build such a system, while keeping your domain logic in your own application.
+These packages are building blocks for that kind of application; domain logic stays in yours.
 
 ## Packages
 
@@ -32,7 +32,7 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`notification`](notification/README.md)   | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
 | [`pagination`](pagination/README.md)       | Standard pagination envelope and query parameter parsing                                                                                                                                      |
 | [`payment`](payment/README.md)             | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
-| [`platform`](platform/README.md)           | The application layer of a single window, built on core's libraries: authentication principal, catalog, audit and request logs, file storage routes and task authorization                    |
+| [`platform`](platform/README.md)           | Application-layer helpers often used with the other packages: authentication principal, catalog, audit and request logs, file storage routes and task authorization                           |
 | [`remote`](remote/README.md)               | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
 | [`replay`](replay/README.md)               | Data-driven end-to-end test engine: runs JSON flow files of HTTP steps against a running backend                                                                                              |
 | [`secret`](secret/README.md)               | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources                                                                                                        |
@@ -84,9 +84,9 @@ How to assemble an application, which systems to run locally, and how downstream
 | Security reporting | [SECURITY.md](SECURITY.md) |
 | Package APIs | Each package's `README.md` (links in the table above) |
 
-## Functional requirements (SDK behaviour)
+## What callers can rely on
 
-Callers can rely on these packages to:
+These packages are meant to help you:
 
 1. **Orchestrate long-running service applications** as Temporal workflows defined by a JSON graph (`workflow`), including task activation and completion callbacks.
 2. **Run human-in-the-loop steps** as short Temporal workflows with pluggable step plugins and UI projection (`taskflow`, `uiprojector`).
@@ -151,10 +151,10 @@ flowchart TD
     microwf -. loads .-> AR
 ```
 
-The two-tier workflow design is central to single window systems:
+A common pattern is a two-tier workflow:
 
-1. **Macro workflow** (the `workflow` package) — a long-lived Temporal workflow that represents the full service application (e.g. an export permit). It moves through TASK nodes, GATEWAY nodes, and SPLIT nodes according to a JSON graph definition.
-2. **Micro workflow** (the `taskflow` package) — each TASK node spawns a short-lived Temporal workflow that presents one interactive step to the user (a form, a payment, an external review). When the user completes the step the micro workflow signals the macro workflow to continue.
+1. **Macro workflow** (the `workflow` package) — a long-lived Temporal workflow for a full service application (for example an export permit). It moves through TASK, GATEWAY, and SPLIT nodes from a JSON graph.
+2. **Micro workflow** (the `taskflow` package) — each TASK node can spawn a short-lived Temporal workflow for one interactive step (a form, a payment, a review). When that step finishes, the micro workflow signals the macro workflow to continue.
 
 ---
 
