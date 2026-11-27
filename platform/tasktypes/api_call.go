@@ -126,6 +126,8 @@ func headersFor(interp Interpreter, inputs map[string]any) map[string]string {
 //
 // Which workflow variable each parameter comes from is an artifact decision, as
 // with BuildHeaders: the interpreter only names what the service asks for.
+//
+// It composes with either body contract — a JSON body or multipart parts.
 type QueryInterpreter interface {
 	Interpreter
 
@@ -370,6 +372,7 @@ func (p *APICallPlugin) buildRequest(ctx pluginContext, method, path string) (re
 		return remote.Request{
 			Method:  http.MethodPost,
 			Path:    path,
+			Query:   queryFor(mp, ctx.Inputs),
 			Body:    remote.MultipartBody{Parts: parts},
 			Headers: headersFor(mp, ctx.Inputs),
 		}, nil

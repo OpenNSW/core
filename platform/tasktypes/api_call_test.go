@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 
@@ -27,6 +28,7 @@ type calledService struct {
 	paths    []string
 	methods  []string
 	headers  []http.Header
+	queries  []string
 	received []any
 }
 
@@ -49,6 +51,7 @@ func newCalledService(t *testing.T, status int, contentType, body string) (*remo
 		svc.paths = append(svc.paths, r.URL.EscapedPath())
 		svc.methods = append(svc.methods, r.Method)
 		svc.headers = append(svc.headers, r.Header.Clone())
+		svc.queries = append(svc.queries, r.URL.RawQuery)
 		svc.received = append(svc.received, sent)
 		svc.mu.Unlock()
 		if contentType != "" {
@@ -392,4 +395,29 @@ func TestStatusOutcome_NoResponseIsRetried(t *testing.T) {
 	require.Error(t, err)
 	_, permanent := plugins.PermanentType(err)
 	assert.False(t, permanent)
+}
+
+// partsWithQuery is a multipart interpreter that also asks for a query
+// parameter.
+type partsWithQuery struct {
+	acceptAll
+}
+
+func (partsWithQuery) BuildParts(context.Context, map[string]any) ([]remote.Part, error) {
+	return []remote.Part{{Name: "document", Content: []byte(`{}`)}}, nil
+}
+
+func (partsWithQuery) BuildQuery(map[string]any) url.Values {
+	return url.Values{"tenant": {"acme"}}
+}
+
+// A multipart call carries the query parameters its interpreter asks for.
+func TestAPICall_MultipartCallCarriesItsQuery(t *testing.T) {
+	mgr, svc := newCalledService(t, http.StatusOK, "", "")
+
+	err := NewAPICallPluginWithInterpreter(mgr, partsWithQuery{}).Execute(apiCallContext(map[string]any{}), json.RawMessage(`{"service_id": "svc", "path": "/orders"}`))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, svc.calls())
+	assert.Equal(t, "tenant=acme", svc.queries[0])
 }
