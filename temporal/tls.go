@@ -8,7 +8,19 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+
+	"go.temporal.io/sdk/client"
 )
+
+// applyTo connects to the Temporal server over TLS.
+func (c TLSConfig) applyTo(opts *client.Options) error {
+	tlsConfig, err := clientTLSConfig(c)
+	if err != nil {
+		return err
+	}
+	opts.ConnectionOptions.TLS = tlsConfig
+	return nil
+}
 
 // clientTLSConfig builds the TLS configuration for the connection to the
 // Temporal server. It reads the CA file and the client key pair once, so a

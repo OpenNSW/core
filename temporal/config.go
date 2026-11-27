@@ -4,9 +4,11 @@
 package temporal
 
 import (
+	"encoding/base64"
 	"fmt"
 
 	"github.com/OpenNSW/core/shared/validation"
+	"go.temporal.io/sdk/client"
 )
 
 // Config holds configuration required to connect to Temporal.
@@ -24,6 +26,39 @@ type Config struct {
 	// TLS, when set, connects to the Temporal server over TLS. When it is nil
 	// the connection is plaintext.
 	TLS *TLSConfig `yaml:"tls"`
+
+	// Encryption, when set, encrypts every payload the client and its workers
+	// send to the Temporal server, and refuses any payload not encrypted with its
+	// key. When it is nil, payloads are stored as plain JSON.
+	Encryption *EncryptionConfig `yaml:"encryption"`
+}
+
+// configBlock is an optional block of Config, such as tls or encryption. Each
+// block checks its own fields and sets the client options it is responsible
+// for. A new block, such as an API key, is added by implementing configBlock
+// and listing it in Config.blocks; Validate and NewClient pick it up from there.
+type configBlock interface {
+	// Validate checks the block's fields. It reads no files and makes no
+	// connections.
+	Validate() error
+
+	// applyTo sets the block's client options. It may read files, and it repeats
+	// the checks Validate makes, since NewClient can be given a Config that was
+	// never validated.
+	applyTo(opts *client.Options) error
+}
+
+// blocks returns the optional blocks that are set, in the order NewClient
+// applies them.
+func (c Config) blocks() []configBlock {
+	var set []configBlock
+	if c.TLS != nil {
+		set = append(set, c.TLS)
+	}
+	if c.Encryption != nil {
+		set = append(set, c.Encryption)
+	}
+	return set
 }
 
 // TLSConfig configures TLS to the Temporal server, and mutual TLS when the
@@ -54,8 +89,8 @@ func (c Config) Validate() error {
 	if c.Namespace == "" {
 		return fmt.Errorf("temporal namespace is required")
 	}
-	if c.TLS != nil {
-		if err := c.TLS.Validate(); err != nil {
+	for _, block := range c.blocks() {
+		if err := block.Validate(); err != nil {
 			return err
 		}
 	}
@@ -70,4 +105,34 @@ func (c TLSConfig) Validate() error {
 		return fmt.Errorf("temporal tls: certFile and keyFile must be set together")
 	}
 	return nil
+}
+
+// EncryptionConfig configures AES-256-GCM encryption of Temporal payloads.
+type EncryptionConfig struct {
+	// KeyID names the key. It is stored with each payload and authenticated
+	// with it, so a payload encrypted under another key is refused.
+	KeyID string `yaml:"keyId"`
+
+	// Key is the base64-encoded 32-byte AES-256 key.
+	Key string `yaml:"key"`
+}
+
+// Validate checks that the key ID is set and the key is 32 bytes of base64.
+func (c EncryptionConfig) Validate() error {
+	_, err := c.decodeKey()
+	return err
+}
+
+func (c EncryptionConfig) decodeKey() ([]byte, error) {
+	if c.KeyID == "" {
+		return nil, fmt.Errorf("temporal encryption: keyId is required")
+	}
+	key, err := base64.StdEncoding.DecodeString(c.Key)
+	if err != nil {
+		return nil, fmt.Errorf("temporal encryption: key is not valid base64: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("temporal encryption: key must be 32 bytes, got %d", len(key))
+	}
+	return key, nil
 }

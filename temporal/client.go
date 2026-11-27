@@ -22,7 +22,7 @@ func NewClient(cfg Config) (client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	slog.Info("temporal client connected", "host", cfg.Host, "namespace", cfg.Namespace, "tls", cfg.TLS != nil)
+	slog.Info("temporal client connected", "host", cfg.Host, "namespace", cfg.Namespace, "tls", cfg.TLS != nil, "encryption", cfg.Encryption != nil)
 	return c, nil
 }
 
@@ -32,12 +32,10 @@ func optionsFromConfig(cfg Config) (client.Options, error) {
 		Namespace: cfg.Namespace,
 		Logger:    temporallog.NewStructuredLogger(slog.Default()),
 	}
-	if cfg.TLS != nil {
-		tlsConfig, err := clientTLSConfig(*cfg.TLS)
-		if err != nil {
+	for _, block := range cfg.blocks() {
+		if err := block.applyTo(&opts); err != nil {
 			return client.Options{}, err
 		}
-		opts.ConnectionOptions.TLS = tlsConfig
 	}
 	return opts, nil
 }
