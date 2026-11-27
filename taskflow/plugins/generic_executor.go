@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Lanka Software Foundation
 
-package trade
+package plugins
 
 import (
 	"encoding/json"
 	"errors"
-
-	"github.com/OpenNSW/core/taskflow/plugins"
 )
 
 // TODO: github.com/OpenNSW/core is consolidating nsw-task-flow and
@@ -19,16 +17,16 @@ import (
 // delete this copy.
 
 // ExecutorFunc is synchronous computation logic that can be wrapped as a
-// plugins.TaskPlugin via NewGenericExecutorPlugin. It has the same shape
+// TaskPlugin via NewGenericExecutorPlugin. It has the same shape
 // as TaskPlugin.Execute, so any plain function can be registered without
 // writing a dedicated plugin struct.
 //
 // It computes from the step's data and configuration alone, with no I/O, so
 // an error it returns comes back on every retry: the plugin marks it
-// plugins.Permanent and the step parks for an admin at once.
-type ExecutorFunc func(ctx plugins.PluginContext, config json.RawMessage) error
+// Permanent and the step parks for an admin at once.
+type ExecutorFunc func(ctx PluginContext, config json.RawMessage) error
 
-// genericExecutorPlugin adapts an ExecutorFunc to plugins.TaskPlugin —
+// genericExecutorPlugin adapts an ExecutorFunc to TaskPlugin —
 // the function-to-interface adapter pattern (cf. http.HandlerFunc).
 type genericExecutorPlugin struct {
 	fn ExecutorFunc
@@ -38,14 +36,14 @@ type genericExecutorPlugin struct {
 // under any task type, e.g.:
 //
 //	pluginsRegistry.Register("HSCODE_SPLIT_BUILDER", trade.NewGenericExecutorPlugin(trade.HscodeSplitBuilderFunc))
-func NewGenericExecutorPlugin(fn ExecutorFunc) plugins.TaskPlugin {
+func NewGenericExecutorPlugin(fn ExecutorFunc) TaskPlugin {
 	return &genericExecutorPlugin{fn: fn}
 }
 
-func (p *genericExecutorPlugin) Execute(ctx plugins.PluginContext, config json.RawMessage) error {
+func (p *genericExecutorPlugin) Execute(ctx PluginContext, config json.RawMessage) error {
 	err := p.fn(ctx, config)
-	if err == nil || errors.Is(err, plugins.ErrSuspended) || plugins.IsPermanent(err) {
+	if err == nil || errors.Is(err, ErrSuspended) || IsPermanent(err) {
 		return err
 	}
-	return plugins.Permanent(plugins.ErrorTypeInput, err)
+	return Permanent(ErrorTypeInput, err)
 }
