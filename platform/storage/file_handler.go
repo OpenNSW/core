@@ -9,9 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 
@@ -116,7 +114,7 @@ type uploadResponse struct {
 // as the value of a form's file field, so it never expires; a machine
 // client's, such as an agency proxying its officer's upload, opens the file too.
 func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
-	h.serveUpload(w, r, h.uploads, "user")
+	h.serveUpload(w, r, h.uploads)
 }
 
 // InternalUpload is Upload for the files a machine client generates and stores
@@ -124,7 +122,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 // upload. Its reference opens the file as well as being submittable. Which
 // callers reach it is the route's scope: it does not check the kind of principal.
 func (h *FileHandler) InternalUpload(w http.ResponseWriter, r *http.Request) {
-	h.serveUpload(w, r, h.machine, "machine")
+	h.serveUpload(w, r, h.machine)
 }
 
 // decodeUploadRequest reads an upload request into req, within
@@ -146,8 +144,7 @@ func (h *FileHandler) decodeUploadRequest(w http.ResponseWriter, r *http.Request
 }
 
 // serveUpload prepares an upload with up and answers with a reference to it.
-// kind is "user" or "machine" and is recorded on the prepare log and audit line.
-func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Uploader, kind string) {
+func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Uploader) {
 	p, ok := authn.FromContext(r.Context())
 	if !ok {
 		httputil.Error(w, r, http.StatusUnauthorized, "authentication required")
@@ -172,24 +169,17 @@ func (h *FileHandler) serveUpload(w http.ResponseWriter, r *http.Request, up Upl
 
 	meta, err := up.Upload(r.Context(), req.Filename, req.Size, req.MimeType)
 	if err != nil {
-		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, "", "", err, "")
+		h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, "", "", uploadFailureReason(err))
 		h.writeServiceError(w, r, err, "failed to prepare upload", req.MimeType)
 		return
 	}
 	ref, err := h.refs.Issue(p, meta.Key, fileaccess.UploadScopes(p)...)
 	if err != nil {
-		h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), "", err, h.proxySecret(meta.Key))
+		h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), "", "issue_failed")
 		httputil.InternalServerError(w, r, "storage: failed to issue a file reference", err)
 		return
 	}
-	// The hash is of the owning service's file reference: the one this service
-	// just issued, or, in proxy mode, the one the owner issued and this service
-	// stored. The other side records the same hash.
-	referenceSHA := hashReference(ref)
-	if h.proxied() {
-		referenceSHA = hashReference(meta.Key)
-	}
-	h.recordUploadPrepare(r.Context(), p, kind, req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), referenceSHA, nil, "")
+	h.recordUploadPrepare(r.Context(), req.Filename, req.MimeType, req.Size, h.recordedKey(meta.Key), h.ownerReferenceSHA(ref, meta.Key), "")
 	httputil.JSON(w, http.StatusOK, uploadResponse{
 		Key:       ref,
 		Name:      meta.Name,
@@ -214,31 +204,9 @@ func (h *FileHandler) proxied() bool {
 	return ok
 }
 
-// proxySecret is value when it must not appear in a log or audit record, and
-// empty otherwise. In proxy mode value is the owning service's file reference.
-func (h *FileHandler) proxySecret(value string) string {
-	if value == "" || !h.proxied() {
-		return ""
-	}
-	return value
-}
-
-// redactSecret removes secret from msg, including the path-escaped form a
-// request URL uses, so an upstream error cannot keep the reference.
-func redactSecret(msg, secret string) string {
-	if msg == "" || secret == "" {
-		return msg
-	}
-	msg = strings.ReplaceAll(msg, secret, "[redacted]")
-	if escaped := url.PathEscape(secret); escaped != secret {
-		msg = strings.ReplaceAll(msg, escaped, "[redacted]")
-	}
-	return msg
-}
-
-// recordedKey returns the identifier of a stored file that logs and audit
-// records carry. In proxy mode that is hashReference of the owning service's
-// file reference. Otherwise it is the storage key.
+// recordedKey returns the identifier of a stored file that audit records
+// carry. In proxy mode that is hashReference of the owning service's file
+// reference. Otherwise it is the storage key.
 func (h *FileHandler) recordedKey(value string) string {
 	if value == "" || !h.proxied() {
 		return value
@@ -246,59 +214,65 @@ func (h *FileHandler) recordedKey(value string) string {
 	return hashReference(value)
 }
 
-// recordUploadPrepare writes a system slog line and a STORAGE PRESIGN_UPLOAD
-// audit event for an upload prepare. It names mime, size, extension,
-// storageKey (see recordedKey) and referenceSHA (see hashReference), not the
-// filename or a file reference. redact is removed from the error text.
-func (h *FileHandler) recordUploadPrepare(
-	ctx context.Context, p *authn.Principal, kind, filename, mimeType string, size int64, storageKey, referenceSHA string, err error, redact string,
-) {
-	ext := strings.ToLower(path.Ext(filename))
-	attrs := []any{
-		"kind", kind,
-		"mime_type", mimeType,
-		"size", size,
+// ownerReferenceSHA is the hex SHA-256 of the owning service's file reference.
+// issuedOrResolved is the reference this service issued (upload) or resolved
+// (download). stored is the value behind it: a storage key on the owner, or the
+// owner's reference in proxy mode. Both sides of a proxied request record the
+// same hash.
+func (h *FileHandler) ownerReferenceSHA(issuedOrResolved, stored string) string {
+	if h.proxied() {
+		return hashReference(stored)
 	}
-	if ext != "" {
-		attrs = append(attrs, "extension", ext)
-	}
-	if p != nil && p.ClientID != "" {
-		attrs = append(attrs, "client_id", p.ClientID)
-	}
-	if storageKey != "" {
-		attrs = append(attrs, "storage_key", storageKey)
-	}
-	if referenceSHA != "" {
-		attrs = append(attrs, "reference_sha256", referenceSHA)
-	}
-	errText := ""
-	if err != nil {
-		errText = redactSecret(err.Error(), redact)
-		attrs = append(attrs, "error", errText)
-		slog.WarnContext(ctx, "storage: upload not prepared", attrs...)
-	} else {
-		slog.InfoContext(ctx, "storage: upload prepared", attrs...)
-	}
+	return hashReference(issuedOrResolved)
+}
 
+// recordUploadPrepare writes a STORAGE PRESIGN_UPLOAD audit event for an
+// upload prepare. It names mime, size, extension, storageKey (see
+// recordedKey) and referenceSHA (see ownerReferenceSHA), not the filename or a
+// file reference. reason names why a prepare was refused and is empty on
+// success.
+func (h *FileHandler) recordUploadPrepare(
+	ctx context.Context, filename, mimeType string, size int64, storageKey, referenceSHA, reason string,
+) {
+	if h.audit == nil {
+		return
+	}
 	meta := map[string]any{
-		"kind":      kind,
 		"mime_type": mimeType,
 		"size":      size,
 	}
-	if ext != "" {
+	if ext := strings.ToLower(path.Ext(filename)); ext != "" {
 		meta["extension"] = ext
-	}
-	if p != nil && p.ClientID != "" {
-		meta["client_id"] = p.ClientID
 	}
 	if referenceSHA != "" {
 		meta["reference_sha256"] = referenceSHA
 	}
-	if err != nil {
-		meta["error"] = errText
+	if reason != "" {
+		meta["reason"] = reason
 	}
-	if h.audit != nil {
-		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionPresignUpload, storageKey, err != nil, meta))
+	h.audit.Audit(ctx, audit.StorageEvent(audit.ActionPresignUpload, storageKey, reason != "", meta))
+}
+
+// uploadFailureReason names why an upload prepare was refused by the storage
+// service.
+func uploadFailureReason(err error) string {
+	var tooLarge *corestorage.FileTooLargeError
+	var mismatch *corestorage.ExtensionMismatchError
+	switch {
+	case errors.Is(err, corestorage.ErrInvalidKey):
+		return "invalid_key"
+	case errors.Is(err, corestorage.ErrInvalidSize):
+		return "invalid_size"
+	case errors.As(err, &tooLarge):
+		return "too_large"
+	case errors.Is(err, corestorage.ErrContentTypeNotAllowed):
+		return "content_type_not_allowed"
+	case errors.As(err, &mismatch):
+		return "extension_mismatch"
+	case isUpstreamFailure(err):
+		return "upstream_failed"
+	default:
+		return "failed"
 	}
 }
 
@@ -323,43 +297,36 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 		// One answer for ErrInvalid and ErrNotYours, so the route says nothing
 		// about a value it will not serve. A raw storage key is one: it grants
 		// nothing. The audit record still tells them apart.
-		h.recordDownload(r.Context(), p, "", "invalid_reference", err, 0, "", "")
+		h.recordDownload(r.Context(), "", "invalid_reference", "", 0)
 		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
 		return
 	case errors.Is(err, fileaccess.ErrNotYours):
-		h.recordDownload(r.Context(), p, "", "not_yours", err, 0, "", "")
+		h.recordDownload(r.Context(), "", "not_yours", "", 0)
 		httputil.Error(w, r, http.StatusForbidden, "this is not a file reference issued to you")
 		return
 	case errors.Is(err, fileaccess.ErrScope):
-		h.recordDownload(r.Context(), p, "", "wrong_scope", err, 0, "", "")
+		h.recordDownload(r.Context(), "", "wrong_scope", "", 0)
 		httputil.Error(w, r, http.StatusForbidden, "this file reference can't be used to open the file; save the form to view it")
 		return
 	case errors.Is(err, fileaccess.ErrExpired):
-		h.recordDownload(r.Context(), p, "", "expired", err, 0, "", "")
+		h.recordDownload(r.Context(), "", "expired", "", 0)
 		httputil.Error(w, r, http.StatusGone, "this file reference has expired; reload to get a new one")
 		return
 	default:
-		h.recordDownload(r.Context(), p, "", "resolve_failed", err, 0, "", "")
+		h.recordDownload(r.Context(), "", "resolve_failed", "", 0)
 		httputil.InternalServerError(w, r, "storage: failed to resolve a file reference", err)
 		return
 	}
 
 	key := h.recordedKey(value)
-	// referenceSHA is the hash of the owning service's file reference. In
-	// proxy mode that reference is the stored value. On the owning service it
-	// is the reference this call just resolved. The storage key, when this
-	// service holds the file, stays the audit target.
-	referenceSHA := hashReference(ref)
-	if h.proxied() {
-		referenceSHA = hashReference(value)
-	}
+	referenceSHA := h.ownerReferenceSHA(ref, value)
 	dl, err := downloadOf(r.Context(), h.svc, value)
 	if err != nil {
-		h.recordDownload(r.Context(), p, key, downloadFailureReason(err), err, 0, referenceSHA, h.proxySecret(value))
+		h.recordDownload(r.Context(), key, downloadFailureReason(err), referenceSHA, 0)
 		h.writeServiceError(w, r, err, "failed to generate access", "")
 		return
 	}
-	h.recordDownload(r.Context(), p, key, "", nil, dl.ExpiresAt, referenceSHA, "")
+	h.recordDownload(r.Context(), key, "", referenceSHA, dl.ExpiresAt)
 	httputil.JSON(w, http.StatusOK, dl)
 }
 
@@ -380,44 +347,27 @@ func downloadFailureReason(err error) string {
 	}
 }
 
-// recordDownload writes a system slog line and a STORAGE READ audit event for a
-// download link issued (err nil) or refused. storageKey is the recorded key
-// (see recordedKey) and is empty when the reference did not resolve: a refused
-// reference is never recorded. referenceSHA is hashReference of the owning
-// service's file reference once one has been resolved, so a proxy record and
-// the owning service's record of the same request share it. reason names why a
-// link was refused; expiresAt is the issued link's expiry in Unix seconds.
-// redact is removed from the error text.
-func (h *FileHandler) recordDownload(
-	ctx context.Context, p *authn.Principal, storageKey, reason string, err error, expiresAt int64, referenceSHA, redact string,
-) {
-	attrs := []any{}
-	meta := map[string]any{}
-	if storageKey != "" {
-		attrs = append(attrs, "storage_key", storageKey)
+// recordDownload writes a STORAGE READ audit event for a download link issued
+// (reason empty) or refused. storageKey is the recorded key (see recordedKey)
+// and is empty when the reference did not resolve: a refused reference is
+// never recorded. referenceSHA is ownerReferenceSHA of the owning service's
+// file reference once one has been resolved, so a proxy record and the owning
+// service's record of the same request share it. reason names why a link was
+// refused; expiresAt is the issued link's expiry in Unix seconds.
+func (h *FileHandler) recordDownload(ctx context.Context, storageKey, reason, referenceSHA string, expiresAt int64) {
+	if h.audit == nil {
+		return
 	}
+	meta := map[string]any{}
 	if referenceSHA != "" {
-		attrs = append(attrs, "reference_sha256", referenceSHA)
 		meta["reference_sha256"] = referenceSHA
 	}
-	if p != nil && p.ClientID != "" {
-		attrs = append(attrs, "client_id", p.ClientID)
-		meta["client_id"] = p.ClientID
-	}
-	if err != nil {
-		errText := redactSecret(err.Error(), redact)
-		attrs = append(attrs, "reason", reason, "error", errText)
+	if reason != "" {
 		meta["reason"] = reason
-		meta["error"] = errText
-		slog.WarnContext(ctx, "storage: download link refused", attrs...)
 	} else {
-		attrs = append(attrs, "expires_at", expiresAt)
 		meta["expires_at"] = expiresAt
-		slog.InfoContext(ctx, "storage: download link issued", attrs...)
 	}
-	if h.audit != nil {
-		h.audit.Audit(ctx, audit.StorageEvent(audit.ActionRead, storageKey, err != nil, meta))
-	}
+	h.audit.Audit(ctx, audit.StorageEvent(audit.ActionRead, storageKey, reason != "", meta))
 }
 
 // fileDownload is what a download returns: a time-limited URL to the file,

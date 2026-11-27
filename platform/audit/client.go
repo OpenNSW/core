@@ -45,9 +45,7 @@ func TaskEvent(action Action, targetID string, failure bool, metadata map[string
 	return newEvent(EventTask, action, TargetTask, targetID, failure, metadata)
 }
 
-// StorageEvent is a storage audit event. See ConsignmentEvent. targetID is the
-// opaque storage object key when one was reserved; it may be empty on a failed
-// prepare.
+// StorageEvent is a storage audit event. See ConsignmentEvent.
 func StorageEvent(action Action, targetID string, failure bool, metadata map[string]any) Event {
 	return newEvent(EventStorage, action, TargetStorage, targetID, failure, metadata)
 }

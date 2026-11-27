@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -429,7 +428,7 @@ type captureAuditor struct{ last audit.Event }
 
 func (c *captureAuditor) Audit(_ context.Context, e audit.Event) { c.last = e }
 
-func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
+func TestFileHandler_UploadPrepareIsAudited(t *testing.T) {
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -440,12 +439,6 @@ func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
 	stack.LocalContent.RegisterRoutes(mux)
 	access, _ := testFileAccess(t)
 	cap := &captureAuditor{}
-
-	var logBuf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
 	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
 	rec := upload(h, user("alice"), `{"filename":"invoice.PDF","mime_type":"application/pdf","size":10}`)
 	assertStatus(t, rec, http.StatusOK)
@@ -456,8 +449,14 @@ func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
 	if cap.last.Failure || cap.last.TargetID == "" {
 		t.Fatalf("audit failure=%v targetID=%q, want success with a storage key", cap.last.Failure, cap.last.TargetID)
 	}
-	if cap.last.Metadata["kind"] != "user" || cap.last.Metadata["mime_type"] != "application/pdf" || cap.last.Metadata["extension"] != ".pdf" {
-		t.Errorf("metadata = %v, want kind=user mime application/pdf extension .pdf", cap.last.Metadata)
+	if cap.last.Metadata["mime_type"] != "application/pdf" || cap.last.Metadata["extension"] != ".pdf" {
+		t.Errorf("metadata = %v, want mime application/pdf extension .pdf", cap.last.Metadata)
+	}
+	if _, ok := cap.last.Metadata["kind"]; ok {
+		t.Errorf("metadata names the route kind: %v", cap.last.Metadata)
+	}
+	if _, ok := cap.last.Metadata["client_id"]; ok {
+		t.Errorf("metadata repeats the actor as client_id: %v", cap.last.Metadata)
 	}
 	var uploaded map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &uploaded); err != nil {
@@ -470,30 +469,15 @@ func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
 	if _, ok := cap.last.Metadata["filename"]; ok {
 		t.Errorf("metadata names the filename: %v", cap.last.Metadata)
 	}
-	if !strings.Contains(logBuf.String(), `"msg":"storage: upload prepared"`) || !strings.Contains(logBuf.String(), `"kind":"user"`) {
-		t.Errorf("system log = %s, want storage: upload prepared with kind=user", logBuf.String())
-	}
 
-	logBuf.Reset()
 	cap.last = audit.Event{}
 	assertStatus(t, upload(h, user("alice"), `{"filename":"x.zip","mime_type":"application/zip","size":10}`), http.StatusUnsupportedMediaType)
-	if !cap.last.Failure || cap.last.Action != audit.ActionPresignUpload {
-		t.Fatalf("refused upload audit = %+v, want failed PRESIGN_UPLOAD", cap.last)
+	if !cap.last.Failure || cap.last.Action != audit.ActionPresignUpload || cap.last.Metadata["reason"] != "content_type_not_allowed" {
+		t.Fatalf("refused upload audit = %+v, want failed PRESIGN_UPLOAD with reason content_type_not_allowed", cap.last)
 	}
-	if !strings.Contains(logBuf.String(), `"msg":"storage: upload not prepared"`) {
-		t.Errorf("system log = %s, want storage: upload not prepared", logBuf.String())
+	if _, ok := cap.last.Metadata["error"]; ok {
+		t.Errorf("metadata carries error text: %v", cap.last.Metadata)
 	}
-}
-
-// captureLog sends the default logger's JSON output to the returned buffer for
-// the rest of the test.
-func captureLog(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
 }
 
 func TestFileHandler_DownloadIsAudited(t *testing.T) {
@@ -503,7 +487,6 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 	}
 	access, now := testFileAccess(t)
 	cap := &captureAuditor{}
-	logBuf := captureLog(t)
 	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
 
 	key := storedKey(t, stack.Service)
@@ -520,12 +503,11 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// refused checks the audit record and log line of a download the handler
-	// answered with status: a failed STORAGE READ with the given reason and no
-	// target, because a reference that did not resolve names no stored file.
+	// refused checks the audit record of a download the handler answered with
+	// status: a failed STORAGE READ with the given reason and no target,
+	// because a reference that did not resolve names no stored file.
 	refused := func(name, ref string, p *authn.Principal, status int, reason string) {
 		t.Helper()
-		logBuf.Reset()
 		cap.last = audit.Event{}
 		assertStatus(t, download(h, ref, p), status)
 		e := cap.last
@@ -535,11 +517,12 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 		if !e.Failure || e.Metadata["reason"] != reason {
 			t.Errorf("%s: failure=%v reason=%v, want a failure with reason %q", name, e.Failure, e.Metadata["reason"], reason)
 		}
-		if !strings.Contains(logBuf.String(), `"msg":"storage: download link refused"`) || !strings.Contains(logBuf.String(), `"reason":"`+reason+`"`) {
-			t.Errorf("%s: system log = %s, want storage: download link refused with reason %s", name, logBuf.String(), reason)
+		if _, ok := e.Metadata["error"]; ok {
+			t.Errorf("%s: metadata carries error text: %v", name, e.Metadata)
 		}
-		if strings.Contains(logBuf.String(), ref) {
-			t.Errorf("%s: system log names the reference: %s", name, logBuf.String())
+		metaJSON, _ := json.Marshal(e.Metadata)
+		if e.TargetID == ref || strings.Contains(string(metaJSON), ref) {
+			t.Errorf("%s: audit names the reference: %+v", name, e)
 		}
 	}
 
@@ -572,7 +555,6 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 		}
 	})
 	t.Run("a link issued", func(t *testing.T) {
-		logBuf.Reset()
 		cap.last = audit.Event{}
 		assertDownloadURL(t, download(h, token, user("alice")))
 		e := cap.last
@@ -588,11 +570,8 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 		if e.Metadata["reference_sha256"] != hashReference(token) {
 			t.Errorf("reference_sha256 = %v, want the hash of the reference that resolved", e.Metadata["reference_sha256"])
 		}
-		if !strings.Contains(logBuf.String(), `"msg":"storage: download link issued"`) {
-			t.Errorf("system log = %s, want storage: download link issued", logBuf.String())
-		}
-		if strings.Contains(logBuf.String(), token) {
-			t.Errorf("system log names the reference: %s", logBuf.String())
+		if e.TargetID == token || e.Metadata["reference_sha256"] == token {
+			t.Errorf("audit names the reference: %+v", e)
 		}
 	})
 	t.Run("an expired reference", func(t *testing.T) {
@@ -614,7 +593,6 @@ func TestFileHandler_DownloadFailuresAreAudited(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	cap := &captureAuditor{}
-	captureLog(t)
 	assertStatus(t, download(NewFileHandler(stack.Service, failingRefs{}, WithAuditor(cap)), "ref", user("alice")), http.StatusInternalServerError)
 	if !cap.last.Failure || cap.last.Action != audit.ActionRead || cap.last.Metadata["reason"] != "resolve_failed" || cap.last.TargetID != "" {
 		t.Errorf("audit = %+v, want a failed READ with reason resolve_failed and no target", cap.last)
@@ -627,7 +605,6 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 	access, _ := testFileAccess(t)
 	stack := newProxyStack(t, ownerToken)
 	cap := &captureAuditor{}
-	logBuf := captureLog(t)
 	h := NewFileHandler(stack.Service, access, WithAuditor(cap))
 	hashOf := func(v string) string {
 		sum := sha256.Sum256([]byte(v))
@@ -644,8 +621,9 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 		if cap.last.Action != audit.ActionRead || cap.last.Failure || cap.last.TargetID != hashOf(ownerRef) || cap.last.Metadata["reference_sha256"] != hashOf(ownerRef) {
 			t.Errorf("audit = %+v, want a READ on the hash of the owner's reference", cap.last)
 		}
-		if strings.Contains(logBuf.String(), ownerRef) || !strings.Contains(logBuf.String(), hashOf(ownerRef)) {
-			t.Errorf("system log = %s, want the hash and not the owner's reference", logBuf.String())
+		metaJSON, _ := json.Marshal(cap.last.Metadata)
+		if cap.last.TargetID == ownerRef || strings.Contains(string(metaJSON), ownerRef) {
+			t.Errorf("audit names the owner's reference: %+v", cap.last)
 		}
 	})
 	t.Run("a refused link for a file the owner does not hold", func(t *testing.T) {
@@ -654,36 +632,22 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		logBuf.Reset()
 		assertStatus(t, download(h, token, user("alice")), http.StatusNotFound)
 		if !cap.last.Failure || cap.last.Metadata["reason"] != "not_found" || cap.last.TargetID != hashOf(ownerRef) || cap.last.Metadata["reference_sha256"] != hashOf(ownerRef) {
 			t.Errorf("audit = %+v, want a failed READ (not_found) on the hash of the owner's reference", cap.last)
 		}
-		if errText, _ := cap.last.Metadata["error"].(string); strings.Contains(errText, ownerRef) || strings.Contains(logBuf.String(), ownerRef) {
-			t.Errorf("records name the owner's reference: audit=%v log=%s", cap.last.Metadata, logBuf.String())
+		metaJSON, _ := json.Marshal(cap.last.Metadata)
+		if _, ok := cap.last.Metadata["error"]; ok || strings.Contains(string(metaJSON), ownerRef) {
+			t.Errorf("audit names the owner's reference or carries error text: %+v", cap.last)
 		}
 	})
 	t.Run("upload prepare", func(t *testing.T) {
-		logBuf.Reset()
 		rec := upload(h, user("alice"), `{"filename":"a.pdf","mime_type":"application/pdf","size":10}`)
 		assertStatus(t, rec, http.StatusOK)
 		if cap.last.Action != audit.ActionPresignUpload || cap.last.Failure || len(cap.last.TargetID) != sha256.Size*2 || cap.last.Metadata["reference_sha256"] != cap.last.TargetID {
 			t.Fatalf("audit = %+v, want a PRESIGN_UPLOAD on a SHA-256 hex digest", cap.last)
 		}
-		// The owner's reference is what the hash is of; it is not in the records.
-		if !strings.Contains(logBuf.String(), cap.last.TargetID) {
-			t.Errorf("system log = %s, want the same hash as the audit record", logBuf.String())
-		}
 	})
-}
-
-func TestRedactSecret_RemovesTheReferenceFromAnUpstreamError(t *testing.T) {
-	secret := "owner ref/with space"
-	msg := `Get "https://files.example/api/v1/storage/` + url.PathEscape(secret) + `": dial tcp: ` + secret
-	got := redactSecret(msg, secret)
-	if strings.Contains(got, secret) || strings.Contains(got, url.PathEscape(secret)) || !strings.Contains(got, "[redacted]") {
-		t.Fatalf("redactSecret(%q) = %q", msg, got)
-	}
 }
 
 func TestFileHandler_UploadRejects(t *testing.T) {
