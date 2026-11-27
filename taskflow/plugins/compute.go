@@ -16,31 +16,31 @@ import (
 // core/taskflow/plugins (rebuilt against core's TaskPlugin/PluginContext) and
 // delete this copy.
 
-// ExecutorFunc is synchronous computation logic that can be wrapped as a
-// TaskPlugin via NewGenericExecutorPlugin. It has the same shape
+// ComputeFunc is synchronous computation logic that can be wrapped as a
+// TaskPlugin via NewComputePlugin. It has the same shape
 // as TaskPlugin.Execute, so any plain function can be registered without
 // writing a dedicated plugin struct.
 //
 // It computes from the step's data and configuration alone, with no I/O, so
 // an error it returns comes back on every retry: the plugin marks it
 // Permanent and the step parks for an admin at once.
-type ExecutorFunc func(ctx PluginContext, config json.RawMessage) error
+type ComputeFunc func(ctx PluginContext, config json.RawMessage) error
 
-// genericExecutorPlugin adapts an ExecutorFunc to TaskPlugin —
+// computePlugin adapts an ComputeFunc to TaskPlugin —
 // the function-to-interface adapter pattern (cf. http.HandlerFunc).
-type genericExecutorPlugin struct {
-	fn ExecutorFunc
+type computePlugin struct {
+	fn ComputeFunc
 }
 
-// NewGenericExecutorPlugin wraps fn as a TaskPlugin so it can be registered
+// NewComputePlugin wraps fn as a TaskPlugin so it can be registered
 // under any task type, e.g.:
 //
-//	pluginsRegistry.Register("HSCODE_SPLIT_BUILDER", trade.NewGenericExecutorPlugin(trade.HscodeSplitBuilderFunc))
-func NewGenericExecutorPlugin(fn ExecutorFunc) TaskPlugin {
-	return &genericExecutorPlugin{fn: fn}
+//	pluginsRegistry.Register("HSCODE_SPLIT_BUILDER", trade.NewComputePlugin(trade.HscodeSplitBuilderFunc))
+func NewComputePlugin(fn ComputeFunc) TaskPlugin {
+	return &computePlugin{fn: fn}
 }
 
-func (p *genericExecutorPlugin) Execute(ctx PluginContext, config json.RawMessage) error {
+func (p *computePlugin) Execute(ctx PluginContext, config json.RawMessage) error {
 	err := p.fn(ctx, config)
 	if err == nil || errors.Is(err, ErrSuspended) || IsPermanent(err) {
 		return err
