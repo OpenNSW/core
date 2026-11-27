@@ -195,6 +195,21 @@ Reference it from a step template:
 }
 ```
 
+### A step that only computes
+
+A step that works from its data and configuration alone, with no I/O, can be a plain function with `Execute`'s shape instead of a struct. `NewComputePlugin` wraps it as a plugin:
+
+```go
+func splitOrder(ctx plugins.PluginContext, config json.RawMessage) error {
+	// read ctx.Inputs and config, write ctx.Record.Data
+	return nil
+}
+
+pluginsReg.Register("ORDER_SPLIT", plugins.NewComputePlugin(splitOrder))
+```
+
+Rerunning such a step on the same data fails the same way, so the wrapper marks any error the function returns `Permanent(ErrorTypeInput, …)`, and the step parks for an admin at once instead of retrying. An error the function already marked with `plugins.Permanent` keeps its own type. A step that calls another service needs its own plugin, so that a failure that may pass, such as a timeout, is retried.
+
 ---
 
 ## Doing it right
