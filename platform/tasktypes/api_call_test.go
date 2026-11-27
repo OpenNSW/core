@@ -6,6 +6,7 @@ package tasktypes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ type calledService struct {
 	mu       sync.Mutex
 	paths    []string
 	methods  []string
+	headers  []http.Header
 	received []any
 }
 
@@ -46,6 +48,7 @@ func newCalledService(t *testing.T, status int, contentType, body string) (*remo
 		svc.mu.Lock()
 		svc.paths = append(svc.paths, r.URL.EscapedPath())
 		svc.methods = append(svc.methods, r.Method)
+		svc.headers = append(svc.headers, r.Header.Clone())
 		svc.received = append(svc.received, sent)
 		svc.mu.Unlock()
 		if contentType != "" {
@@ -294,8 +297,8 @@ func (acceptAll) Interpret(callErr error, _ map[string]any) (bool, map[string]an
 	return true, map[string]any{}
 }
 
-// A plugin with an interpreter reports a failed call through it and completes
-// the step, as it always has: only the plugin without one retries.
+// An interpreter without InterpretRaw reports a failed call through Interpret
+// and the step completes: only a RawInterpreter decides to retry.
 func TestAPICall_InterpreterStillReportsFailures(t *testing.T) {
 	mgr, _ := newCalledService(t, http.StatusServiceUnavailable, "", "")
 	ctx := apiCallContext(map[string]any{})
@@ -304,4 +307,89 @@ func TestAPICall_InterpreterStillReportsFailures(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"error": "the service is unavailable", "accepted": false}, ctx.Record.Data["result"])
+}
+
+// recordAll is a RawInterpreter that sends a per-call header, records every
+// response as it came instead of retrying, and records accepted calls as
+// dispatched.
+type recordAll struct {
+	acceptAll
+	dispatched *int
+}
+
+func (recordAll) BuildHeaders(map[string]any) map[string]string {
+	return map[string]string{"X-Client-Key": "key-1"}
+}
+
+func (recordAll) InterpretRaw(resp *remote.RawResponse, callErr error) (bool, map[string]any, error) {
+	if callErr != nil {
+		return false, map[string]any{"error": callErr.Error()}, nil
+	}
+	accepted := resp.StatusCode < 300
+	return accepted, map[string]any{"status": resp.StatusCode}, nil
+}
+
+func (r recordAll) RecordDispatch(context.Context, string, string, string, map[string]any) error {
+	*r.dispatched++
+	return nil
+}
+
+// A RawInterpreter sees the status and decides the step's fate itself: here it
+// records a 503 instead of retrying. The request interfaces still shape the
+// call, and an accepted call is still recorded as dispatched.
+func TestAPICall_RawInterpreterDecidesTheOutcome(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status         int
+		wantAccepted   bool
+		wantDispatched int
+	}{
+		"refused":  {http.StatusServiceUnavailable, false, 0},
+		"accepted": {http.StatusCreated, true, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mgr, svc := newCalledService(t, tc.status, "", "")
+			ctx := apiCallContext(map[string]any{})
+			dispatched := 0
+
+			err := NewAPICallPluginWithInterpreter(mgr, recordAll{dispatched: &dispatched}).Execute(ctx, json.RawMessage(`{"service_id": "svc", "path": "/orders", "result_field": "accepted"}`))
+
+			require.NoError(t, err)
+			assert.Equal(t, map[string]any{"status": tc.status, "accepted": tc.wantAccepted}, ctx.Record.Data["result"])
+			assert.Equal(t, tc.wantDispatched, dispatched)
+			require.Equal(t, 1, svc.calls())
+			assert.Equal(t, "key-1", svc.headers[0].Get("X-Client-Key"))
+		})
+	}
+}
+
+// brokenParts is a multipart RawInterpreter whose body can't be assembled.
+type brokenParts struct {
+	recordAll
+}
+
+func (brokenParts) BuildParts(context.Context, map[string]any) ([]remote.Part, error) {
+	return nil, errors.New("the attachment is missing")
+}
+
+// A body that can't be assembled reaches InterpretRaw as callErr with no
+// response, and nothing is sent.
+func TestAPICall_RawInterpreterGetsAFailedBuild(t *testing.T) {
+	mgr, svc := newCalledService(t, http.StatusOK, "", "")
+	ctx := apiCallContext(map[string]any{})
+	dispatched := 0
+
+	err := NewAPICallPluginWithInterpreter(mgr, brokenParts{recordAll{dispatched: &dispatched}}).Execute(ctx, json.RawMessage(`{"service_id": "svc", "path": "/orders"}`))
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"error": "the attachment is missing"}, ctx.Record.Data["result"])
+	assert.Zero(t, svc.calls())
+}
+
+// statusOutcome turns a call that got no response into a retryable error.
+func TestStatusOutcome_NoResponseIsRetried(t *testing.T) {
+	_, _, err := statusOutcome(nil, nil)
+
+	require.Error(t, err)
+	_, permanent := plugins.PermanentType(err)
+	assert.False(t, permanent)
 }

@@ -34,11 +34,17 @@ of their functions.
 `APICallPlugin` leaves the request body and the reading of the response to an `Interpreter`, so one plugin serves
 any integration. `NewAPICallPluginWithInterpreter`
 takes an integration's own interpreter, which can also implement `MultipartInterpreter`, `HeaderInterpreter` or
-`QueryInterpreter` to shape the request, and `DispatchRecorder` to record what was sent. The interpreter reports
-every outcome, failures included, and the step completes.
+`QueryInterpreter` to shape the request, and `DispatchRecorder` to record what was sent.
 
-`NewAPICallPlugin` has no interpreter. It sends the step's `payload` input as the JSON body, or all its mapped
-inputs when it maps no `payload`, and settles the outcome by the response's status:
+An `Interpreter` reports every outcome, failures included, through `Interpret`, and the step completes. An
+interpreter that also implements `RawInterpreter` reads the whole response (status, headers and body) through
+`InterpretRaw` and decides what happens to the step: an error fails it, so the engine retries it, and a
+`plugins.Permanent` error parks it. For such an interpreter, a `service_id` the manager doesn't list parks the step
+as a configuration error.
+
+`NewAPICallPlugin` uses the passthrough interpreter. It sends the step's `payload` input as the JSON body, or all its
+mapped inputs when it maps no `payload`, and reads the response by its status (`statusOutcome`, which any
+`RawInterpreter` can use):
 
 | Response | Step | Output |
 |---|---|---|
@@ -50,8 +56,8 @@ inputs when it maps no `payload`, and settles the outcome by the response's stat
 
 `response` is the decoded JSON body, or its text when it isn't JSON, and is left out when the body is empty.
 `error` is the body's `error` or `message` field, otherwise the status, such as `404 Not Found`. Workflows check
-`error`, not `status`. A `service_id` the manager doesn't list parks the step as a configuration error. Each
-refusal is logged as `api_call: call refused`, with the task, the service and the status.
+`error`, not `status`. Each refusal from a `RawInterpreter` is logged as `api_call: call refused`, with the task,
+the service and the status.
 
 ```go
 reg.Register("ACME_ORDER_SUBMIT", tasktypes.NewAPICallPluginWithInterpreter(remoteManager, acme.NewOrderInterpreter()))
