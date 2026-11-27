@@ -33,6 +33,8 @@ err := httputil.DecodeJSON(w, r, 1<<20, &req, httputil.AllowUnknownFields(), htt
 
 To answer a decode error yourself, for example to audit it, match it with `errors.Is` against `ErrBodyTooLarge`, `ErrBodyEmpty` (an empty body, for routes where the body is optional) and `ErrBodyInvalid` (malformed JSON, a wrong type, trailing data, or an `*UnknownFieldError`), and respond with `MsgBodyTooLarge` or `MsgInvalidBody` so every endpoint describes a bad body alike.
 
+An error that also matches `ErrTrailingData` means the first JSON value decoded and what follows it was refused: more data, or a body that goes over the limit after the value. The destination then holds that value, for example to record what was sent. After any other error it holds nothing to use.
+
 ### Writing JSON responses
 
 ```go
