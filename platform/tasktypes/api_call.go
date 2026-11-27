@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/remote"
+	flowplugins "github.com/OpenNSW/core/taskflow/plugins"
 )
 
 // Interpreter adapts a domain to the generic API-call plugin: it builds the
@@ -180,32 +181,26 @@ func expandPath(path string, inputs map[string]any) (string, error) {
 	return b.String(), nil
 }
 
-// passthroughInterpreter sends the "payload" input as-is and treats any
-// transport-level success as accepted.
-type passthroughInterpreter struct{}
-
-func (passthroughInterpreter) BuildRequest(inputs map[string]any) remote.Body {
+// passthroughBody is the request body of a plugin without an interpreter: the
+// "payload" input as it is, or all the mapped inputs when there is none.
+func passthroughBody(inputs map[string]any) remote.Body {
 	if v, ok := inputs["payload"]; ok {
 		return remote.JSONBody{V: v}
 	}
 	return remote.JSONBody{V: inputs}
 }
 
-func (passthroughInterpreter) Interpret(callErr error, resp map[string]any) (bool, map[string]any) {
-	if callErr != nil {
-		return false, map[string]any{"error": callErr.Error()}
-	}
-	out := map[string]any{}
-	if resp != nil {
-		out["response"] = resp
-	}
-	return true, out
-}
-
-// APICallPlugin makes an authenticated POST to a configured service and records
-// the outcome. The request body and response interpretation are delegated to an
-// Interpreter, so the plugin itself is domain-agnostic — any request/response
-// shape works.
+// APICallPlugin makes an authenticated call to a configured service and records
+// the outcome.
+//
+// With an Interpreter, the interpreter builds the request and reads the
+// response, so the plugin itself is domain-agnostic — any request/response
+// shape works — and every failure is reported through Interpret.
+//
+// Without one, the plugin sends the mapped inputs as they are (see
+// passthroughBody) and settles the outcome by the response's status (see
+// callWithoutInterpreter): a failure retrying can fix fails the step, so the
+// engine sends the call again.
 type APICallPlugin struct {
 	manager     *remote.Manager
 	interpreter Interpreter
@@ -218,7 +213,7 @@ func NewAPICallPlugin(manager *remote.Manager) *APICallPlugin {
 	if manager == nil {
 		panic("manager is nil")
 	}
-	return &APICallPlugin{manager: manager, interpreter: passthroughInterpreter{}}
+	return &APICallPlugin{manager: manager}
 }
 
 // NewAPICallPluginWithInterpreter builds an AUTH_API_CALL plugin whose
@@ -226,9 +221,7 @@ func NewAPICallPlugin(manager *remote.Manager) *APICallPlugin {
 // as they are, as NewAPICallPlugin does.
 func NewAPICallPluginWithInterpreter(manager *remote.Manager, interp Interpreter) *APICallPlugin {
 	p := NewAPICallPlugin(manager)
-	if interp != nil {
-		p.interpreter = interp
-	}
+	p.interpreter = interp
 	return p
 }
 
@@ -243,9 +236,9 @@ type apiCallConfig struct {
 	// The body is whatever the interpreter builds, whatever the method: HTTP
 	// discourages content on a GET but does not forbid it, so which calls carry
 	// one is the artifact's business rather than this plugin's. An interpreter
-	// driving a GET returns nil from BuildRequest, and the generic passthrough
-	// interpreter always builds one, so a GET configured on a plugin without its
-	// own interpreter will send the mapped inputs as a body.
+	// driving a GET returns nil from BuildRequest, and a plugin without an
+	// interpreter always sends the mapped inputs, so a GET configured on one
+	// sends them as a body.
 	Method      string `json:"method,omitempty"`
 	ResultField string `json:"result_field,omitempty"` // record the accepted flag under this key
 
@@ -290,6 +283,10 @@ func (p *APICallPlugin) Execute(ctx pluginContext, configRaw json.RawMessage) er
 	// stays where it is — see the field's own comment.
 	if !cfg.RetainState {
 		ctx.Record.State = "QUEUED_EXTERNALLY"
+	}
+
+	if p.interpreter == nil {
+		return p.callWithoutInterpreter(ctx, cfg, method, path)
 	}
 
 	var resp map[string]any
@@ -344,4 +341,102 @@ func (p *APICallPlugin) callMultipart(ctx pluginContext, mp MultipartInterpreter
 		Body:    remote.MultipartBody{Parts: parts},
 		Headers: headersFor(mp, ctx.Inputs),
 	}, resp)
+}
+
+// callWithoutInterpreter sends the mapped inputs and settles the outcome by the
+// response's status:
+//
+//   - 2xx completes the step with {status, response, error: ""}.
+//   - 409 completes it the same way. The service answers 409 when what the
+//     call addresses is no longer waiting for it, such as a callback on a step
+//     that has moved on, typically because an earlier attempt of this same call
+//     got through. Sending it again can't change the answer.
+//   - 401 and 403 park the step: the credentials, or what the caller may do,
+//     are wrong, and only an admin can fix that.
+//   - 408, 429, 5xx and transport errors fail the step, so the engine retries
+//     it, and park it once its retries run out.
+//   - Any other status completes the step with {status, response, error}, for
+//     the workflow to route.
+//
+// A service_id the manager doesn't list is a configuration error, so the step
+// parks at once instead of being retried.
+func (p *APICallPlugin) callWithoutInterpreter(ctx pluginContext, cfg apiCallConfig, method, path string) error {
+	if _, err := p.manager.GetClient(cfg.ServiceID); err != nil {
+		return configError(fmt.Errorf("api_call: %w", err))
+	}
+
+	raw, err := p.manager.CallRaw(ctx.Context, cfg.ServiceID, remote.Request{
+		Method: method,
+		Path:   path,
+		Body:   passthroughBody(ctx.Inputs),
+	})
+	if err != nil {
+		slog.Warn("api_call: call failed; the step will be retried",
+			"taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "error", err)
+		return fmt.Errorf("api_call: %s: %w", cfg.ServiceID, err)
+	}
+
+	status := raw.StatusCode
+	response := decodeResponse(raw.Body)
+	var refusal string
+	switch {
+	case status >= 200 && status < 300:
+		slog.Info("api_call: request accepted", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status)
+	case status == http.StatusConflict:
+		slog.Info("api_call: no longer awaited; taking it as delivered",
+			"taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		slog.Error("api_call: call refused", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status)
+		return flowplugins.Permanent(flowplugins.ErrorTypeRejected,
+			fmt.Errorf("api_call: %s answered %d: %s", cfg.ServiceID, status, refusalMessage(status, response)))
+	case flowplugins.RetryableStatus(status):
+		slog.Warn("api_call: call failed; the step will be retried",
+			"taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status)
+		return fmt.Errorf("api_call: %s answered %d: %s", cfg.ServiceID, status, refusalMessage(status, response))
+	default:
+		refusal = refusalMessage(status, response)
+		slog.Error("api_call: call refused", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status, "error", refusal)
+	}
+
+	out := map[string]any{"status": status, "error": refusal}
+	if response != nil {
+		out["response"] = response
+	}
+	if cfg.ResultField != "" {
+		out[cfg.ResultField] = refusal == ""
+	}
+	if ns := ctx.OutputNamespace; ns != "" {
+		ctx.Record.Data[ns] = out
+	}
+	return nil
+}
+
+// decodeResponse returns a response body as decoded JSON, or as text when it
+// isn't JSON, or nil when it is empty.
+func decodeResponse(body []byte) any {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return string(body)
+	}
+	return v
+}
+
+// refusalMessage is the message a refused call is recorded with: the body's
+// string "error" or "message" field when it has one, otherwise the status, as
+// "404 Not Found".
+func refusalMessage(status int, response any) string {
+	if fields, ok := response.(map[string]any); ok {
+		for _, key := range []string{"error", "message"} {
+			if msg, ok := fields[key].(string); ok && strings.TrimSpace(msg) != "" {
+				return msg
+			}
+		}
+	}
+	if text := http.StatusText(status); text != "" {
+		return fmt.Sprintf("%d %s", status, text)
+	}
+	return fmt.Sprintf("%d", status)
 }

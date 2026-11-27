@@ -20,7 +20,7 @@ err := reg.Register(tasktypes.TaskTypePayment, tasktypes.NewPaymentPlugin(paymen
 | `EXTERNAL_REVIEW` | `NewExternalReviewPlugin` | A `remote.Manager`, `FileTokens` and `CaseAttributes` | Starts a review flow on another service, sending the files in it as tokens for that service, and parks until it calls back |
 | `PAYMENT` | `NewPaymentPlugin` | A `core/payment` service | Opens a checkout session and parks in `PENDING_PAYMENT` |
 | `API_CALL` | core's `plugins.NewAPICallPlugin` | A dispatcher | Posts the step's inputs to a URL, without authentication |
-| `AUTH_API_CALL` | `NewAPICallPlugin` | A `remote.Manager` | Calls a service from the `remote` manager's list and records the outcome |
+| `AUTH_API_CALL` | `NewAPICallPlugin` | A `remote.Manager` | Calls a service from the `remote` manager's list and records the outcome, retrying a failure retrying can fix |
 | `REFID_GENERATOR` | `NewRefIDGeneratorPlugin` | A `refid.Registry` | Generates reference IDs |
 | `HTML_DOCUMENT_GENERATOR` | `NewHTMLDocumentGeneratorPlugin` | An `HTMLTemplateSource`, a `DocumentSaver` and `StaticData` | Renders and stores an HTML document |
 | `REMOTE_FILE_ARCHIVER` | `NewRemoteFileArchiverPlugin` | A `RemoteFetcher` and a `DocumentSaver` | Stores a copy of a document another service links to |
@@ -32,10 +32,26 @@ of their functions.
 ## Calling a service with an interpreter
 
 `APICallPlugin` leaves the request body and the reading of the response to an `Interpreter`, so one plugin serves
-any integration. `NewAPICallPlugin` sends the step's `payload` input as the JSON body, or all its mapped inputs when
-it maps no `payload`. `NewAPICallPluginWithInterpreter`
+any integration. `NewAPICallPluginWithInterpreter`
 takes an integration's own interpreter, which can also implement `MultipartInterpreter`, `HeaderInterpreter` or
-`QueryInterpreter` to shape the request, and `DispatchRecorder` to record what was sent.
+`QueryInterpreter` to shape the request, and `DispatchRecorder` to record what was sent. The interpreter reports
+every outcome, failures included, and the step completes.
+
+`NewAPICallPlugin` has no interpreter. It sends the step's `payload` input as the JSON body, or all its mapped
+inputs when it maps no `payload`, and settles the outcome by the response's status:
+
+| Response | Step | Output |
+|---|---|---|
+| 2xx | Completes | `{status, response, error: ""}` |
+| 409 | Completes: what the call addresses is no longer waiting for it, typically because an earlier attempt got through | `{status, response, error: ""}` |
+| 401, 403 | Parks for an admin | None |
+| 408, 429, 5xx, transport error | Fails, so the engine retries it | None |
+| Any other status | Completes, for the workflow to route | `{status, response, error}` |
+
+`response` is the decoded JSON body, or its text when it isn't JSON, and is left out when the body is empty.
+`error` is the body's `error` or `message` field, otherwise the status, such as `404 Not Found`. Workflows check
+`error`, not `status`. A `service_id` the manager doesn't list parks the step as a configuration error. Each
+refusal is logged as `api_call: call refused`, with the task, the service and the status.
 
 ```go
 reg.Register("ACME_ORDER_SUBMIT", tasktypes.NewAPICallPluginWithInterpreter(remoteManager, acme.NewOrderInterpreter()))

@@ -56,5 +56,5 @@ func TestRecordDispatch_StopsWhenTheStepIsCancelled(t *testing.T) {
 
 func TestNewAPICallPlugin_NilManagerPanics(t *testing.T) {
 	assert.Panics(t, func() { NewAPICallPlugin(nil) })
-	assert.Panics(t, func() { NewAPICallPluginWithInterpreter(nil, passthroughInterpreter{}) })
+	assert.Panics(t, func() { NewAPICallPluginWithInterpreter(nil, nil) })
 }
