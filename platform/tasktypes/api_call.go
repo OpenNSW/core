@@ -6,6 +6,7 @@ package tasktypes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/OpenNSW/core/remote"
+	flowplugins "github.com/OpenNSW/core/taskflow/plugins"
 )
 
 // Interpreter adapts a domain to the generic API-call plugin: it builds the
@@ -124,6 +126,8 @@ func headersFor(interp Interpreter, inputs map[string]any) map[string]string {
 //
 // Which workflow variable each parameter comes from is an artifact decision, as
 // with BuildHeaders: the interpreter only names what the service asks for.
+//
+// It composes with either body contract — a JSON body or multipart parts.
 type QueryInterpreter interface {
 	Interpreter
 
@@ -180,8 +184,34 @@ func expandPath(path string, inputs map[string]any) (string, error) {
 	return b.String(), nil
 }
 
-// passthroughInterpreter sends the "payload" input as-is and treats any
-// transport-level success as accepted.
+// RawInterpreter is implemented by interpreters that read the whole response —
+// its status, headers and body — and decide what happens to the step, rather
+// than reporting every outcome as captured fields. The plugin sends the call
+// with remote.Manager.CallRaw for such an interpreter, and calls InterpretRaw
+// instead of Interpret.
+//
+// resp is nil when no response arrived; callErr then says why: a connection
+// failure, a timeout, or a body that could not be assembled. InterpretRaw
+// returns what Interpret does, plus err:
+//
+//   - nil: the step completes with captured, as after Interpret.
+//   - a plain error: the step fails, and the engine retries it.
+//   - an error from plugins.Permanent: the step parks for an admin.
+//
+// statusOutcome holds the rules for a call that is safe to send again; an
+// interpreter can use them, or decide for itself, for example to record a 5xx
+// on a submission the service would take twice rather than retry it.
+//
+// It composes with the interfaces that shape the request.
+type RawInterpreter interface {
+	Interpreter
+
+	InterpretRaw(resp *remote.RawResponse, callErr error) (accepted bool, captured map[string]any, err error)
+}
+
+// passthroughInterpreter sends the "payload" input as-is, or all the mapped
+// inputs when there is none, and reads the response by its status (see
+// statusOutcome).
 type passthroughInterpreter struct{}
 
 func (passthroughInterpreter) BuildRequest(inputs map[string]any) remote.Body {
@@ -191,6 +221,8 @@ func (passthroughInterpreter) BuildRequest(inputs map[string]any) remote.Body {
 	return remote.JSONBody{V: inputs}
 }
 
+// Interpret satisfies Interpreter. The plugin reads this interpreter's
+// responses through InterpretRaw, so it never calls Interpret.
 func (passthroughInterpreter) Interpret(callErr error, resp map[string]any) (bool, map[string]any) {
 	if callErr != nil {
 		return false, map[string]any{"error": callErr.Error()}
@@ -200,6 +232,10 @@ func (passthroughInterpreter) Interpret(callErr error, resp map[string]any) (boo
 		out["response"] = resp
 	}
 	return true, out
+}
+
+func (passthroughInterpreter) InterpretRaw(resp *remote.RawResponse, callErr error) (bool, map[string]any, error) {
+	return statusOutcome(resp, callErr)
 }
 
 // APICallPlugin makes an authenticated POST to a configured service and records
@@ -292,22 +328,102 @@ func (p *APICallPlugin) Execute(ctx pluginContext, configRaw json.RawMessage) er
 		ctx.Record.State = "QUEUED_EXTERNALLY"
 	}
 
-	var resp map[string]any
-	var callErr error
-	if mp, ok := p.interpreter.(MultipartInterpreter); ok {
-		callErr = p.callMultipart(ctx, mp, path, cfg, &resp)
-	} else {
-		req := remote.Request{
-			Method:  method,
-			Path:    path,
-			Query:   queryFor(p.interpreter, ctx.Inputs),
-			Body:    p.interpreter.BuildRequest(ctx.Inputs),
-			Headers: headersFor(p.interpreter, ctx.Inputs),
+	ri, raw := p.interpreter.(RawInterpreter)
+	if raw {
+		// An interpreter that decides the step's fate would retry a service the
+		// manager doesn't list for a day; it is configuration, so it parks now.
+		if _, err := p.manager.GetClient(cfg.ServiceID); err != nil {
+			return configError(fmt.Errorf("api_call: %w", err))
 		}
+	}
+
+	req, buildErr := p.buildRequest(ctx, method, path)
+	if raw {
+		return p.callRaw(ctx, ri, cfg, req, buildErr)
+	}
+
+	var resp map[string]any
+	callErr := buildErr
+	if callErr == nil {
 		callErr = p.manager.Call(ctx.Context, cfg.ServiceID, req, &resp)
 	}
 
 	accepted, out := p.interpreter.Interpret(callErr, resp)
+	p.record(ctx, cfg, accepted, out)
+	if accepted {
+		slog.Info("api_call: request accepted", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID)
+	} else {
+		slog.Warn("api_call: request not accepted", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "callErr", callErr, "result", out)
+	}
+	return nil
+}
+
+// buildRequest assembles the request the interpreter shapes: multipart parts
+// for a MultipartInterpreter, a body from BuildRequest otherwise, with the
+// headers and query it asks for. An error is a multipart body that could not be
+// assembled; nothing is sent then, and the interpreter reports it through the
+// same path as a failure to send.
+func (p *APICallPlugin) buildRequest(ctx pluginContext, method, path string) (remote.Request, error) {
+	if mp, ok := p.interpreter.(MultipartInterpreter); ok {
+		parts, err := mp.BuildParts(ctx.Context, ctx.Inputs)
+		if err != nil {
+			return remote.Request{}, err
+		}
+		return remote.Request{
+			Method:  http.MethodPost,
+			Path:    path,
+			Query:   queryFor(mp, ctx.Inputs),
+			Body:    remote.MultipartBody{Parts: parts},
+			Headers: headersFor(mp, ctx.Inputs),
+		}, nil
+	}
+	return remote.Request{
+		Method:  method,
+		Path:    path,
+		Query:   queryFor(p.interpreter, ctx.Inputs),
+		Body:    p.interpreter.BuildRequest(ctx.Inputs),
+		Headers: headersFor(p.interpreter, ctx.Inputs),
+	}, nil
+}
+
+// callRaw sends req for a RawInterpreter and lets it decide the step's fate. An
+// error it returns fails the step (or parks it, when permanent) and records
+// nothing; otherwise the outcome is recorded as on the Interpret path.
+func (p *APICallPlugin) callRaw(ctx pluginContext, ri RawInterpreter, cfg apiCallConfig, req remote.Request, buildErr error) error {
+	var resp *remote.RawResponse
+	callErr := buildErr
+	if callErr == nil {
+		resp, callErr = p.manager.CallRaw(ctx.Context, cfg.ServiceID, req)
+	}
+
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	accepted, out, err := ri.InterpretRaw(resp, callErr)
+	if err != nil {
+		if _, permanent := flowplugins.PermanentType(err); permanent {
+			slog.Error("api_call: call refused", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status, "error", err)
+		} else {
+			slog.Warn("api_call: call failed; the step will be retried", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status, "error", err)
+		}
+		return err
+	}
+
+	p.record(ctx, cfg, accepted, out)
+	if accepted {
+		slog.Info("api_call: request accepted", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status)
+	} else {
+		slog.Error("api_call: call refused", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "status", status, "result", out)
+	}
+	return nil
+}
+
+// record writes the outcome of a call that completes the step: the captured
+// fields, plus the accepted flag under result_field when the step asks for one,
+// into the output namespace. An accepted call to a DispatchRecorder is recorded
+// so its callbacks can find the task.
+func (p *APICallPlugin) record(ctx pluginContext, cfg apiCallConfig, accepted bool, out map[string]any) {
 	if out == nil {
 		out = map[string]any{}
 	}
@@ -317,31 +433,86 @@ func (p *APICallPlugin) Execute(ctx pluginContext, configRaw json.RawMessage) er
 	if ns := ctx.OutputNamespace; ns != "" {
 		ctx.Record.Data[ns] = out
 	}
-
 	if accepted {
 		if rec, ok := p.interpreter.(DispatchRecorder); ok {
 			recordDispatch(ctx.Context, rec, ctx.Record.TaskID, ctx.Record.CaseID, ctx.Record.ParentWorkflowID, out, recordDispatchBackoff)
 		}
-		slog.Info("api_call: request accepted", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID)
-	} else {
-		slog.Warn("api_call: request not accepted", "taskId", ctx.Record.TaskID, "serviceId", cfg.ServiceID, "callErr", callErr, "result", out)
 	}
-	return nil
 }
 
-// callMultipart assembles and sends a multipart/form-data submission. A
-// failure to assemble the body is returned rather than sent, so the
-// interpreter reports it to the applicant through the same path as a rejection —
-// nothing reaches the service in that case.
-func (p *APICallPlugin) callMultipart(ctx pluginContext, mp MultipartInterpreter, path string, cfg apiCallConfig, resp *map[string]any) error {
-	parts, err := mp.BuildParts(ctx.Context, ctx.Inputs)
-	if err != nil {
-		return err
+// statusOutcome reads a response by its status, for a call that is safe to send
+// again, such as a callback on a step waiting on another service:
+//
+//   - 2xx: accepted, with {status, response, error: ""}.
+//   - 409: accepted the same way. The service answers 409 when what the call
+//     addresses is no longer waiting for it, typically because an earlier
+//     attempt of this same call got through. Sending it again can't change the
+//     answer.
+//   - 401 and 403: a permanent error, so the step parks. The credentials, or
+//     what the caller may do, are wrong, and only an admin can fix that.
+//   - 408, 429, 5xx, and no response at all: a plain error, so the engine
+//     retries the step, and parks it once its retries run out.
+//   - Any other status: not accepted, with {status, response, error}, for the
+//     workflow to route.
+//
+// response is the body as JSON, or as text when it isn't JSON, and is left out
+// when the body is empty. error is the body's "error" or "message" field, or
+// the status (see refusalMessage).
+func statusOutcome(resp *remote.RawResponse, callErr error) (bool, map[string]any, error) {
+	if callErr != nil {
+		return false, nil, fmt.Errorf("api_call: %w", callErr)
 	}
-	return p.manager.Call(ctx.Context, cfg.ServiceID, remote.Request{
-		Method:  http.MethodPost,
-		Path:    path,
-		Body:    remote.MultipartBody{Parts: parts},
-		Headers: headersFor(mp, ctx.Inputs),
-	}, resp)
+	if resp == nil {
+		return false, nil, errors.New("api_call: no response")
+	}
+
+	status := resp.StatusCode
+	response := decodeResponse(resp.Body)
+	var refusal string
+	switch {
+	case status >= 200 && status < 300, status == http.StatusConflict:
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return false, nil, flowplugins.Permanent(flowplugins.ErrorTypeRejected,
+			fmt.Errorf("api_call: answered %d: %s", status, refusalMessage(status, response)))
+	case flowplugins.RetryableStatus(status):
+		return false, nil, fmt.Errorf("api_call: answered %d: %s", status, refusalMessage(status, response))
+	default:
+		refusal = refusalMessage(status, response)
+	}
+
+	out := map[string]any{"status": status, "error": refusal}
+	if response != nil {
+		out["response"] = response
+	}
+	return refusal == "", out, nil
+}
+
+// decodeResponse returns a response body as decoded JSON, or as text when it
+// isn't JSON, or nil when it is empty.
+func decodeResponse(body []byte) any {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return string(body)
+	}
+	return v
+}
+
+// refusalMessage is the message a refused call is recorded with: the body's
+// string "error" or "message" field when it has one, otherwise the status, as
+// "404 Not Found".
+func refusalMessage(status int, response any) string {
+	if fields, ok := response.(map[string]any); ok {
+		for _, key := range []string{"error", "message"} {
+			if msg, ok := fields[key].(string); ok && strings.TrimSpace(msg) != "" {
+				return msg
+			}
+		}
+	}
+	if text := http.StatusText(status); text != "" {
+		return fmt.Sprintf("%d %s", status, text)
+	}
+	return fmt.Sprintf("%d", status)
 }
