@@ -13,9 +13,11 @@ import (
 type Status string
 
 const (
-	StatusPending Status = "PENDING"
-	StatusSuccess Status = "SUCCESS"
-	StatusFailed  Status = "FAILED"
+	StatusPending         Status = "PENDING"
+	StatusSuccess         Status = "SUCCESS"
+	StatusFailed          Status = "FAILED"
+	StatusCancelled       Status = "CANCELLED"
+	StatusPaidAfterCancel Status = "PAID_AFTER_CANCEL"
 )
 
 // Transaction represents the internal state of a payment
@@ -34,7 +36,7 @@ type Transaction struct {
 	SessionID       string            `json:"session_id"` // Gateway-specific session identifier
 	Amount          decimal.Decimal   `json:"amount"`
 	Currency        string            `json:"currency"`       // "LKR" or foreign currency
-	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, EXPIRED
+	Status          Status            `json:"status"`         // PENDING, SUCCESS, FAILED, CANCELLED, PAID_AFTER_CANCEL
 	PaymentMethod   string            `json:"payment_method"` // CC, BANK_TRANSFER (populated on webhook)
 	ExpiryDate      time.Time         `json:"expiry_date"`
 	GatewayMetadata map[string]string `json:"gateway_metadata" gorm:"serializer:json"`
@@ -87,6 +89,25 @@ func (r CreateCheckoutRequest) validate(now time.Time) error {
 	}
 	if !r.ExpiresAt.After(now) {
 		return errors.New("expires_at must be in the future")
+	}
+	return nil
+}
+
+// CancelCheckoutRequest names the checkout to close and the step closing it.
+type CancelCheckoutRequest struct {
+	ReferenceNumber string
+	// CallbackToken must equal the token the checkout was opened with, so a step
+	// cancels only its own checkout.
+	CallbackToken string
+}
+
+// validate checks that a cancel request names both the checkout and the step.
+func (r CancelCheckoutRequest) validate() error {
+	if r.ReferenceNumber == "" {
+		return errors.New("reference_number is required")
+	}
+	if r.CallbackToken == "" {
+		return errors.New("callback_token is required")
 	}
 	return nil
 }

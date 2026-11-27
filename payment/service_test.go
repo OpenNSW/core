@@ -399,6 +399,145 @@ func TestCreateCheckoutSession_PersistError(t *testing.T) {
 	gw.AssertNotCalled(t, "CreateSession", mock.Anything, mock.Anything)
 }
 
+// --- CancelCheckoutSession --------------------------------------------------
+
+func cancelReq() CancelCheckoutRequest {
+	return CancelCheckoutRequest{ReferenceNumber: "TNSW1", CallbackToken: "token-9"}
+}
+
+func TestCancelCheckoutSession_PendingBecomesCancelled(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	err := svc.CancelCheckoutSession(context.Background(), cancelReq())
+	require.NoError(t, err)
+	assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+	assert.Equal(t, 1, repo.updateCount)
+	assert.Empty(t, tc.calls, "cancel only closes the checkout; the caller completes the step")
+}
+
+func TestCancelCheckoutSession_RepeatIsNoOp(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = pendingTx()
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckoutSession(context.Background(), cancelReq()))
+	require.NoError(t, svc.CancelCheckoutSession(context.Background(), cancelReq()))
+	assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+	assert.Equal(t, 1, repo.updateCount, "the repeat must not write again")
+}
+
+// A resume retried after the payer paid the cancelled checkout must still succeed: the cancel
+// went through, and the payment is staff's to refund.
+func TestCancelCheckoutSession_PaidAfterCancelIsNoOp(t *testing.T) {
+	repo := newMockRepo()
+	tx := pendingTx()
+	tx.Status = StatusPaidAfterCancel
+	repo.txs["TNSW1"] = tx
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.NoError(t, svc.CancelCheckoutSession(context.Background(), cancelReq()))
+	assert.Equal(t, StatusPaidAfterCancel, repo.txs["TNSW1"].Status)
+	assert.Zero(t, repo.updateCount)
+}
+
+func TestCancelCheckoutSession_SettledIsRefused(t *testing.T) {
+	for _, status := range []Status{StatusSuccess, StatusFailed} {
+		t.Run(string(status), func(t *testing.T) {
+			repo := newMockRepo()
+			tx := pendingTx()
+			tx.Status = status
+			repo.txs["TNSW1"] = tx
+			svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+			err := svc.CancelCheckoutSession(context.Background(), cancelReq())
+			require.ErrorIs(t, err, ErrPaymentSettled)
+			assert.Equal(t, status, repo.txs["TNSW1"].Status, "a settled checkout must stay as it is")
+			assert.Zero(t, repo.updateCount)
+		})
+	}
+}
+
+func TestCancelCheckoutSession_NotTheCallersCheckout(t *testing.T) {
+	tests := []struct {
+		name string
+		req  CancelCheckoutRequest
+	}{
+		{"unknown reference", CancelCheckoutRequest{ReferenceNumber: "NOPE", CallbackToken: "token-9"}},
+		{"another step's token", CancelCheckoutRequest{ReferenceNumber: "TNSW1", CallbackToken: "token-other"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockRepo()
+			repo.txs["TNSW1"] = pendingTx()
+			svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+			err := svc.CancelCheckoutSession(context.Background(), tt.req)
+			require.ErrorIs(t, err, ErrTransactionNotFound)
+			assert.Equal(t, StatusPending, repo.txs["TNSW1"].Status)
+			assert.Zero(t, repo.updateCount)
+		})
+	}
+}
+
+func TestCancelCheckoutSession_InvalidRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  CancelCheckoutRequest
+	}{
+		{"no reference", CancelCheckoutRequest{CallbackToken: "token-9"}},
+		{"no token", CancelCheckoutRequest{ReferenceNumber: "TNSW1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockRepo()
+			repo.txs["TNSW1"] = pendingTx()
+			svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+			require.Error(t, svc.CancelCheckoutSession(context.Background(), tt.req))
+			assert.Zero(t, repo.getCount, "an invalid request must not reach the database")
+			assert.Equal(t, StatusPending, repo.txs["TNSW1"].Status)
+		})
+	}
+}
+
+func TestCancelCheckoutSession_UnknownStatusIsRefused(t *testing.T) {
+	repo := newMockRepo()
+	tx := pendingTx()
+	tx.Status = Status("WEIRD")
+	repo.txs["TNSW1"] = tx
+	svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+	require.Error(t, svc.CancelCheckoutSession(context.Background(), cancelReq()))
+	assert.Equal(t, Status("WEIRD"), repo.txs["TNSW1"].Status, "an unrecognised status must never be cancelled")
+	assert.Zero(t, repo.updateCount)
+}
+
+func TestCancelCheckoutSession_RepoErrors(t *testing.T) {
+	dbErr := errors.New("db down")
+
+	t.Run("lookup", func(t *testing.T) {
+		repo := newMockRepo()
+		repo.txs["TNSW1"] = pendingTx()
+		repo.getErr = dbErr
+		svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+		require.ErrorIs(t, svc.CancelCheckoutSession(context.Background(), cancelReq()), dbErr)
+	})
+
+	t.Run("update", func(t *testing.T) {
+		repo := newMockRepo()
+		repo.txs["TNSW1"] = pendingTx()
+		repo.updateErr = dbErr
+		svc := NewService(repo, &mockRegistry{}, &fakeReferences{})
+
+		require.ErrorIs(t, svc.CancelCheckoutSession(context.Background(), cancelReq()), dbErr)
+	})
+}
+
 // --- ValidateReference ------------------------------------------------------
 
 func validateGateway(ref string) *MockGateway {
@@ -504,6 +643,28 @@ func TestValidateReference_ExpiredNotPayable(t *testing.T) {
 	gw.AssertExpectations(t)
 }
 
+// A cancelled checkout is refused at presentment by its status alone: the
+// expiry is still in the future, so nothing else makes it unpayable.
+func TestValidateReference_CancelledNotPayable(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = &Transaction{
+		ReferenceNumber: "TNSW1",
+		GatewayID:       "govpay",
+		Status:          StatusCancelled,
+		ExpiryDate:      time.Now().Add(time.Hour),
+	}
+	gw := validateGateway("TNSW1")
+	gw.On("HandleValidateReference", mock.Anything,
+		mock.MatchedBy(func(tx *ValidationTransaction) bool { return tx != nil && tx.Status == string(StatusCancelled) }),
+		false, mock.Anything).
+		Return(&ValidationResponse{HTTPStatus: 200, Payload: []byte(`{}`)}, nil)
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ValidateReference(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	gw.AssertExpectations(t)
+}
+
 func TestValidateReference_VerificationFailure_NeverExtracts(t *testing.T) {
 	gw := new(MockGateway)
 	gw.On("VerifyWebhook", mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("bad signature: %w", ErrWebhookVerificationFailed))
@@ -541,6 +702,12 @@ func pendingTx() *Transaction {
 		Status:          StatusPending,
 		ExpiryDate:      time.Now().Add(time.Hour),
 	}
+}
+
+func cancelledTx() *Transaction {
+	tx := pendingTx()
+	tx.Status = StatusCancelled
+	return tx
 }
 
 func webhookGateway(p *WebhookPayload) *MockGateway {
@@ -684,6 +851,156 @@ func TestProcessWebhook_Idempotent(t *testing.T) {
 	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
 	require.NoError(t, err)
 	assert.Empty(t, tc.calls, "already-terminal webhook must not advance the task again")
+}
+
+// A payment that lands after the checkout was cancelled is recorded for a refund. The row becomes
+// PAID_AFTER_CANCEL, never SUCCESS, and no step is completed.
+func TestProcessWebhook_LatePaymentIsRecordedNotSettled(t *testing.T) {
+	repo := newMockRepo()
+	tx := cancelledTx()
+	tx.GatewayMetadata = map[string]string{"task_id": "T1"}
+	repo.txs["TNSW1"] = tx
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber:      "TNSW1",
+		Status:               WebhookStatusSuccess,
+		Amount:               decimal.RequireFromString("1500.00"),
+		Currency:             "LKR",
+		GatewayTransactionID: "gw-tx-1",
+		PaymentMethod:        "CC",
+		Timestamp:            "2026-11-26T09:14:02Z",
+	})
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	resp, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.HTTPStatus, "the gateway is acknowledged so it stops retrying")
+	got := repo.txs["TNSW1"]
+	assert.Equal(t, StatusPaidAfterCancel, got.Status, "a cancelled checkout never becomes SUCCESS")
+	assert.Equal(t, "gw-tx-1", got.GatewayMetadata["gateway_transaction_id"], "staff need it to refund the payment")
+	assert.Equal(t, "2026-11-26T09:14:02Z", got.GatewayMetadata["webhook_timestamp"])
+	assert.Equal(t, "T1", got.GatewayMetadata["task_id"], "existing metadata must survive")
+	assert.Equal(t, "CC", got.PaymentMethod)
+	assert.Empty(t, tc.calls, "a late payment must not complete a step")
+}
+
+func TestProcessWebhook_LatePaymentOnCheckoutWithoutMetadata(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = cancelledTx() // GatewayMetadata is nil
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber:      "TNSW1",
+		Status:               WebhookStatusSuccess,
+		Amount:               decimal.RequireFromString("1500.00"),
+		Currency:             "LKR",
+		GatewayTransactionID: "gw-tx-1",
+	})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	got := repo.txs["TNSW1"]
+	assert.Equal(t, StatusPaidAfterCancel, got.Status)
+	assert.Equal(t, "gw-tx-1", got.GatewayMetadata["gateway_transaction_id"])
+}
+
+// A gateway retries a webhook until it is acknowledged, so a repeat of the paid webhook must
+// leave the recorded late payment as it is.
+func TestProcessWebhook_PaidAfterCancelIsIdempotent(t *testing.T) {
+	repo := newMockRepo()
+	tx := cancelledTx()
+	tx.Status = StatusPaidAfterCancel
+	tx.GatewayMetadata = map[string]string{"gateway_transaction_id": "gw-tx-1"}
+	repo.txs["TNSW1"] = tx
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber:      "TNSW1",
+		Status:               WebhookStatusSuccess,
+		Amount:               decimal.RequireFromString("1500.00"),
+		Currency:             "LKR",
+		GatewayTransactionID: "gw-tx-2",
+	})
+	tc := &mockTaskCompleter{}
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+	svc.SetTaskCompleter(tc)
+
+	resp, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.HTTPStatus)
+	got := repo.txs["TNSW1"]
+	assert.Equal(t, StatusPaidAfterCancel, got.Status)
+	assert.Equal(t, "gw-tx-1", got.GatewayMetadata["gateway_transaction_id"], "the repeat must not rewrite the record")
+	assert.Zero(t, repo.updateCount)
+	assert.Empty(t, tc.calls)
+}
+
+func TestProcessWebhook_CancelledIgnoresFailedAndPending(t *testing.T) {
+	for _, status := range []WebhookStatus{WebhookStatusFailed, WebhookStatusPending} {
+		t.Run(string(status), func(t *testing.T) {
+			repo := newMockRepo()
+			repo.txs["TNSW1"] = cancelledTx()
+			gw := webhookGateway(&WebhookPayload{ReferenceNumber: "TNSW1", Status: status})
+			tc := &mockTaskCompleter{}
+			svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+			svc.SetTaskCompleter(tc)
+
+			resp, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 200, resp.HTTPStatus, "acknowledged, so the gateway does not retry")
+			assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+			assert.Zero(t, repo.updateCount)
+			assert.Empty(t, tc.calls)
+		})
+	}
+}
+
+func TestProcessWebhook_LatePaymentUpdateError(t *testing.T) {
+	repo := newMockRepo()
+	repo.txs["TNSW1"] = cancelledTx()
+	repo.updateErr = errors.New("db down")
+	gw := webhookGateway(&WebhookPayload{
+		ReferenceNumber: "TNSW1",
+		Status:          WebhookStatusSuccess,
+		Amount:          decimal.RequireFromString("1500.00"),
+		Currency:        "LKR",
+	})
+	svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+
+	_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+	require.Error(t, err, "an unrecorded late payment must surface so the gateway retries")
+}
+
+// The amount check runs before the cancelled branch, so a late payment of the wrong amount is
+// rejected like any other wrong-amount payment.
+func TestProcessWebhook_LatePaymentAmountMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		amount   string
+		currency string
+	}{
+		{"wrong amount", "999.00", "LKR"},
+		{"wrong currency", "1500.00", "USD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockRepo()
+			repo.txs["TNSW1"] = cancelledTx()
+			gw := webhookGateway(&WebhookPayload{
+				ReferenceNumber: "TNSW1",
+				Status:          WebhookStatusSuccess,
+				Amount:          decimal.RequireFromString(tt.amount),
+				Currency:        tt.currency,
+			})
+			tc := &mockTaskCompleter{}
+			svc := NewService(repo, &mockRegistry{gw: gw}, &fakeReferences{})
+			svc.SetTaskCompleter(tc)
+
+			_, err := svc.ProcessWebhook(context.Background(), "govpay", []byte(`{}`), nil)
+			require.ErrorIs(t, err, ErrAmountMismatch)
+			assert.Equal(t, StatusCancelled, repo.txs["TNSW1"].Status)
+			assert.Zero(t, repo.updateCount)
+			assert.Empty(t, tc.calls)
+		})
+	}
 }
 
 func TestProcessWebhook_NotFound(t *testing.T) {

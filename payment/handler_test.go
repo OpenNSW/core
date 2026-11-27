@@ -32,6 +32,9 @@ func (m *mockService) ListAvailableMethods(context.Context, Payee) ([]GatewayInf
 func (m *mockService) CreateCheckoutSession(context.Context, CreateCheckoutRequest) (*CreateCheckoutResponse, error) {
 	return nil, nil
 }
+func (m *mockService) CancelCheckoutSession(context.Context, CancelCheckoutRequest) error {
+	return nil
+}
 func (m *mockService) ValidateReference(context.Context, string, json.RawMessage, map[string][]string) (*ValidationResponse, error) {
 	return m.validateResp, m.validateErr
 }
