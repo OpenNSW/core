@@ -8,34 +8,29 @@ import (
 	"errors"
 )
 
-// TODO: github.com/OpenNSW/core is consolidating nsw-task-flow and
-// go-temporal-workflow into core/taskflow (with its own TaskPlugin/
-// PluginContext types), and this is generic engine-adapter code rather than
-// anything Sri Lanka-specific. Once nsw-srilanka migrates its dependency from
-// nsw-task-flow/go-temporal-workflow to core, move this file to
-// core/taskflow/plugins (rebuilt against core's TaskPlugin/PluginContext) and
-// delete this copy.
-
-// ComputeFunc is synchronous computation logic that can be wrapped as a
-// TaskPlugin via NewComputePlugin. It has the same shape
-// as TaskPlugin.Execute, so any plain function can be registered without
-// writing a dedicated plugin struct.
+// ComputeFunc is a step that computes from its data and configuration alone,
+// with no I/O. It has the same shape as TaskPlugin.Execute, so a plain function
+// can be registered without writing a plugin struct for it.
 //
-// It computes from the step's data and configuration alone, with no I/O, so
-// an error it returns comes back on every retry: the plugin marks it
-// Permanent and the step parks for an admin at once.
+// An error it returns comes back on every retry, so NewComputePlugin marks it
+// Permanent and the step parks for an admin at once. A step that calls another
+// service needs its own plugin, which classifies that service's errors so a
+// failure that may pass is retried.
 type ComputeFunc func(ctx PluginContext, config json.RawMessage) error
 
-// computePlugin adapts an ComputeFunc to TaskPlugin —
-// the function-to-interface adapter pattern (cf. http.HandlerFunc).
+// computePlugin adapts a ComputeFunc to TaskPlugin, as http.HandlerFunc adapts
+// a function to http.Handler.
 type computePlugin struct {
 	fn ComputeFunc
 }
 
-// NewComputePlugin wraps fn as a TaskPlugin so it can be registered
-// under any task type, e.g.:
+// NewComputePlugin wraps fn as a TaskPlugin so it can be registered under any
+// task type, e.g.:
 //
-//	pluginsRegistry.Register("HSCODE_SPLIT_BUILDER", trade.NewComputePlugin(trade.HscodeSplitBuilderFunc))
+//	registry.Register("ORDER_SPLIT", plugins.NewComputePlugin(splitOrder))
+//
+// An error fn returns is marked Permanent with ErrorTypeInput, unless it is
+// ErrSuspended or fn already marked it Permanent itself.
 func NewComputePlugin(fn ComputeFunc) TaskPlugin {
 	return &computePlugin{fn: fn}
 }
