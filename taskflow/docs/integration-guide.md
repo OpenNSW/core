@@ -139,7 +139,6 @@ pluginsReg := plugins.NewRegistry()
 pluginsReg.Register("USER_INPUT", plugins.NewUserInputPlugin())
 pluginsReg.Register("EXTERNAL_REVIEW", plugins.NewExternalReviewPlugin(dispatcher))
 pluginsReg.Register("PAYMENT", plugins.NewPaymentPlugin(dispatcher))
-pluginsReg.Register("FIRE_AND_FORGET", plugins.NewAPICallPlugin(dispatcher))
 ```
 
 The key — `"USER_INPUT"`, `"PAYMENT"`, etc. — is the `task_type` field in the **StepTemplate** JSON. When the task workflow activates a step node, the orchestrator looks up the step template, reads its `task_type`, and dispatches to the matching plugin.

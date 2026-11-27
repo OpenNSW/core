@@ -249,7 +249,6 @@ The demo maps these from `manager.CompleteTaskStep` error text. Expect to see th
 | `PENDING_USER`      | A form-style step is waiting for input    | Render the form, expose submit                |
 | `QUEUED_EXTERNALLY` | Dispatched to an external system, waiting | Status banner, no input                       |
 | `PENDING_PAYMENT`   | Payment step is awaiting confirmation     | Payment widget                                |
-| `DISPATCHED`        | Fire-and-forget completed (no resume)     | Status, possibly auto-advance                 |
 | `COMPLETED`         | Task workflow finished                    | Terminal screen, link back to parent workflow |
 
 These are not magic — they're strings written by plugins. Your application can define and use its own. The renderer is what gives them meaning.
