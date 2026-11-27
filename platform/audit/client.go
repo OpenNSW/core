@@ -31,6 +31,15 @@ type Event struct {
 	Failure    bool
 	Message    any // Marshaled to JSON; select fields deliberately
 	Metadata   map[string]any
+	// CaseID is the case the action is about, such as a consignment or an
+	// agency's case. Empty when the action is not about a case.
+	CaseID string
+	// ActorType and ActorID, each when set, replace the actor derived from the
+	// request's principal: ActorType for a user whose role the principal does
+	// not carry (an admin), both for a caller with no principal (a partner
+	// that signs its requests).
+	ActorType ActorType
+	ActorID   string
 }
 
 // ConsignmentEvent is a consignment audit event. Handlers pass the action,
@@ -74,6 +83,11 @@ type Record struct {
 	TraceID    string
 	Message    []byte
 	Metadata   map[string]any
+	// ActorOU is the handle of the organization unit a user acts for, such as
+	// their company or agency. Empty for other actors, and when the event
+	// names its own ActorID.
+	ActorOU string
+	CaseID  string
 }
 
 // Sink receives enriched audit records. Implementations must be safe for
@@ -155,7 +169,14 @@ func (c *Client) Audit(ctx context.Context, e Event) {
 		return
 	}
 
-	actorType, actorID := actorFrom(ctx)
+	actorType, actorID, actorOU := actorFrom(ctx)
+	if e.ActorType != "" {
+		actorType = e.ActorType
+	}
+	if e.ActorID != "" {
+		// The principal's OU is not the named actor's.
+		actorID, actorOU = e.ActorID, ""
+	}
 
 	status := StatusSuccess
 	if e.Failure {
@@ -183,8 +204,10 @@ func (c *Client) Audit(ctx context.Context, e Event) {
 		Status:     status,
 		ActorType:  actorType,
 		ActorID:    actorID,
+		ActorOU:    actorOU,
 		TargetType: e.TargetType,
 		TargetID:   e.TargetID,
+		CaseID:     e.CaseID,
 		Message:    msg,
 		Metadata:   e.Metadata,
 	}
@@ -200,20 +223,22 @@ func (c *Client) Audit(ctx context.Context, e Event) {
 	}
 }
 
-func actorFrom(ctx context.Context) (ActorType, string) {
+// actorFrom derives the actor's type, ID and, for a user, OU handle from the
+// request's principal. A user is a member unless the event names another
+// ActorType.
+func actorFrom(ctx context.Context) (ActorType, string, string) {
 	principal, ok := authn.FromContext(ctx)
 	if !ok {
-		return ActorSystem, "anonymous"
+		return ActorSystem, "anonymous", ""
 	}
 
 	switch principal.Kind {
 	case authn.KindClient:
-		return ActorService, principal.Subject()
+		return ActorService, principal.Subject(), ""
 	case authn.KindUser:
-		// Treated as ActorMember for now as no Admin role is defined in this phase.
-		return ActorMember, principal.Subject()
+		return ActorMember, principal.Subject(), principal.OUHandle
 	default:
 		slog.ErrorContext(ctx, "audit: unrecognized principal kind encountered", "kind", principal.Kind)
-		return ActorSystem, principal.Subject()
+		return ActorSystem, principal.Subject(), ""
 	}
 }

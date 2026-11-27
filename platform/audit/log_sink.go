@@ -40,10 +40,16 @@ func (s *LogSink) Write(ctx context.Context, r Record) {
 		"status", string(r.Status),
 		"actorType", string(r.ActorType),
 		"actorID", r.ActorID,
-		"targetType", string(r.TargetType),
 	}
+	if r.ActorOU != "" {
+		attrs = append(attrs, "actorOU", r.ActorOU)
+	}
+	attrs = append(attrs, "targetType", string(r.TargetType))
 	if r.TargetID != "" {
 		attrs = append(attrs, "targetID", r.TargetID)
+	}
+	if r.CaseID != "" {
+		attrs = append(attrs, "caseID", r.CaseID)
 	}
 	if r.TraceID != "" {
 		attrs = append(attrs, "traceID", r.TraceID)
