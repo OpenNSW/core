@@ -227,17 +227,17 @@ An unpaid checkout stays payable until it expires. To close one, for example whe
 | Checkout status | Result |
 |---|---|
 | `PENDING` | Becomes `CANCELLED` |
-| `CANCELLED` | Left as it is and `nil` is returned, so a retried cancel succeeds |
+| `CANCELLED`, `PAID_AFTER_CANCEL` | Left as it is and `nil` is returned, so a retried cancel succeeds, even after a late payment |
 | `SUCCESS`, `FAILED` | Left as it is, and `ErrPaymentSettled` is returned |
 | unknown reference, or a different `CallbackToken` | `ErrTransactionNotFound`, the same error for both, so a step can't tell whether another step's reference exists |
 
 `CancelCheckoutSession` only closes the checkout. It never calls the `TaskCompleter`; the caller completes the step itself.
 
-`CANCELLED` is a final status, and a cancelled reference is not payable: real-time validation reports it as such, because only a `PENDING`, unexpired checkout is. A gateway can't cancel a checkout, so `CANCELLED` is never produced by a webhook. If a webhook arrives for a `CANCELLED` checkout:
-- A `SUCCESS` notification whose amount and currency match is a payment that landed after the cancel. The row stays `CANCELLED` and completes no step. The Service records `late_payment` (`"true"`), `gateway_transaction_id` and `webhook_timestamp` in the transaction's `gateway_metadata`, logs a warning, and acknowledges the gateway so it stops retrying. Staff refund it using the `gateway_transaction_id`.
+A cancelled reference is not payable: real-time validation reports it as such, because only a `PENDING`, unexpired checkout is. A gateway can't cancel a checkout, so `CANCELLED` is never produced by a webhook. If a webhook arrives for a `CANCELLED` checkout:
+- A `SUCCESS` notification whose amount and currency match is a payment that landed after the cancel. The row becomes `PAID_AFTER_CANCEL` and completes no step. The Service records `gateway_transaction_id` and `webhook_timestamp` in the transaction's `gateway_metadata`, logs a warning, and acknowledges the gateway so it stops retrying. Staff find these rows by status and refund them using the `gateway_transaction_id`.
 - A `FAILED` or `PENDING` notification changes nothing and is acknowledged.
 
-`late_payment` is reserved: `CreateCheckoutSession` rejects a request whose `Metadata` already holds it, so a normal checkout can't be mistaken for a late payment.
+`PAID_AFTER_CANCEL` is final: a repeated notification for it is acknowledged and ignored, like one for a `SUCCESS` or `FAILED` checkout.
 
 ## Schema
 
