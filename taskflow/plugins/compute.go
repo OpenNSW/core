@@ -31,11 +31,15 @@ type computePlugin struct {
 //
 // An error fn returns is marked Permanent with ErrorTypeInput, unless it is
 // ErrSuspended or fn already marked it Permanent itself.
+// A nil fn fails every run with ErrorTypeConfig.
 func NewComputePlugin(fn ComputeFunc) TaskPlugin {
 	return &computePlugin{fn: fn}
 }
 
 func (p *computePlugin) Execute(ctx PluginContext, config json.RawMessage) error {
+	if p.fn == nil {
+		return Permanent(ErrorTypeConfig, errors.New("compute plugin: no function to run"))
+	}
 	err := p.fn(ctx, config)
 	if err == nil || errors.Is(err, ErrSuspended) || IsPermanent(err) {
 		return err
