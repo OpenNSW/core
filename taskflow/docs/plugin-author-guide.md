@@ -208,7 +208,7 @@ func splitOrder(ctx plugins.PluginContext, config json.RawMessage) error {
 pluginsReg.Register("ORDER_SPLIT", plugins.NewComputePlugin(splitOrder))
 ```
 
-Rerunning such a step on the same data fails the same way, so the wrapper marks any error the function returns `Permanent`, and the step parks for an admin at once instead of retrying. A step that calls another service needs its own plugin, so that a failure that may pass, such as a timeout, is retried.
+Rerunning such a step on the same data fails the same way, so the wrapper marks any error the function returns `Permanent(ErrorTypeInput, …)`, and the step parks for an admin at once instead of retrying. An error the function already marked with `plugins.Permanent` keeps its own type. A step that calls another service needs its own plugin, so that a failure that may pass, such as a timeout, is retried.
 
 ---
 
