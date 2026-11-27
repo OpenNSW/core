@@ -1,18 +1,20 @@
 # OpenNSW Core
 
-A Go SDK for building **single window systems** — integrated service portals that orchestrate complex, multi-step government or enterprise workflows across multiple agencies and backend services.
+OpenNSW Core is an **open software library** — a set of Go modules you import to build a National Single Window / paperless-trade (or similar) application. Indicator 5–style install, test, contribute, and use paths are covered below.
+
+This repository is the library itself (multiple Go modules), not a country deployment or a separate demo product. Applications you build with it live in their own repositories.
 
 ## What is a Single Window System?
 
-A single window system provides citizens or businesses with one portal to complete end-to-end service applications (e.g. trade permits, licensing, consignment approvals) without navigating separate agency websites. Behind the scenes it:
+A single window can give citizens or businesses one portal for end-to-end service applications (for example trade permits or licensing) instead of separate agency websites. Behind the scenes that often involves:
 
-- Runs **long-lived workflows** that span days or weeks
-- Coordinates **interactive tasks** where humans submit forms, upload documents, or wait for agency review
-- Integrates **payment gateways** for fees and levies
-- Calls **external agency services** on the user's behalf
-- Renders **dynamic UI** driven by workflow state
+- Long-lived workflows that span days or weeks
+- Interactive tasks where people submit forms, upload documents, or wait for review
+- Payment gateways for fees
+- Calls to external agency services
+- UI driven by workflow state
 
-This SDK provides all the infrastructure pieces to build such a system, while keeping your domain logic in your own application.
+Use the packages as a library in your own application; domain logic stays there.
 
 ## Packages
 
@@ -25,12 +27,12 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 | [`cors`](cors/README.md)                   | CORS HTTP middleware                                                                                                                                                                          |
 | [`database`](database/README.md)           | `database/sql` connection factory (PostgreSQL, MySQL, SQLite) with pooling and health checks                                                                                                  |
 | [`htmlgen`](htmlgen/README.md)             | Print-ready HTML document generation from a static template and structured data, with contextual escaping                                                                                     |
-| [`httputil`](httputil/README.md)           | Shared HTTP response helpers for JSON payloads and correlation-ID-tagged API error bodies                                                                                                     |
+| [`httputil`](httputil/README.md)           | Shared HTTP helpers: JSON request-body decode with a size limit, JSON responses, and correlation-ID-tagged API errors                                                                       |
 | [`json`](json/README.md)                   | Packages for working with decoded JSON documents (includes [`json/jsonpointer`](json/jsonpointer/README.md), RFC 6901 JSON Pointer get/set)                                                   |
 | [`notification`](notification/README.md)   | Multi-channel notification router (SMS, email) with pluggable providers                                                                                                                       |
 | [`pagination`](pagination/README.md)       | Standard pagination envelope and query parameter parsing                                                                                                                                      |
 | [`payment`](payment/README.md)             | Pluggable payment gateway orchestration with webhook processing and idempotency                                                                                                               |
-| [`platform`](platform/README.md)           | The application layer of a single window, built on core's libraries: authentication principal, catalog, audit and request logs, file storage routes and task authorization                    |
+| [`platform`](platform/README.md)           | Application-layer helpers often used with the other packages: authentication principal, catalog, audit and request logs, file storage routes and task authorization                           |
 | [`remote`](remote/README.md)               | Registry-based outbound HTTP client with pluggable auth (API key, Bearer, OAuth2)                                                                                                             |
 | [`replay`](replay/README.md)               | Data-driven end-to-end test engine: runs JSON flow files of HTTP steps against a running backend                                                                                              |
 | [`secret`](secret/README.md)               | Secret-bearing config values (`SecretRef`) resolved from env, file, or literal sources                                                                                                        |
@@ -47,15 +49,71 @@ This SDK provides all the infrastructure pieces to build such a system, while ke
 
 ## Requirements
 
-- Go 1.26+
-- PostgreSQL, MySQL, or SQLite
-- [Temporal](https://temporal.io/) server (for workflow and task orchestration)
+| Need | Detail |
+| --- | --- |
+| Go | Each module declares its version in its `go.mod`. The root module requires **Go 1.26.0** (`go 1.26.0` in `./go.mod`). Some nested modules require a newer patch (for example `platform` declares `go 1.26.4`). |
+| Temporal | Required at **runtime** only when your app runs `workflow` / `taskflow` workers. Local default from [`temporal`](temporal/README.md): `temporal server start-dev` → `localhost:7233`, namespace `default`. |
+| SQL database | Required at **runtime** when your app uses [`database`](database/README.md) or SQL-backed stores. Drivers: PostgreSQL, MySQL, or SQLite (SQLite is enough for many unit tests). |
+| Nothing else from this repo | No product Compose file is shipped here. Nested tools for contributors are listed in [CONTRIBUTING.md](CONTRIBUTING.md). |
 
 ## Installation
 
+This repository is **multiple Go modules**. `go get github.com/OpenNSW/core` installs the **root** module only (`artifact`, `taskflow`, `workflow`). Other packages use their own paths and tags.
+
 ```sh
-go get github.com/OpenNSW/core
+# Root module (pin main or a commit)
+go get github.com/OpenNSW/core@main
+
+# Examples of nested modules (pin a tag)
+go get github.com/OpenNSW/core/httputil@v0.2.0
+go get github.com/OpenNSW/core/database@v0.3.0
+go get github.com/OpenNSW/core/temporal@v0.1.0
 ```
+
+How to assemble an application, which systems to run locally, and how downstream apps upgrade dependencies: **[docs/using.md](docs/using.md)** and **[docs/releases.md](docs/releases.md)**.
+
+## Documentation map
+
+| Topic | Where |
+| --- | --- |
+| Install modules into an app; external systems; behaviour you can rely on | [docs/using.md](docs/using.md) |
+| Architecture (macro / micro workflow) | [Architecture Overview](#architecture-overview) below |
+| Technology stack and tool versions | [Technology stack](#technology-stack) below |
+| Fork, test, pull request, keep a fork current | [docs/contributing/development.md](docs/contributing/development.md), [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Module tags and upgrading dependencies | [docs/releases.md](docs/releases.md) |
+| Security reporting | [SECURITY.md](SECURITY.md) |
+| Package APIs | Each package's `README.md` (links in the table above) |
+
+## What callers can rely on
+
+These packages are meant to help you:
+
+1. **Orchestrate long-running service applications** as Temporal workflows defined by a JSON graph (`workflow`), including task activation and completion callbacks.
+2. **Run human-in-the-loop steps** as short Temporal workflows with pluggable step plugins and UI projection (`taskflow`, `uiprojector`).
+3. **Load versioned workflow/form/template artifacts** by ID from a configured loader (`artifact`).
+4. **Authenticate and authorize HTTP callers** via JWT/JWKS and scope checks (`authn`, `authz`) without embedding product policy.
+5. **Talk to SQL databases, object storage, payment gateways, notifiers, and remote HTTP APIs** through typed factories and interfaces (`database`, `storage`, `payment`, `notification`, `remote`).
+6. **Expose consistent HTTP JSON errors and optional strict JSON body decoding** (`httputil`).
+
+Exact APIs, config keys, and error types are defined in each package README and its tests—not by a separate requirements specification document.
+
+## Technology stack
+
+Versions below are taken from this tree (`go.mod` files, `Makefile`, `.github/workflows/ci.yml`). Nested modules may pin slightly different dependency versions; open the module's `go.mod` when you import that module.
+
+| Component | Version in tree | Source |
+| --- | --- | --- |
+| Go (root module) | 1.26.0 | `./go.mod` |
+| Go (`platform` module) | 1.26.4 | `platform/go.mod` |
+| golangci-lint (local + CI) | v2.15.0 | `Makefile` `GOLANGCI_VERSION`, CI `golangci-lint-action` |
+| Temporal Go SDK (root) | v1.51.0 | `./go.mod` `go.temporal.io/sdk` |
+| Temporal Go SDK (`temporal` module) | v1.50.0 | `temporal/go.mod` |
+| AWS SDK v2 (S3-related) | v1.48.0 | `./go.mod`, `storage/go.mod` |
+| GORM (root) | v1.31.2 | `./go.mod` |
+| CI Go install | `go-version-file` → each job's `go.mod` | `.github/workflows/ci.yml` |
+| License | Apache-2.0 | `LICENSE`, SPDX headers |
+
+Language and protocols used across packages include JSON, YAML, HTTP, JWT/JWKS, and OpenTelemetry (see [`telemetry`](telemetry/README.md)).
 
 ## Architecture Overview
 
@@ -93,16 +151,16 @@ flowchart TD
     microwf -. loads .-> AR
 ```
 
-The two-tier workflow design is central to single window systems:
+A common pattern is a two-tier workflow:
 
-1. **Macro workflow** (the `workflow` package) — a long-lived Temporal workflow that represents the full service application (e.g. an export permit). It moves through TASK nodes, GATEWAY nodes, and SPLIT nodes according to a JSON graph definition.
-2. **Micro workflow** (the `taskflow` package) — each TASK node spawns a short-lived Temporal workflow that presents one interactive step to the user (a form, a payment, an external review). When the user completes the step the micro workflow signals the macro workflow to continue.
+1. **Macro workflow** (the `workflow` package) — a long-lived Temporal workflow for a full service application (for example an export permit). It moves through TASK, GATEWAY, and SPLIT nodes from a JSON graph.
+2. **Micro workflow** (the `taskflow` package) — each TASK node can spawn a short-lived Temporal workflow for one interactive step (a form, a payment, a review). When that step finishes, the micro workflow signals the macro workflow to continue.
 
 ---
 
 ## Full Wiring Example
 
-The following shows how to assemble the components into a working application (condensed from the reference implementation pattern):
+The following shows how to assemble the components into a working application in **your** codebase (illustrative wiring only — this repo does not ship a runnable product binary):
 
 ```go
 func Build(ctx context.Context, cfg *Config) (*App, error) {
@@ -187,12 +245,20 @@ func Build(ctx context.Context, cfg *Config) (*App, error) {
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup,
-hooks, the Apache-2.0 license-header policy, and commit conventions.
+hooks, the Apache-2.0 license-header policy, and commit conventions, and
+[docs/contributing/development.md](docs/contributing/development.md) for fork,
+test, and pull-request steps.
 
 After cloning, install tools and enable git hooks in one step:
 
 ```sh
 make setup
+```
+
+Then run the root-module tests:
+
+```sh
+make test
 ```
 
 ## License

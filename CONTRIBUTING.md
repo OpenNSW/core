@@ -1,12 +1,14 @@
 # Contributing
 
-Contributions are welcome. For a detailed guide on setting up your local environment, creating feature branches, running unit tests, and validating builds, see the [Development Guide](docs/contributing/development.md).
+Contributions are welcome. For a detailed guide on setting up your local environment, creating feature branches, running unit tests, validating builds, forking, and sending changes upstream, see the [Development Guide](docs/contributing/development.md).
+
+How to **use** these packages from an application, and how **releases / module tags** work: [docs/using.md](docs/using.md), [docs/releases.md](docs/releases.md).
 
 ## Prerequisites
 
 | Tool | Version | Install |
 |---|---|---|
-| Go | ≥ 1.26.4 | [go.dev/dl](https://go.dev/dl/) |
+| Go | Version in each module's `go.mod` (root module: **1.26.0**) | [go.dev/dl](https://go.dev/dl/) |
 | git | ≥ 2.9 | system package manager |
 | golangci-lint | v2.15.0 | `go install` (see below) |
 | addlicense | latest | `go install` (see below) |
