@@ -59,40 +59,7 @@ A plugin that suspends typically sets `Record.State` to a recognisable value fir
 
 ---
 
-## Two worked examples
-
-### Synchronous: `APICallPlugin` (fire-and-forget)
-
-```go
-type APICallConfig struct {
-    URL string `json:"url"`
-}
-
-func (p *APICallPlugin) Execute(ctx PluginContext, configRaw json.RawMessage) error {
-    var cfg APICallConfig
-    if err := json.Unmarshal(configRaw, &cfg); err != nil {
-        return fmt.Errorf("failed to parse generic_api_call config: %w", err)
-    }
-    if cfg.URL == "" {
-        return fmt.Errorf("missing 'url' in generic_api_call config")
-    }
-
-    ctx.Record.State = "DISPATCHED"
-
-    if err := p.dispatcher(ctx.Context, cfg.URL, ctx.Record.TaskID, ctx.Record.Data); err != nil {
-        return fmt.Errorf("api call dispatch failed: %w", err)
-    }
-    return nil // sync completion — workflow advances
-}
-```
-
-Pattern:
-
-1. Parse typed config.
-2. Validate.
-3. Set state.
-4. Do the work.
-5. Return `nil` — no parking needed.
+## A worked example
 
 ### Suspending: `UserInputPlugin`
 
@@ -304,4 +271,4 @@ Tests don't need the rest of the orchestrator — `PluginContext` is a plain str
 
 - [`integration-guide.md`](integration-guide.md) — wiring and `pluginsReg.Register(...)`
 - [`template-reference.md`](template-reference.md) — the `StepTemplate` shape your `plugin_properties` lives inside
-- `plugins/user_input.go`, `plugins/api_call.go`, `plugins/external_review.go`, `plugins/payment.go` — built-in plugins as worked examples
+- `plugins/user_input.go`, `plugins/external_review.go`, `plugins/payment.go` — built-in plugins as worked examples

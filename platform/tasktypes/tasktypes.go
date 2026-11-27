@@ -13,7 +13,6 @@ const (
 	TaskTypeUserInput      = "USER_INPUT"
 	TaskTypeExternalReview = "EXTERNAL_REVIEW"
 	TaskTypePayment        = "PAYMENT"
-	TaskTypeAPICall        = "API_CALL"
 	TaskTypeAuthAPICall    = "AUTH_API_CALL"
 	TaskTypeNotification   = "NOTIFICATION"
 )

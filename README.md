@@ -77,7 +77,7 @@ flowchart TD
     end
 
     subgraph pluginset["Step Plugins"]
-        P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · API_CALL · custom"]
+        P["USER_INPUT · PAYMENT · EXTERNAL_REVIEW · custom"]
     end
 
     SS["payment · remote · notification · storage"]

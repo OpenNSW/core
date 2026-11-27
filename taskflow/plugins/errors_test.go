@@ -142,8 +142,6 @@ func TestPlugins_ConfigErrorsArePermanent(t *testing.T) {
 		plugin TaskPlugin
 		config string
 	}{
-		"api_call malformed":        {NewAPICallPlugin(noDispatch), `{`},
-		"api_call no url":           {NewAPICallPlugin(noDispatch), `{}`},
 		"external_review malformed": {NewExternalReviewPlugin(noDispatch), `{`},
 		"external_review no url":    {NewExternalReviewPlugin(noDispatch), `{}`},
 		"payment malformed":         {NewPaymentPlugin(noDispatch), `{`},

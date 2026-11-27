@@ -19,7 +19,6 @@ err := reg.Register(tasktypes.TaskTypePayment, tasktypes.NewPaymentPlugin(paymen
 | `VALUE_WRITER` | `NewValueWriterPlugin` | Nothing | Writes values into a copy of the step's inputs, such as one number into every item of a list |
 | `EXTERNAL_REVIEW` | `NewExternalReviewPlugin` | A `remote.Manager`, `FileTokens` and `CaseAttributes` | Starts a review flow on another service, sending the files in it as tokens for that service, and parks until it calls back |
 | `PAYMENT` | `NewPaymentPlugin` | A `core/payment` service | Opens a checkout session and parks in `PENDING_PAYMENT` |
-| `API_CALL` | core's `plugins.NewAPICallPlugin` | A dispatcher | Posts the step's inputs to a URL, without authentication |
 | `AUTH_API_CALL` | `NewAPICallPlugin` | A `remote.Manager` | Calls a service from the `remote` manager's list and records the outcome |
 | `REFID_GENERATOR` | `NewRefIDGeneratorPlugin` | A `refid.Registry` | Generates reference IDs |
 | `HTML_DOCUMENT_GENERATOR` | `NewHTMLDocumentGeneratorPlugin` | An `HTMLTemplateSource`, a `DocumentSaver` and `StaticData` | Renders and stores an HTML document |

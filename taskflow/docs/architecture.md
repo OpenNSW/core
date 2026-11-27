@@ -192,20 +192,17 @@ Everything else is a plugin's responsibility:
 | `UserInputPlugin`                 | `PENDING_USER` (or `cfg.StatusOverride`) | Returns `ErrSuspended` — waits for portal submission |
 | `ExternalReviewPlugin`            | `QUEUED_EXTERNALLY`                      | Dispatches, returns `ErrSuspended`                   |
 | `PaymentPlugin`                   | `PENDING_PAYMENT`                        | Dispatches, returns `ErrSuspended`                   |
-| `APICallPlugin` (fire-and-forget) | `DISPATCHED`                             | Dispatches, returns `nil` (sync completion)          |
 
 ```mermaid
 stateDiagram-v2
     [*] --> STARTING : StartTask
     STARTING --> STARTING_STEP : step claimed
     STARTING_STEP --> PENDING_USER : USER_INPUT plugin
-    STARTING_STEP --> DISPATCHED : FIRE_AND_FORGET plugin
     STARTING_STEP --> QUEUED_EXTERNALLY : EXTERNAL_REVIEW plugin
     PENDING_USER --> ADVANCING : submission accepted
     QUEUED_EXTERNALLY --> ADVANCING : callback accepted
     ADVANCING --> STARTING_STEP : next step claims the row
     ADVANCING --> COMPLETED : task workflow ends
-    DISPATCHED --> COMPLETED : task workflow ends
     PENDING_USER --> CANCELLED : CancelTask
     QUEUED_EXTERNALLY --> CANCELLED : CancelTask
 ```
