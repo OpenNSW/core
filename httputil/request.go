@@ -32,6 +32,11 @@ var (
 	// field the destination does not declare (an *UnknownFieldError), or anything after
 	// the value.
 	ErrBodyInvalid = errors.New("httputil: invalid request body")
+	// ErrTrailingData is wrapped, beside ErrBodyInvalid or ErrBodyTooLarge, by DecodeJSON's
+	// error for a body whose first JSON value decoded but which does not end there: data
+	// follows the value, or reading past it went over the limit. The destination holds
+	// that value, so a caller can still use it, for example to record what was sent.
+	ErrTrailingData = errors.New("httputil: data after the JSON value")
 )
 
 // UnknownFieldError is the ErrBodyInvalid DecodeJSON returns for an object field the
@@ -73,7 +78,8 @@ func AllowTrailingData() DecodeOption {
 // the body may hold and must be positive; a longer body is refused with ErrBodyTooLarge,
 // and http.MaxBytesReader closes the connection after the response. A field dst does not
 // declare, or anything after the value, is refused with ErrBodyInvalid unless opts allow
-// it. An empty body is ErrBodyEmpty.
+// it. An empty body is ErrBodyEmpty. When the error wraps ErrTrailingData, dst holds the
+// first value; otherwise, after an error, it holds nothing a caller should use.
 //
 // DecodeJSON writes nothing to w: the caller answers the error, with WriteDecodeError or
 // its own response.
@@ -102,9 +108,9 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, limit int64, dst any, op
 	case errors.Is(err, io.EOF):
 		return nil
 	case err == nil:
-		return fmt.Errorf("%w: data after the JSON value", ErrBodyInvalid)
+		return fmt.Errorf("%w: %w", ErrTrailingData, ErrBodyInvalid)
 	default:
-		return decodeError(err)
+		return fmt.Errorf("%w: %w", ErrTrailingData, decodeError(err))
 	}
 }
 
