@@ -459,6 +459,14 @@ func TestFileHandler_UploadPrepareIsAuditedAndLogged(t *testing.T) {
 	if cap.last.Metadata["kind"] != "user" || cap.last.Metadata["mime_type"] != "application/pdf" || cap.last.Metadata["extension"] != ".pdf" {
 		t.Errorf("metadata = %v, want kind=user mime application/pdf extension .pdf", cap.last.Metadata)
 	}
+	var uploaded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &uploaded); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+	issued, _ := uploaded["key"].(string)
+	if cap.last.Metadata["reference_sha256"] != hashReference(issued) {
+		t.Errorf("reference_sha256 = %v, want the hash of the reference issued to the caller", cap.last.Metadata["reference_sha256"])
+	}
 	if _, ok := cap.last.Metadata["filename"]; ok {
 		t.Errorf("metadata names the filename: %v", cap.last.Metadata)
 	}
@@ -559,6 +567,9 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 		if cap.last.TargetID == "" {
 			t.Error("TargetID is empty, want the storage key the reference resolved to")
 		}
+		if cap.last.Metadata["reference_sha256"] != hashReference(missing) {
+			t.Errorf("reference_sha256 = %v, want the hash of the reference that resolved", cap.last.Metadata["reference_sha256"])
+		}
 	})
 	t.Run("a link issued", func(t *testing.T) {
 		logBuf.Reset()
@@ -573,6 +584,9 @@ func TestFileHandler_DownloadIsAudited(t *testing.T) {
 		}
 		if exp, _ := e.Metadata["expires_at"].(int64); exp <= time.Now().Unix() {
 			t.Errorf("expires_at = %v, want a future time", e.Metadata["expires_at"])
+		}
+		if e.Metadata["reference_sha256"] != hashReference(token) {
+			t.Errorf("reference_sha256 = %v, want the hash of the reference that resolved", e.Metadata["reference_sha256"])
 		}
 		if !strings.Contains(logBuf.String(), `"msg":"storage: download link issued"`) {
 			t.Errorf("system log = %s, want storage: download link issued", logBuf.String())
@@ -627,7 +641,7 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertDownloadURL(t, download(h, token, user("alice")))
-		if cap.last.Action != audit.ActionRead || cap.last.Failure || cap.last.TargetID != hashOf(ownerRef) {
+		if cap.last.Action != audit.ActionRead || cap.last.Failure || cap.last.TargetID != hashOf(ownerRef) || cap.last.Metadata["reference_sha256"] != hashOf(ownerRef) {
 			t.Errorf("audit = %+v, want a READ on the hash of the owner's reference", cap.last)
 		}
 		if strings.Contains(logBuf.String(), ownerRef) || !strings.Contains(logBuf.String(), hashOf(ownerRef)) {
@@ -642,18 +656,18 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 		}
 		logBuf.Reset()
 		assertStatus(t, download(h, token, user("alice")), http.StatusNotFound)
-		if !cap.last.Failure || cap.last.Metadata["reason"] != "not_found" || cap.last.TargetID != hashOf(ownerRef) {
+		if !cap.last.Failure || cap.last.Metadata["reason"] != "not_found" || cap.last.TargetID != hashOf(ownerRef) || cap.last.Metadata["reference_sha256"] != hashOf(ownerRef) {
 			t.Errorf("audit = %+v, want a failed READ (not_found) on the hash of the owner's reference", cap.last)
 		}
-		if strings.Contains(logBuf.String(), ownerRef) {
-			t.Errorf("system log names the owner's reference: %s", logBuf.String())
+		if errText, _ := cap.last.Metadata["error"].(string); strings.Contains(errText, ownerRef) || strings.Contains(logBuf.String(), ownerRef) {
+			t.Errorf("records name the owner's reference: audit=%v log=%s", cap.last.Metadata, logBuf.String())
 		}
 	})
 	t.Run("upload prepare", func(t *testing.T) {
 		logBuf.Reset()
 		rec := upload(h, user("alice"), `{"filename":"a.pdf","mime_type":"application/pdf","size":10}`)
 		assertStatus(t, rec, http.StatusOK)
-		if cap.last.Action != audit.ActionPresignUpload || cap.last.Failure || len(cap.last.TargetID) != sha256.Size*2 {
+		if cap.last.Action != audit.ActionPresignUpload || cap.last.Failure || len(cap.last.TargetID) != sha256.Size*2 || cap.last.Metadata["reference_sha256"] != cap.last.TargetID {
 			t.Fatalf("audit = %+v, want a PRESIGN_UPLOAD on a SHA-256 hex digest", cap.last)
 		}
 		// The owner's reference is what the hash is of; it is not in the records.
@@ -661,6 +675,15 @@ func TestFileHandler_ProxyRecordsAHashOfTheReference(t *testing.T) {
 			t.Errorf("system log = %s, want the same hash as the audit record", logBuf.String())
 		}
 	})
+}
+
+func TestRedactSecret_RemovesTheReferenceFromAnUpstreamError(t *testing.T) {
+	secret := "owner ref/with space"
+	msg := `Get "https://files.example/api/v1/storage/` + url.PathEscape(secret) + `": dial tcp: ` + secret
+	got := redactSecret(msg, secret)
+	if strings.Contains(got, secret) || strings.Contains(got, url.PathEscape(secret)) || !strings.Contains(got, "[redacted]") {
+		t.Fatalf("redactSecret(%q) = %q", msg, got)
+	}
 }
 
 func TestFileHandler_UploadRejects(t *testing.T) {
