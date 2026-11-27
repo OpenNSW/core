@@ -4,11 +4,15 @@
 package plugins
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/OpenNSW/core/taskflow/store"
 )
 
 // A compute step works from the step's data alone, so its error comes back on
@@ -48,4 +52,45 @@ func TestComputePlugin_PassesConfigAndContext(t *testing.T) {
 	assert.NoError(t, p.Execute(PluginContext{Inputs: inputs}, cfg))
 	assert.JSONEq(t, string(cfg), string(gotConfig))
 	assert.Equal(t, inputs, gotInputs)
+}
+
+func TestComputePlugin_KeepsTheCause(t *testing.T) {
+	cause := errors.New("line_items cannot be empty")
+	err := NewComputePlugin(func(PluginContext, json.RawMessage) error {
+		return fmt.Errorf("split: %w", cause)
+	}).Execute(PluginContext{}, nil)
+	assert.ErrorIs(t, err, cause)
+}
+
+func TestComputePlugin_SeesThroughWrapping(t *testing.T) {
+	run := func(err error) error {
+		return NewComputePlugin(func(PluginContext, json.RawMessage) error { return err }).
+			Execute(PluginContext{}, nil)
+	}
+
+	suspended := run(fmt.Errorf("waiting for the gateway: %w", ErrSuspended))
+	assert.ErrorIs(t, suspended, ErrSuspended)
+	assert.False(t, IsPermanent(suspended), "a wrapped suspension is not a failure")
+
+	errType, permanent := PermanentType(run(fmt.Errorf("split: %w",
+		Permanent(ErrorTypeConfig, errors.New("no mappings configured")))))
+	assert.True(t, permanent)
+	assert.Equal(t, ErrorTypeConfig, errType, "a wrapped verdict keeps its type")
+}
+
+func TestComputePlugin_WritesTheRecord(t *testing.T) {
+	record := &store.TaskRecord{Data: map[string]any{}}
+	p := NewComputePlugin(func(ctx PluginContext, _ json.RawMessage) error {
+		ctx.Record.Data["split"] = []any{"a"}
+		return nil
+	})
+	assert.NoError(t, p.Execute(PluginContext{Context: context.Background(), Record: record}, nil))
+	assert.Equal(t, []any{"a"}, record.Data["split"])
+}
+
+func TestComputePlugin_NilFunctionIsAConfigError(t *testing.T) {
+	err := NewComputePlugin(nil).Execute(PluginContext{}, nil)
+	errType, permanent := PermanentType(err)
+	assert.True(t, permanent, "err = %v", err)
+	assert.Equal(t, ErrorTypeConfig, errType)
 }
