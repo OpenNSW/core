@@ -233,6 +233,10 @@ sequenceDiagram
 
     FE->>TM: CompleteTaskStep(ctx, taskID, stepID, payload)
     TM->>DB: pre-check: stepID is the active step
+    Note over TM: PRE_RESUME extensions (authz) can reject the call
+    opt plugin implements plugins.Resumer
+        TM->>P: Resume(ctx, properties, payload) — returns the payload the step completes with
+    end
     TM->>TW: CompleteActivation(WorkflowID, ActivationID, payload) — one caller wins
     TM->>DB: PersistSubmission (active step = A, seq = n) → ADVANCING, seq n+1
     TW->>TM: (next step activates → StartTaskStep, seq n+1)

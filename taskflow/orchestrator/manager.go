@@ -451,6 +451,37 @@ func (tm *TaskManager) CompleteTaskStepByToken(ctx context.Context, token string
 	return tm.CompleteTaskStep(ctx, taskID, stepID, payload)
 }
 
+// resume hands the call that resumes the step to the step's plugin when it implements
+// plugins.Resumer, and returns the payload the step completes with. The call's command is kept.
+func (tm *TaskManager) resume(ctx context.Context, record store.TaskRecord, stepTemplate types.StepTemplate, payload map[string]any) (map[string]any, error) {
+	plugin, ok := tm.pluginsRegistry.Get(stepTemplate.PluginType)
+	if !ok {
+		return nil, fmt.Errorf("unregistered plugin type %q", stepTemplate.PluginType)
+	}
+	resumer, ok := plugin.(plugins.Resumer)
+	if !ok {
+		return payload, nil
+	}
+	recordCopy := record.DeepCopy()
+	resumed, err := resumer.Resume(plugins.PluginContext{
+		Context:         ctx,
+		Record:          &recordCopy,
+		OutputNamespace: stepTemplate.OutputNamespace,
+	}, stepTemplate.PluginProperties, deepcopy.Map(payload))
+	if err != nil {
+		return nil, err
+	}
+	if resumed == nil {
+		resumed = make(map[string]any, 1)
+	}
+	if command, ok := payload[CommandVar]; ok {
+		resumed[CommandVar] = command
+	} else {
+		delete(resumed, CommandVar)
+	}
+	return resumed, nil
+}
+
 // CompleteTaskStep is the public API for external clients or portals to submit form/interaction
 // data and resume the given step in the corresponding Task workflow. stepID is the step the caller
 // is acting on, as the task view reported it; it is required, and the call only ever completes
@@ -459,19 +490,23 @@ func (tm *TaskManager) CompleteTaskStepByToken(ctx context.Context, token string
 // Sequence:
 //
 //  1. Pre-check, from the task row: the task is not completed and stepID is its active step.
-//     This only turns away obviously stale calls early; the authority is step 4.
+//     This only turns away obviously stale calls early; the authority is step 5.
 //  2. Pre-resume extensions (authz, validation) run on deep copies and can reject the call. They
 //     must have no side effects. A TaskManager built WithRequiredPreResumeExtensions first refuses,
 //     with ErrStepNotGuarded, a step whose template does not declare every required one.
-//  3. The submission is prepared: it is confined to the step's OutputNamespace and stripped of
+//  3. The step's plugin, when it implements plugins.Resumer, gets copies of the record and the
+//     payload and returns the payload the step completes with; the call's command is kept. Its
+//     error rejects the call. Unlike the extensions it may have side effects, so it must be
+//     idempotent: it runs before step 5 decides whether this call completes the step.
+//  4. The submission is prepared: it is confined to the step's OutputNamespace and stripped of
 //     system keys.
-//  4. The step's Temporal Activity is completed. Exactly one caller wins; a step that is not
+//  5. The step's Temporal Activity is completed. Exactly one caller wins; a step that is not
 //     pending (already completed, or an earlier run of a looping node) fails with ErrStaleStep and
 //     nothing is written.
-//  5. The submission is persisted with the state ADVANCING, guarded by the step and the seq read in
+//  6. The submission is persisted with the state ADVANCING, guarded by the step and the seq read in
 //     step 1. If the workflow has already started the next step this matches no row and is dropped;
 //     the submission reached the workflow through the Activity result either way.
-//  6. Post-resume extensions start in the background (best effort, not awaited).
+//  7. Post-resume extensions start in the background (best effort, not awaited).
 //
 // Returning nil means the workflow accepted the step; the row shows ADVANCING (or the next step)
 // from then on. Clients should refetch the task rather than assume the state.
@@ -514,6 +549,11 @@ func (tm *TaskManager) CompleteTaskStep(ctx context.Context, taskID, stepID stri
 	preResumeRecord := record.DeepCopy()
 	if err := tm.runExtensions(ctx, &preResumeRecord, types.PhasePreResume, stepTemplate.Extensions, deepcopy.Map(payload), true); err != nil {
 		return err
+	}
+
+	payload, err = tm.resume(ctx, record, stepTemplate, payload)
+	if err != nil {
+		return fmt.Errorf("resume step %q of task %s: %w", stepID, taskID, err)
 	}
 
 	data := tm.submissionData(ctx, record, stepTemplate, payload)

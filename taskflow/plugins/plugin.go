@@ -45,6 +45,17 @@ type TaskPlugin interface {
 	Execute(ctx PluginContext, config json.RawMessage) error
 }
 
+// Resumer is implemented by a plugin whose suspended step must act on the call that resumes it.
+type Resumer interface {
+	// Resume runs in CompleteTaskStep after the step's PRE_RESUME extensions accept the call and
+	// before the step is completed. It gets copies of the record and the payload, and returns the
+	// payload the step completes with; the call's command is kept whatever it returns. An error
+	// completes nothing and reaches the caller. Resume can run for a call that then fails or loses
+	// a race, and a caller may retry, so it must be idempotent and leave nothing wrong when the
+	// step is not completed.
+	Resume(ctx PluginContext, config json.RawMessage, payload map[string]any) (map[string]any, error)
+}
+
 // Registry is a thread-safe registry of task plugins keyed by taskType and pluginName.
 type Registry struct {
 	mu      sync.RWMutex
